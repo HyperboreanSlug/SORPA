@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual env
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+*.spec
+SOR-Public-Archiver.exe
+SOR-Public-Archiver.spec
+
+# Data
+archives/
+SOR_Archives/
+*.csv
+ethnic_keywords.txt
+download_metadata.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

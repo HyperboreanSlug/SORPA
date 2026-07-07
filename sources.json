@@ -1,0 +1,373 @@
+[
+  {
+    "jurisdiction": "National (NSOPW)",
+    "abbr": "US",
+    "registry_url": "https://www.nsopw.gov/",
+    "direct_downloads": [],
+    "notes": "Aggregated search interface across all jurisdictions. NOT a bulk download source. Use for individual/limited searches. Do not mass-scrape."
+  },
+  {
+    "jurisdiction": "Alabama",
+    "abbr": "AL",
+    "registry_url": "https://www.alea.gov/node/270",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Alaska",
+    "abbr": "AK",
+    "registry_url": "https://sor.dps.alaska.gov/Registry/Search",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Arizona",
+    "abbr": "AZ",
+    "registry_url": "https://www.azdps.gov/services/public-services-center/sex-offender-compliance",
+    "direct_downloads": [
+      "https://icrimewatch.net/az_offenders.csv"
+    ],
+    "notes": "Direct CSV published for Level 2/3 and certain offenders. Confirm link works and review any conditions on the site."
+  },
+  {
+    "jurisdiction": "Arkansas",
+    "abbr": "AR",
+    "registry_url": "https://sexoffenderregistry.ar.gov/public/#/disclaimer?returnUrl=%2Flocation",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "California",
+    "abbr": "CA",
+    "registry_url": "https://oag.ca.gov/sex-offender-reg",
+    "direct_downloads": [],
+    "notes": "Megan's Law site. Search interface primarily."
+  },
+  {
+    "jurisdiction": "Colorado",
+    "abbr": "CO",
+    "registry_url": "https://apps.colorado.gov/apps/dps/sor/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Connecticut",
+    "abbr": "CT",
+    "registry_url": "https://sheriffalerts.com/cap_office_disclaimer.php?office=54567",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Delaware",
+    "abbr": "DE",
+    "registry_url": "http://sexoffender.dsp.delaware.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "District of Columbia",
+    "abbr": "DC",
+    "registry_url": "https://sexoffender.dc.gov/",
+    "direct_downloads": [
+      "https://opendata.dc.gov/api/download/v1/items/10e58174831e49a2aebaa129cc1c3bd5/csv?layers=20"
+    ],
+    "notes": "Excellent open data portal. CSV, GeoJSON, Shapefile, etc. available. Block-level location data."
+  },
+  {
+    "jurisdiction": "Florida",
+    "abbr": "FL",
+    "registry_url": "https://offender.fdle.state.fl.us/offender/sops/search.jsf",
+    "direct_downloads": [],
+    "download_page": "https://offender.fdle.state.fl.us/offender/sops/registryDownload.jsf",
+    "notes": "Dedicated 'Registry Downloads' page provides CSV files for sexual offenders and predators. Visit the page to download. No static direct file URLs found for automation. Review memos on site. Direct bulk not available for automated download in this tool."
+  },
+  {
+    "jurisdiction": "Georgia",
+    "abbr": "GA",
+    "registry_url": "https://gbi.georgia.gov/services/georgia-sex-offender-registry",
+    "direct_downloads": [
+      "https://state.sor.gbi.ga.gov/SORT_PUBLIC/sor.csv"
+    ],
+    "notes": "GBI publishes direct SOR data file. Also has search page."
+  },
+  {
+    "jurisdiction": "Hawaii",
+    "abbr": "HI",
+    "registry_url": "https://sexoffenders.ehawaii.gov/sexoffender/welcome.html",
+    "direct_downloads": [],
+    "notes": "Has bulk download system (https://hcjdc.ehawaii.gov/bulkcor/public/welcome.html) but requires login/registration. Not anonymous direct."
+  },
+  {
+    "jurisdiction": "Idaho",
+    "abbr": "ID",
+    "registry_url": "https://www.isp.idaho.gov/sor_id/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Illinois",
+    "abbr": "IL",
+    "registry_url": "https://sor.isp.illinois.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface. Past research has noted downloadable files in some periods; check for current exports."
+  },
+  {
+    "jurisdiction": "Indiana",
+    "abbr": "IN",
+    "registry_url": "https://www.icrimewatch.net/indiana.php",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Iowa",
+    "abbr": "IA",
+    "registry_url": "https://www.iowasexoffender.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Kansas",
+    "abbr": "KS",
+    "registry_url": "https://www.kbi.ks.gov/registeredoffender/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Kentucky",
+    "abbr": "KY",
+    "registry_url": "http://kspsor.state.ky.us/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Louisiana",
+    "abbr": "LA",
+    "registry_url": "https://lsp.org/community-outreach/sex-offender-registry/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Maine",
+    "abbr": "ME",
+    "registry_url": "http://sor.informe.org/cgi-bin/sor/index.pl",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Maryland",
+    "abbr": "MD",
+    "registry_url": "https://dpscs.maryland.gov/onlineservs/socem/default.shtml",
+    "direct_downloads": [],
+    "notes": "Search interface. Past research noted downloadable data."
+  },
+  {
+    "jurisdiction": "Massachusetts",
+    "abbr": "MA",
+    "registry_url": "https://www.mass.gov/orgs/sex-offender-registry-board",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Michigan",
+    "abbr": "MI",
+    "registry_url": "https://mspsor.com/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Minnesota",
+    "abbr": "MN",
+    "registry_url": "https://coms.doc.state.mn.us/publicregistrantsearch",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Mississippi",
+    "abbr": "MS",
+    "registry_url": "https://state.sor.dps.ms.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Missouri",
+    "abbr": "MO",
+    "registry_url": "https://www.mshp.dps.missouri.gov/MSHPWeb/PatrolDivisions/CRID/SOR/SORPage.html",
+    "direct_downloads": [],
+    "notes": "Search + map. Past research noted downloadable files."
+  },
+  {
+    "jurisdiction": "Montana",
+    "abbr": "MT",
+    "registry_url": "https://app.doj.mt.gov/apps/svow/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Nebraska",
+    "abbr": "NE",
+    "registry_url": "https://sor.nebraska.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Nevada",
+    "abbr": "NV",
+    "registry_url": "https://sexoffenders.nv.gov/ConditionsOfUse.Aspx",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "New Hampshire",
+    "abbr": "NH",
+    "registry_url": "https://business.nh.gov/nsor/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "New Jersey",
+    "abbr": "NJ",
+    "registry_url": "https://www.njsp.org/sex-offender-registry/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "New Mexico",
+    "abbr": "NM",
+    "registry_url": "https://sheriffalerts.com/cap_office_disclaimer.php?office=55290&fwd=aHR0cDovL2NvbW11bml0eW5vdGlmaWNhdGlvbi5jb20vY2FwX21haW4ucGhwP29mZmljZT01NTI5MA==",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "New York",
+    "abbr": "NY",
+    "registry_url": "https://www.criminaljustice.ny.gov/nsor/",
+    "direct_downloads": [],
+    "notes": "Level 2/3 primarily public. Search interface."
+  },
+  {
+    "jurisdiction": "North Carolina",
+    "abbr": "NC",
+    "registry_url": "https://sexoffender.ncsbi.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "North Dakota",
+    "abbr": "ND",
+    "registry_url": "https://www.sexoffender.nd.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Ohio",
+    "abbr": "OH",
+    "registry_url": "https://www.icrimewatch.net/index.php?AgencyID=55149&disc=",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Oklahoma",
+    "abbr": "OK",
+    "registry_url": "https://sors.doc.ok.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Oregon",
+    "abbr": "OR",
+    "registry_url": "https://sexoffenders.oregon.gov/",
+    "direct_downloads": [],
+    "notes": "Primarily Level 3 (highest risk). Search interface."
+  },
+  {
+    "jurisdiction": "Pennsylvania",
+    "abbr": "PA",
+    "registry_url": "https://www.pameganslaw.state.pa.us/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Rhode Island",
+    "abbr": "RI",
+    "registry_url": "https://risp.ri.gov/safety-education/sex-offenders",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "South Carolina",
+    "abbr": "SC",
+    "registry_url": "https://scor.sled.sc.gov/ConditionsOfUse.Aspx",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "South Dakota",
+    "abbr": "SD",
+    "registry_url": "https://sor.sd.gov/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Tennessee",
+    "abbr": "TN",
+    "registry_url": "https://sor.tbi.tn.gov/home",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Texas",
+    "abbr": "TX",
+    "registry_url": "https://publicsite.dps.texas.gov/SexOffenderRegistry",
+    "direct_downloads": [],
+    "notes": "Search interface only. Very large registry."
+  },
+  {
+    "jurisdiction": "Utah",
+    "abbr": "UT",
+    "registry_url": "https://www.communitynotification.com/cap_office_disclaimer.php?office=54438",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Vermont",
+    "abbr": "VT",
+    "registry_url": "https://vcic.vermont.gov/sor",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Virginia",
+    "abbr": "VA",
+    "registry_url": "https://www.vsp.virginia.gov/sex-offender-registry/",
+    "direct_downloads": [],
+    "notes": "Search interface only. (Added; check current official link)"
+  },
+  {
+    "jurisdiction": "Washington",
+    "abbr": "WA",
+    "registry_url": "https://www.wasor.org/",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "West Virginia",
+    "abbr": "WV",
+    "registry_url": "https://apps.wv.gov/StatePolice/SexOffender",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Wisconsin",
+    "abbr": "WI",
+    "registry_url": "https://appsdoc.wi.gov/public/offenders",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  },
+  {
+    "jurisdiction": "Wyoming",
+    "abbr": "WY",
+    "registry_url": "https://wyomingdci.wyo.gov/criminal-justice-information-services-cjis/sex-offender-registry",
+    "direct_downloads": [],
+    "notes": "Search interface only."
+  }
+]
