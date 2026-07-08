@@ -119,7 +119,7 @@ Most SOR websites are JavaScript search apps (disclaimer → CAPTCHA → query).
 
 ## NSOPW ethnic name search (GUI preferred)
 
-**Launch:** double-click `run_gui.bat`, or `python gui.py`.
+**Launch:** double-click `Launch SOR Archiver.vbs` (no console), or `run_gui.bat`, or `pythonw gui.py`.
 
 Open the **NSOPW** tab. The GUI only exposes **limits & rate control**
 (max searches, max report fetches, search/report delays). Everything else uses

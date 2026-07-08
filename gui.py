@@ -365,7 +365,14 @@ class ArchiverApp(ctk.CTk):
 
         left = _card(mid)
         left.pack(side="left", fill="both", expand=True, padx=(0, 8))
-        _section_label(left, "Jurisdictions").pack(anchor="w", padx=14, pady=(12, 6))
+        _section_label(left, "Jurisdictions").pack(anchor="w", padx=14, pady=(12, 4))
+        _muted(
+            left,
+            "INTERACTIVE: the site only offers a web search form (often disclaimer, CAPTCHA, "
+            "or session). There is no public bulk download, so automated scrape returns no "
+            "records — look up offenders in a browser. Prefer Direct / bulk only for "
+            "jurisdictions that publish downloadable data (DIRECT, ARCGIS, etc.).",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
 
         tree_wrap, self.scrape_tree = _tree_frame(left)
         tree_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
