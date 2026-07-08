@@ -223,9 +223,18 @@ class NSOPWEthnicDatabaseBuilder:
         ethnicity: str = "all",
         limit_per_group: int = 15,
         all_surnames: bool = False,
+        subcategory: Optional[str] = None,
     ) -> List[Tuple[str, str]]:
-        """Return list of (surname, ethnicity_label) from the ethnic name DB."""
+        """
+        Return list of (surname, ethnicity_label) from the ethnic name DB.
+
+        subcategory: when set (and not 'all'), only that nested group is used
+        for asian / indian / european / african lists.
+        """
         eth = (ethnicity or "all").lower().strip()
+        sub = (subcategory or "all").lower().strip()
+        if sub in ("", "all", "(all)", "none", "*"):
+            sub = ""
         pairs: List[Tuple[str, str]] = []
         # all_surnames / limit<=0 → no per-group cap
         unlimited = all_surnames or limit_per_group is None or int(limit_per_group) <= 0
@@ -236,36 +245,52 @@ class NSOPWEthnicDatabaseBuilder:
                 if name and name.strip():
                     pairs.append((name.strip(), label))
 
+        def group_cap() -> int:
+            return cap if unlimited else max(3, cap // 3)
+
         if eth in ("all", "hispanic"):
-            take(self.ethnic_db.hispanic_surnames, "Hispanic", cap)
+            if not sub:  # flat list — no subcategory filter
+                take(self.ethnic_db.hispanic_surnames, "Hispanic", cap)
         # East / Southeast Asian only (not Indian / South Asian)
         if eth in ("all", "asian"):
             for group, names in sorted(self.ethnic_db.asian_surnames.items()):
-                n = cap if unlimited else max(3, cap // 3)
-                take(names, f"Asian ({group})", n)
+                if sub and group.lower() != sub:
+                    continue
+                take(names, f"Asian ({group})", group_cap())
         # Indian subcontinent / South Asian (separate list; optional regional groups)
         if eth in ("all", "indian"):
             by_group = getattr(self.ethnic_db, "indian_surnames_by_group", None) or {}
             if by_group:
                 for group, names in sorted(by_group.items()):
-                    n = cap if unlimited else max(3, cap // 3)
-                    take(names, f"Indian ({group})", n)
-            else:
+                    if sub and group.lower() != sub:
+                        continue
+                    take(names, f"Indian ({group})", group_cap())
+            elif not sub:
                 take(self.ethnic_db.indian_surnames, "Indian", cap)
-        if eth in ("all", "african_american"):
+        if eth in ("all", "african_american") and not sub:
             take(self.ethnic_db.african_american_surnames, "African American", cap)
-        if eth in ("all", "arabic"):
+        if eth in ("all", "arabic") and not sub:
             take(self.ethnic_db.arabic_surnames, "Arabic", cap)
-        if eth in ("all", "jewish"):
+        if eth in ("all", "jewish") and not sub:
             take(self.ethnic_db.jewish_surnames, "Jewish", cap)
-        if eth in ("all", "portuguese"):
+        if eth in ("all", "portuguese") and not sub:
             take(self.ethnic_db.portuguese_surnames, "Portuguese", cap)
-        if eth in ("all", "native_american"):
+        if eth in ("all", "native_american") and not sub:
             take(self.ethnic_db.native_american_surnames, "Native American", cap)
         if eth in ("all", "european"):
             for country, names in sorted(self.ethnic_db.european_surnames.items()):
+                if sub and country.lower() != sub:
+                    continue
                 n = cap if unlimited else max(2, cap // 4)
                 take(names, f"European ({country})", n)
+        if eth in ("all", "african"):
+            for region, names in sorted(self.ethnic_db.african_surnames.items()):
+                if sub and region.lower() != sub:
+                    continue
+                take(names, f"African ({region})", group_cap())
+
+        # When eth is a grouped family but subcategory was set under eth="all",
+        # only the matching nested branch above contributes names.
 
         seen: Set[str] = set()
         unique: List[Tuple[str, str]] = []
@@ -281,6 +306,7 @@ class NSOPWEthnicDatabaseBuilder:
         ethnicity: str = "hispanic",
         surnames_limit: int = 10,
         all_surnames: bool = False,
+        subcategory: Optional[str] = None,
         first_names: Optional[Sequence[str]] = None,
         first_mode: str = "initials",
         jurisdictions: Optional[Sequence[str]] = None,
@@ -334,10 +360,13 @@ class NSOPWEthnicDatabaseBuilder:
             ethnicity,
             limit_per_group=surnames_limit,
             all_surnames=all_surnames,
+            subcategory=subcategory,
         )
         eth_key = (ethnicity or "").lower()
+        sub_disp = (subcategory or "all").strip() or "all"
 
         _log(f"Ethnicity filter: {ethnicity}")
+        _log(f"Subcategory: {sub_disp}")
         _log(
             f"Surnames to search: {len(surname_pairs)}"
             + (" (ALL in list)" if all_surnames or surnames_limit <= 0 else f" (cap {surnames_limit}/group)")

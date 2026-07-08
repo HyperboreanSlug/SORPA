@@ -242,6 +242,28 @@ class EthnicNameDatabase:
         self._build_lookup_sets()
         return surname.strip().lower() in self._indian_lc
 
+    def subcategories(self, ethnicity: str) -> List[str]:
+        """
+        Subcategory keys for a top-level ethnicity list.
+        Always includes 'all' first when subgroups exist; flat lists return ['all'] only.
+        """
+        eth = (ethnicity or "").lower().strip()
+        if eth == "asian":
+            return ["all"] + sorted(self.asian_surnames.keys(), key=str.lower)
+        if eth == "indian":
+            groups = sorted((self.indian_surnames_by_group or {}).keys(), key=str.lower)
+            return ["all"] + groups if groups else ["all"]
+        if eth == "european":
+            return ["all"] + sorted(self.european_surnames.keys(), key=str.lower)
+        if eth == "african":
+            return ["all"] + sorted(self.african_surnames.keys(), key=str.lower)
+        # Flat lists (hispanic, african_american, …) or "all" top-level
+        return ["all"]
+
+    def has_subcategories(self, ethnicity: str) -> bool:
+        subs = self.subcategories(ethnicity)
+        return len(subs) > 1
+
     def is_african_american_surname(self, surname: str) -> bool:
         """Check if a surname is commonly African-American."""
         self._build_lookup_sets()

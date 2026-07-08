@@ -206,6 +206,26 @@ class BuilderSurnameTests(unittest.TestCase):
         finally:
             b.close()
 
+    def test_subcategory_filter(self):
+        b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=2.0, report_delay=0.25)
+        try:
+            all_asian = b.surnames_for_ethnicity("asian", all_surnames=True, subcategory="all")
+            chinese = b.surnames_for_ethnicity("asian", all_surnames=True, subcategory="chinese")
+            self.assertGreater(len(all_asian), len(chinese))
+            self.assertTrue(len(chinese) >= 1)
+            self.assertTrue(all("chinese" in lab.lower() for _, lab in chinese))
+            self.assertIn("chen", {s.lower() for s, _ in chinese})
+            # Subcategories helper
+            from scraper.ethnic_names import get_ethnic_database
+            db = get_ethnic_database()
+            subs = db.subcategories("asian")
+            self.assertIn("all", subs)
+            self.assertIn("chinese", subs)
+            self.assertTrue(db.has_subcategories("asian"))
+            self.assertFalse(db.has_subcategories("hispanic"))
+        finally:
+            b.close()
+
     def test_query_log_resume(self):
         b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=2.0, report_delay=0.25)
         try:

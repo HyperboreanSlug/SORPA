@@ -808,25 +808,27 @@ class ArchiverApp(ctk.CTk):
         self.nsopw_html_dir = "data/report_pages"
         self._nsopw_insert_count = 0
 
-        # Ethnicity + surname scope
+        # Ethnicity + subcategory + surname scope
         eth_card = _card(scroll)
         eth_card.pack(fill="x", padx=4, pady=6)
         _section_label(eth_card, "Ethnicity & surnames").pack(anchor="w", padx=14, pady=(12, 6))
+
         eth_row = ctk.CTkFrame(eth_card, fg_color="transparent")
-        eth_row.pack(fill="x", padx=14, pady=(0, 6))
+        eth_row.pack(fill="x", padx=14, pady=(0, 4))
         ctk.CTkLabel(
             eth_row, text="Surname list", font=FONT_SM, text_color=C["muted"], width=100, anchor="w"
         ).pack(side="left")
         self.nsopw_ethnicity = ctk.StringVar(value="hispanic")
-        ctk.CTkComboBox(
+        self.nsopw_eth_combo = ctk.CTkComboBox(
             eth_row,
             variable=self.nsopw_ethnicity,
-            width=220,
+            width=200,
             values=[
                 "hispanic",
                 "asian",
                 "indian",
                 "african_american",
+                "african",
                 "arabic",
                 "jewish",
                 "portuguese",
@@ -839,12 +841,39 @@ class ArchiverApp(ctk.CTk):
             button_color=C["elevated"],
             text_color=C["text"],
             dropdown_fg_color=C["panel"],
-        ).pack(side="left", padx=6)
+            command=self._nsopw_on_ethnicity_change,
+        )
+        self.nsopw_eth_combo.pack(side="left", padx=6)
+
+        sub_row = ctk.CTkFrame(eth_card, fg_color="transparent")
+        sub_row.pack(fill="x", padx=14, pady=(0, 4))
+        ctk.CTkLabel(
+            sub_row, text="Subcategory", font=FONT_SM, text_color=C["muted"], width=100, anchor="w"
+        ).pack(side="left")
+        self.nsopw_subcategory = ctk.StringVar(value="all")
+        self.nsopw_sub_combo = ctk.CTkComboBox(
+            sub_row,
+            variable=self.nsopw_subcategory,
+            width=200,
+            values=["all"],
+            fg_color=C["bg"],
+            border_color=C["border"],
+            button_color=C["elevated"],
+            text_color=C["text"],
+            dropdown_fg_color=C["panel"],
+            command=self._nsopw_on_subcategory_change,
+            state="disabled",
+        )
+        self.nsopw_sub_combo.pack(side="left", padx=6)
+        ctk.CTkLabel(
+            sub_row, text="one group or all", font=FONT_SM, text_color=C["dim"]
+        ).pack(side="left", padx=4)
+
         ctk.CTkLabel(
             eth_card,
             text=(
-                "asian = East/SE Asian (Chinese, Korean, Japanese, Vietnamese, Thai, Filipino…) · "
-                "indian = South Asian (India, Pakistan, Bangladesh, Sri Lanka, Nepal…)"
+                "asian = East/SE Asian · indian = South Asian · african = continental regions · "
+                "Subcategory picks one nested group or all."
             ),
             font=FONT_SM, text_color=C["dim"],
         ).pack(anchor="w", padx=14, pady=(0, 6))
@@ -853,7 +882,7 @@ class ArchiverApp(ctk.CTk):
         self.nsopw_limit_surnames = ctk.BooleanVar(value=False)
         self.nsopw_surnames_limit = ctk.IntVar(value=15)
         sn_row = ctk.CTkFrame(eth_card, fg_color="transparent")
-        sn_row.pack(fill="x", padx=14, pady=(0, 10))
+        sn_row.pack(fill="x", padx=14, pady=(0, 4))
         ctk.CTkCheckBox(
             sn_row, text="Limit max surnames / group",
             variable=self.nsopw_limit_surnames, font=FONT_SM, text_color=C["text"],
@@ -870,6 +899,20 @@ class ArchiverApp(ctk.CTk):
             state="disabled",
         )
         self.nsopw_surnames_entry.pack(side="left")
+        # Refresh count when max value is edited
+        self.nsopw_surnames_entry.bind("<KeyRelease>", lambda _e: self._nsopw_update_surname_count())
+        self.nsopw_surnames_entry.bind("<FocusOut>", lambda _e: self._nsopw_update_surname_count())
+
+        self.nsopw_surname_count_label = ctk.CTkLabel(
+            eth_card,
+            text="Surnames to search: —",
+            font=FONT_SM, text_color=C["text"],
+            anchor="w",
+        )
+        self.nsopw_surname_count_label.pack(anchor="w", padx=14, pady=(4, 12))
+
+        # Populate subcategory + initial count
+        self._nsopw_refresh_subcategories()
 
         # Limits & rate control (granular: search vs report/HTML)
         lim = _card(scroll)
@@ -1031,6 +1074,76 @@ class ArchiverApp(ctk.CTk):
             self.nsopw_surnames_entry.configure(state="normal")
         else:
             self.nsopw_surnames_entry.configure(state="disabled")
+        self._nsopw_update_surname_count()
+
+    def _nsopw_on_ethnicity_change(self, _choice=None):
+        self._nsopw_refresh_subcategories()
+        self._nsopw_update_surname_count()
+
+    def _nsopw_on_subcategory_change(self, _choice=None):
+        self._nsopw_update_surname_count()
+
+    def _nsopw_refresh_subcategories(self):
+        """Reload subcategory dropdown for the current ethnicity."""
+        from scraper.ethnic_names import get_ethnic_database
+
+        eth = (self.nsopw_ethnicity.get() or "hispanic").strip().lower()
+        db = get_ethnic_database()
+        subs = db.subcategories(eth)
+        if not subs:
+            subs = ["all"]
+        self.nsopw_sub_combo.configure(values=subs)
+        # Default to all when list changes
+        self.nsopw_subcategory.set("all" if "all" in subs else subs[0])
+        # Enable only when real subgroups exist
+        if db.has_subcategories(eth):
+            self.nsopw_sub_combo.configure(state="normal")
+        else:
+            self.nsopw_sub_combo.configure(state="disabled")
+
+    def _nsopw_surname_selection_params(self) -> tuple:
+        """Return (ethnicity, subcategory, all_surnames, surnames_limit)."""
+        eth = (self.nsopw_ethnicity.get() or "hispanic").strip().lower()
+        sub = (self.nsopw_subcategory.get() or "all").strip().lower()
+        limit_on = bool(self.nsopw_limit_surnames.get())
+        all_surnames = not limit_on
+        try:
+            surnames_limit = int(self.nsopw_surnames_limit.get()) if limit_on else 0
+        except (TypeError, ValueError):
+            surnames_limit = 15 if limit_on else 0
+        return eth, sub, all_surnames, surnames_limit
+
+    def _nsopw_update_surname_count(self):
+        """Show how many unique surnames the current filters select."""
+        try:
+            from scraper.ethnic_names import get_ethnic_database
+            from scraper.nsopw_builder import FIRST_INITIALS, NSOPWEthnicDatabaseBuilder
+
+            eth, sub, all_surnames, surnames_limit = self._nsopw_surname_selection_params()
+            # Avoid full builder init (HTTP clients) — only need ethnic_db for selection
+            light = object.__new__(NSOPWEthnicDatabaseBuilder)
+            light.ethnic_db = get_ethnic_database()
+            pairs = NSOPWEthnicDatabaseBuilder.surnames_for_ethnicity(
+                light,
+                eth,
+                limit_per_group=surnames_limit,
+                all_surnames=all_surnames,
+                subcategory=sub,
+            )
+            n = len(pairs)
+            # Default first-mode is A–Z initials
+            est = n * len(FIRST_INITIALS)
+            scope = f"{eth}" + (f" / {sub}" if sub and sub != "all" else " / all groups")
+            self.nsopw_surname_count_label.configure(
+                text=(
+                    f"Surnames to search: {n:,}  ({scope})  ·  "
+                    f"Est. NSOPW queries (A–Z prefixes): {est:,}"
+                )
+            )
+        except Exception as e:
+            self.nsopw_surname_count_label.configure(
+                text=f"Surnames to search: (error computing count: {e})"
+            )
 
     def _nsopw_append_row(self, record: Dict[str, Any]) -> None:
         """UI-thread: prepend a live insert into the Recent inserts table."""
@@ -1098,13 +1211,7 @@ class ArchiverApp(ctk.CTk):
             report_delay = 0.75
         enrich = bool(self.nsopw_enrich.get())
         save_html = bool(self.nsopw_save_html.get())
-        # Limit off → search entire list (all_surnames=True)
-        limit_on = bool(self.nsopw_limit_surnames.get())
-        all_surnames = not limit_on
-        try:
-            surnames_limit = int(self.nsopw_surnames_limit.get()) if limit_on else 0
-        except (TypeError, ValueError):
-            surnames_limit = 15 if limit_on else 0
+        eth, sub, all_surnames, surnames_limit = self._nsopw_surname_selection_params()
         resume = bool(self.nsopw_resume.get())
         skip_existing = bool(self.nsopw_skip_existing.get())
         new_files_only = bool(self.nsopw_new_files_only.get())
@@ -1137,9 +1244,10 @@ class ArchiverApp(ctk.CTk):
             )
             try:
                 stats = builder.build(
-                    ethnicity=self.nsopw_ethnicity.get(),
+                    ethnicity=eth,
                     surnames_limit=surnames_limit,
                     all_surnames=all_surnames,
+                    subcategory=sub,
                     first_names=None,
                     first_mode=self.nsopw_first_mode,
                     jurisdictions=None,

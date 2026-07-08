@@ -393,6 +393,7 @@ def cmd_nsopw(args: argparse.Namespace) -> None:
             ethnicity=args.ethnicity,
             surnames_limit=args.surnames,
             all_surnames=bool(getattr(args, "all_surnames", False)),
+            subcategory=getattr(args, "subcategory", None) or "all",
             first_names=first_names,
             first_mode=first_mode,
             jurisdictions=jurisdictions,
@@ -544,11 +545,15 @@ Examples:
     p_nsopw.add_argument(
         "--ethnicity",
         choices=[
-            "all", "hispanic", "asian", "indian", "african_american",
+            "all", "hispanic", "asian", "indian", "african_american", "african",
             "arabic", "jewish", "portuguese", "native_american", "european",
         ],
         default="hispanic",
         help="Ethnic surname list (asian=East/SE Asian; indian=South Asian; default: hispanic)",
+    )
+    p_nsopw.add_argument(
+        "--subcategory", type=str, default="all",
+        help="Nested group within ethnicity (e.g. chinese, korean, india, german) or 'all'",
     )
     p_nsopw.add_argument(
         "--surnames", type=int, default=10,
