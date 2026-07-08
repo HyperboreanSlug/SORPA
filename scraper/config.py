@@ -327,9 +327,8 @@ REGISTRIES: List[RegistryConfig] = [
 ]
 
 USER_AGENT = (
-    "Public-SOR-Archiver/1.1 "
-    "(+https://github.com/HyperboreanSlug/sor-public-archiver; "
-    "public bulk archival; respectful low-rate access)"
+    "Public-SOR-Archiver/1.2 "
+    "(public bulk archival of published U.S. registry data; respectful low-rate access)"
 )
 
 DEFAULT_DELAY = 1.0

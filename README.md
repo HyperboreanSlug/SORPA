@@ -119,29 +119,18 @@ Most SOR websites are JavaScript search apps (disclaimer → CAPTCHA → query).
 
 ## NSOPW ethnic name search (GUI preferred)
 
-**Prefer the GUI:** run `python gui.py` → **NSOPW** tab. All settings (ethnicity,
-surname count, first-name mode, jurisdictions, max searches/reports, delays,
-HTML archive path, database path) are available there.
+**Launch:** double-click `run_gui.bat`, or `python gui.py`.
+
+Open the **NSOPW** tab. The GUI only exposes **limits & rate control**
+(max searches, max report fetches, search/report delays). Everything else uses
+safe defaults: all ethnic surname lists, A–Z first-name prefixes, all
+jurisdictions, HTML archive on, data under `data/`.
 
 ### Partial first-name matching
 
-NSOPW accepts **partial first names**. Example: first=`M`, last=`Singh` returns
-offenders whose given names expand around that prefix (e.g. Mandhir, Manjit,
-Mitchell). Default mode uses **A–Z initials** so each surname needs at most 26
-queries instead of dozens of full first names.
-
-### CLI (optional)
-
-```bash
-# Default: A–Z initials + Hispanic surnames
-python -m scraper nsopw --ethnicity hispanic --surnames 8 --max-searches 40
-
-# Full first-name list mode
-python -m scraper nsopw --first-mode full --ethnicity asian --max-searches 30
-
-# Custom prefixes only
-python -m scraper nsopw --first-names "M,J,R,S" --ethnicity hispanic
-```
+NSOPW accepts **partial first names**. Example: first=`M`, last=`Singh` expands
+to many given names (Mandhir, Manjit, Mitchell, …). Defaults use **A–Z
+initials** so each surname needs at most 26 queries.
 
 ### What is stored
 
@@ -152,8 +141,8 @@ python -m scraper nsopw --first-names "M,J,R,S" --ethnicity hispanic
 | demographics | Best-effort race/ethnicity/height/etc. from the report page |
 | `likely_ethnicity` | From the ethnic surname list used in the search |
 
-Rate limits: search/report delays default to **2.0s** (floor **1.5s**). Double-click
-a result row in the GUI to open the saved HTML or live report URL.
+Rate limits default to **2.0s** (floor **1.5s**). Double-click a result row to
+open saved HTML or the live report URL.
 
 Respect [NSOPW Conditions of Use](https://www.nsopw.gov/).
 

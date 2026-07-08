@@ -62,6 +62,7 @@ SOR_Archives/
 
 # Logs and local notes
 *.log
+gui_error.log
 custom_keywords.txt
 *.csv
 !scraper/ethnic_names.json

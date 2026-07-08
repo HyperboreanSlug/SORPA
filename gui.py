@@ -3,7 +3,7 @@
 Public SOR Archiver — desktop GUI (CustomTkinter).
 
 Dark, high-contrast UI for scrape / search / analysis / NSOPW.
-Run:  python gui.py
+Run:  python gui.py   or double-click run_gui.bat
 """
 
 from __future__ import annotations
@@ -12,11 +12,22 @@ import csv
 import os
 import queue
 import subprocess
+import sys
 import threading
+import traceback
 import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Ensure project root is on path and is the working directory (double-click safety)
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+try:
+    os.chdir(_ROOT)
+except OSError:
+    pass
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
@@ -718,79 +729,22 @@ class ArchiverApp(ctk.CTk):
         _section_label(scroll, "NSOPW ethnic name search").pack(anchor="w", padx=8, pady=(4, 2))
         _muted(
             scroll,
-            "Partial first names (A–Z initials) cut query count. Rate limits protect servers. "
-            "Report HTML is archived and linked on each row for validation.",
+            "Searches all ethnic surname lists with A–Z first-name prefixes (partial match). "
+            "Report links and HTML archives are saved automatically. "
+            "Adjust only the limits and delays below.",
         ).pack(anchor="w", padx=8, pady=(0, 12))
 
-        # Search card
-        s = _card(scroll)
-        s.pack(fill="x", padx=4, pady=6)
-        _section_label(s, "Search").pack(anchor="w", padx=14, pady=(12, 8))
+        # Fixed defaults (no surnames/group or other search options in UI)
+        self.nsopw_ethnicity = "all"
+        self.nsopw_surnames = 9999
+        self.nsopw_first_mode = "initials"
+        self.nsopw_db_path = self.db_path
+        self.nsopw_html_dir = "data/report_pages"
+        self.nsopw_save_html = True
+        self.nsopw_enrich = True
+        self.nsopw_skip_existing = True
 
-        r1 = ctk.CTkFrame(s, fg_color="transparent")
-        r1.pack(fill="x", padx=14, pady=4)
-        ctk.CTkLabel(r1, text="Ethnicity", font=FONT_SM, text_color=C["muted"], width=120, anchor="w").pack(
-            side="left"
-        )
-        self.nsopw_ethnicity = ctk.StringVar(value="hispanic")
-        ctk.CTkComboBox(
-            r1, variable=self.nsopw_ethnicity, width=180,
-            values=[
-                "hispanic", "asian", "african_american", "arabic",
-                "jewish", "portuguese", "native_american", "european", "all",
-            ],
-            fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
-            text_color=C["text"], dropdown_fg_color=C["panel"],
-        ).pack(side="left", padx=6)
-        ctk.CTkLabel(r1, text="Surnames / group", font=FONT_SM, text_color=C["muted"]).pack(
-            side="left", padx=(16, 4)
-        )
-        self.nsopw_surnames = ctk.IntVar(value=10)
-        ctk.CTkEntry(
-            r1, textvariable=self.nsopw_surnames, width=70,
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left")
-
-        r2 = ctk.CTkFrame(s, fg_color="transparent")
-        r2.pack(fill="x", padx=14, pady=4)
-        ctk.CTkLabel(r2, text="First-name mode", font=FONT_SM, text_color=C["muted"], width=120, anchor="w").pack(
-            side="left"
-        )
-        self.nsopw_first_mode = ctk.StringVar(value="initials")
-        ctk.CTkComboBox(
-            r2, variable=self.nsopw_first_mode, width=140,
-            values=["initials", "full", "custom"],
-            fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
-            text_color=C["text"], dropdown_fg_color=C["panel"],
-        ).pack(side="left", padx=6)
-        ctk.CTkLabel(
-            r2, text="initials = A–Z partial match (fewest queries)",
-            font=FONT_SM, text_color=C["dim"],
-        ).pack(side="left", padx=8)
-
-        r3 = ctk.CTkFrame(s, fg_color="transparent")
-        r3.pack(fill="x", padx=14, pady=4)
-        ctk.CTkLabel(r3, text="Custom prefixes", font=FONT_SM, text_color=C["muted"], width=120, anchor="w").pack(
-            side="left"
-        )
-        self.nsopw_custom_firsts = ctk.StringVar(value="")
-        ctk.CTkEntry(
-            r3, textvariable=self.nsopw_custom_firsts, placeholder_text="M,J,R,S  or  John,Maria",
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left", fill="x", expand=True, padx=6)
-
-        r4 = ctk.CTkFrame(s, fg_color="transparent")
-        r4.pack(fill="x", padx=14, pady=(4, 12))
-        ctk.CTkLabel(r4, text="Jurisdictions", font=FONT_SM, text_color=C["muted"], width=120, anchor="w").pack(
-            side="left"
-        )
-        self.nsopw_jurisdictions = ctk.StringVar(value="")
-        ctk.CTkEntry(
-            r4, textvariable=self.nsopw_jurisdictions, placeholder_text="blank = all · e.g. CA,TX,FL,NY",
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left", fill="x", expand=True, padx=6)
-
-        # Limits card
+        # Limits & rate control (only user-facing settings)
         lim = _card(scroll)
         lim.pack(fill="x", padx=4, pady=6)
         _section_label(lim, "Limits & rate control").pack(anchor="w", padx=14, pady=(12, 8))
@@ -816,65 +770,10 @@ class ArchiverApp(ctk.CTk):
                 fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
             ).pack(side="left")
         ctk.CTkLabel(
-            lim, text="Minimum delay 1.5s is enforced in code.",
+            lim,
+            text="Minimum delay 1.5s is enforced. Data: data/offenders.db · HTML: data/report_pages/",
             font=FONT_SM, text_color=C["dim"],
         ).pack(anchor="w", padx=14, pady=(4, 12))
-
-        # Storage
-        st = _card(scroll)
-        st.pack(fill="x", padx=4, pady=6)
-        _section_label(st, "Storage").pack(anchor="w", padx=14, pady=(12, 8))
-
-        dbrow = ctk.CTkFrame(st, fg_color="transparent")
-        dbrow.pack(fill="x", padx=14, pady=4)
-        ctk.CTkLabel(dbrow, text="Database", font=FONT_SM, text_color=C["muted"], width=100, anchor="w").pack(
-            side="left"
-        )
-        self.nsopw_db_path = ctk.StringVar(value=self.db_path)
-        ctk.CTkEntry(
-            dbrow, textvariable=self.nsopw_db_path,
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left", fill="x", expand=True, padx=6)
-        ctk.CTkButton(
-            dbrow, text="…", width=36, command=self._nsopw_browse_db,
-            fg_color=C["elevated"], hover_color=C["border"],
-        ).pack(side="left")
-
-        hrow = ctk.CTkFrame(st, fg_color="transparent")
-        hrow.pack(fill="x", padx=14, pady=4)
-        ctk.CTkLabel(hrow, text="HTML archive", font=FONT_SM, text_color=C["muted"], width=100, anchor="w").pack(
-            side="left"
-        )
-        self.nsopw_html_dir = ctk.StringVar(value="data/report_pages")
-        ctk.CTkEntry(
-            hrow, textvariable=self.nsopw_html_dir,
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left", fill="x", expand=True, padx=6)
-        ctk.CTkButton(
-            hrow, text="…", width=36, command=self._nsopw_browse_html,
-            fg_color=C["elevated"], hover_color=C["border"],
-        ).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(
-            hrow, text="Open", width=60, command=self._nsopw_open_html_folder,
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"],
-        ).pack(side="left")
-
-        sw = ctk.CTkFrame(st, fg_color="transparent")
-        sw.pack(fill="x", padx=14, pady=(8, 14))
-        self.nsopw_save_html = ctk.BooleanVar(value=True)
-        self.nsopw_enrich = ctk.BooleanVar(value=True)
-        self.nsopw_skip_existing = ctk.BooleanVar(value=True)
-        for text, var in (
-            ("Save report HTML on each entry", self.nsopw_save_html),
-            ("Fetch report pages", self.nsopw_enrich),
-            ("Skip existing URLs", self.nsopw_skip_existing),
-        ):
-            ctk.CTkCheckBox(
-                sw, text=text, variable=var, font=FONT_SM, text_color=C["text"],
-                fg_color=C["accent"], hover_color=C["accent_hover"],
-                checkmark_color=C["bg"], border_color=C["border"],
-            ).pack(side="left", padx=(0, 16))
 
         # Actions
         act = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -893,10 +792,10 @@ class ArchiverApp(ctk.CTk):
         )
         self.nsopw_cancel_btn.pack(side="left", padx=4)
         ctk.CTkButton(
-            act, text="Open DB folder", height=42,
+            act, text="Open data folder", height=42,
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
-            command=self._nsopw_open_db_folder,
+            command=self._nsopw_open_data_folder,
         ).pack(side="left", padx=4)
 
         self.nsopw_progress = ctk.CTkProgressBar(
@@ -906,7 +805,7 @@ class ArchiverApp(ctk.CTk):
         self.nsopw_progress.set(0)
 
         self.nsopw_status = ctk.CTkLabel(
-            scroll, text="Ready — initials mode recommended",
+            scroll, text="Ready",
             font=FONT_SM, text_color=C["muted"], anchor="w",
         )
         self.nsopw_status.pack(fill="x", padx=10, pady=(0, 8))
@@ -924,28 +823,8 @@ class ArchiverApp(ctk.CTk):
             self.nsopw_tree.column(c, width=w)
         self.nsopw_tree.bind("<Double-1>", self._nsopw_open_selected)
 
-    def _nsopw_browse_db(self):
-        path = filedialog.asksaveasfilename(
-            defaultextension=".db",
-            filetypes=[("SQLite", "*.db"), ("All", "*.*")],
-            initialfile=Path(self.nsopw_db_path.get()).name,
-        )
-        if path:
-            self.nsopw_db_path.set(path)
-            self.db_path = path
-
-    def _nsopw_browse_html(self):
-        path = filedialog.askdirectory(initialdir=self.nsopw_html_dir.get() or "data")
-        if path:
-            self.nsopw_html_dir.set(path)
-
-    def _nsopw_open_html_folder(self):
-        path = Path(self.nsopw_html_dir.get() or "data/report_pages")
-        path.mkdir(parents=True, exist_ok=True)
-        self._open_path(path)
-
-    def _nsopw_open_db_folder(self):
-        path = Path(self.nsopw_db_path.get() or self.db_path).expanduser().resolve().parent
+    def _nsopw_open_data_folder(self):
+        path = Path("data")
         path.mkdir(parents=True, exist_ok=True)
         self._open_path(path)
 
@@ -967,24 +846,8 @@ class ArchiverApp(ctk.CTk):
         if self.is_running:
             return
 
-        ethnicity = self.nsopw_ethnicity.get()
-        first_mode = self.nsopw_first_mode.get()
-        custom = self.nsopw_custom_firsts.get().strip()
-        first_names = None
-        if first_mode == "custom" or custom:
-            first_names = [x.strip() for x in custom.split(",") if x.strip()]
-            if not first_names and first_mode == "custom":
-                messagebox.showwarning("Custom first names", "Enter prefixes or switch to initials.")
-                return
-            if first_names:
-                first_mode = "custom"
-
-        jurs_raw = self.nsopw_jurisdictions.get().strip()
-        jurisdictions = (
-            [x.strip().upper() for x in jurs_raw.split(",") if x.strip()] if jurs_raw else None
-        )
-        db_path = self.nsopw_db_path.get().strip() or self.db_path
-        html_dir = self.nsopw_html_dir.get().strip() or "data/report_pages"
+        db_path = self.nsopw_db_path
+        html_dir = self.nsopw_html_dir
         search_delay = max(1.5, float(self.nsopw_search_delay.get()))
         report_delay = max(1.5, float(self.nsopw_report_delay.get()))
 
@@ -1010,16 +873,16 @@ class ArchiverApp(ctk.CTk):
             )
             try:
                 stats = builder.build(
-                    ethnicity=ethnicity,
-                    surnames_limit=int(self.nsopw_surnames.get()),
-                    first_names=first_names,
-                    first_mode=first_mode,
-                    jurisdictions=jurisdictions,
+                    ethnicity=self.nsopw_ethnicity,
+                    surnames_limit=int(self.nsopw_surnames),
+                    first_names=None,
+                    first_mode=self.nsopw_first_mode,
+                    jurisdictions=None,
                     max_searches=int(self.nsopw_max_searches.get()),
                     max_report_fetches=int(self.nsopw_max_reports.get()),
-                    skip_existing_urls=bool(self.nsopw_skip_existing.get()),
-                    enrich_reports=bool(self.nsopw_enrich.get()),
-                    save_html=bool(self.nsopw_save_html.get()),
+                    skip_existing_urls=bool(self.nsopw_skip_existing),
+                    enrich_reports=bool(self.nsopw_enrich),
+                    save_html=bool(self.nsopw_save_html),
                     log=log,
                 )
                 try:
@@ -1226,8 +1089,22 @@ class ArchiverApp(ctk.CTk):
 
 
 def main():
-    app = ArchiverApp()
-    app.mainloop()
+    try:
+        app = ArchiverApp()
+        app.mainloop()
+    except Exception:
+        # Surface errors when launched via double-click (no visible console)
+        err = traceback.format_exc()
+        try:
+            messagebox.showerror("SOR Public Archiver failed to start", err)
+        except Exception:
+            pass
+        # Also write a log next to the script for debugging
+        try:
+            (_ROOT / "gui_error.log").write_text(err, encoding="utf-8")
+        except OSError:
+            pass
+        raise
 
 
 if __name__ == "__main__":
