@@ -800,23 +800,20 @@ class ArchiverApp(ctk.CTk):
             scroll,
             "Searches the selected ethnic surname list with A–Z first-name prefixes (partial match). "
             "Race comes from each jurisdiction detail sheet (not NSOPW search itself). "
-            "Recent inserts update live. Report/HTML fetches can run faster than NSOPW searches.",
+            "Use Resume + New HTML only to continue a long run without redoing work.",
         ).pack(anchor="w", padx=8, pady=(0, 12))
 
-        # Fixed defaults (surnames/group and other search options stay out of UI)
-        self.nsopw_surnames = 9999
         self.nsopw_first_mode = "initials"
         self.nsopw_db_path = self.db_path
         self.nsopw_html_dir = "data/report_pages"
-        self.nsopw_skip_existing = True
         self._nsopw_insert_count = 0
 
-        # Ethnicity selector
+        # Ethnicity + surname scope
         eth_card = _card(scroll)
         eth_card.pack(fill="x", padx=4, pady=6)
-        _section_label(eth_card, "Ethnicity").pack(anchor="w", padx=14, pady=(12, 6))
+        _section_label(eth_card, "Ethnicity & surnames").pack(anchor="w", padx=14, pady=(12, 6))
         eth_row = ctk.CTkFrame(eth_card, fg_color="transparent")
-        eth_row.pack(fill="x", padx=14, pady=(0, 12))
+        eth_row.pack(fill="x", padx=14, pady=(0, 6))
         ctk.CTkLabel(
             eth_row, text="Surname list", font=FONT_SM, text_color=C["muted"], width=100, anchor="w"
         ).pack(side="left")
@@ -843,6 +840,27 @@ class ArchiverApp(ctk.CTk):
             dropdown_fg_color=C["panel"],
         ).pack(side="left", padx=6)
 
+        self.nsopw_all_surnames = ctk.BooleanVar(value=True)
+        self.nsopw_surnames_limit = ctk.IntVar(value=15)
+        sn_row = ctk.CTkFrame(eth_card, fg_color="transparent")
+        sn_row.pack(fill="x", padx=14, pady=(0, 10))
+        ctk.CTkCheckBox(
+            sn_row, text="Search all surnames in list",
+            variable=self.nsopw_all_surnames, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+            command=self._nsopw_toggle_surname_cap,
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(
+            sn_row, text="Max / group", font=FONT_SM, text_color=C["muted"]
+        ).pack(side="left", padx=(0, 4))
+        self.nsopw_surnames_entry = ctk.CTkEntry(
+            sn_row, textvariable=self.nsopw_surnames_limit, width=64,
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+            state="disabled",
+        )
+        self.nsopw_surnames_entry.pack(side="left")
+
         # Limits & rate control (granular: search vs report/HTML)
         lim = _card(scroll)
         lim.pack(fill="x", padx=4, pady=6)
@@ -859,11 +877,14 @@ class ArchiverApp(ctk.CTk):
         self.nsopw_report_delay = ctk.DoubleVar(value=0.75)
         self.nsopw_enrich = ctk.BooleanVar(value=True)
         self.nsopw_save_html = ctk.BooleanVar(value=True)
+        self.nsopw_skip_existing = ctk.BooleanVar(value=True)
+        self.nsopw_resume = ctk.BooleanVar(value=True)
+        self.nsopw_new_files_only = ctk.BooleanVar(value=True)
 
         row1 = ctk.CTkFrame(lim, fg_color="transparent")
         row1.pack(fill="x", padx=14, pady=2)
         for label, var, width in (
-            ("Max searches", self.nsopw_max_searches, 72),
+            ("Max new searches", self.nsopw_max_searches, 72),
             ("Max reports", self.nsopw_max_reports, 72),
         ):
             ctk.CTkLabel(row1, text=label, font=FONT_SM, text_color=C["muted"]).pack(
@@ -889,7 +910,7 @@ class ArchiverApp(ctk.CTk):
             ).pack(side="left", padx=(0, 14))
 
         tog = ctk.CTkFrame(lim, fg_color="transparent")
-        tog.pack(fill="x", padx=14, pady=(2, 4))
+        tog.pack(fill="x", padx=14, pady=(2, 2))
         ctk.CTkCheckBox(
             tog, text="Fetch detail sheets (race / demos)",
             variable=self.nsopw_enrich, font=FONT_SM, text_color=C["text"],
@@ -903,11 +924,33 @@ class ArchiverApp(ctk.CTk):
             checkmark_color=C["bg"], border_color=C["border"],
         ).pack(side="left")
 
+        # Resume / skip options
+        opt = ctk.CTkFrame(lim, fg_color="transparent")
+        opt.pack(fill="x", padx=14, pady=(8, 2))
+        ctk.CTkCheckBox(
+            opt, text="Resume — skip completed searches",
+            variable=self.nsopw_resume, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+        ).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(
+            opt, text="Skip known offender URLs already in database",
+            variable=self.nsopw_skip_existing, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+        ).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(
+            opt, text="New HTML files only — do not re-download existing report pages",
+            variable=self.nsopw_new_files_only, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+        ).pack(anchor="w", pady=2)
+
         ctk.CTkLabel(
             lim,
-            text="Floors: search ≥2.0s · report ≥0.25s · data/offenders.db · data/report_pages/",
+            text="Resume logs queries in the DB. Floors: search ≥2.0s · report ≥0.25s · data/offenders.db",
             font=FONT_SM, text_color=C["dim"],
-        ).pack(anchor="w", padx=14, pady=(4, 12))
+        ).pack(anchor="w", padx=14, pady=(6, 12))
 
         # Actions
         act = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -971,6 +1014,13 @@ class ArchiverApp(ctk.CTk):
     def _nsopw_clear_tree(self):
         self.nsopw_tree.delete(*self.nsopw_tree.get_children())
         self._nsopw_insert_count = 0
+
+    def _nsopw_toggle_surname_cap(self):
+        """Enable max-surnames entry only when not searching all surnames."""
+        if self.nsopw_all_surnames.get():
+            self.nsopw_surnames_entry.configure(state="disabled")
+        else:
+            self.nsopw_surnames_entry.configure(state="normal")
 
     def _nsopw_append_row(self, record: Dict[str, Any]) -> None:
         """UI-thread: prepend a live insert into the Recent inserts table."""
@@ -1038,6 +1088,14 @@ class ArchiverApp(ctk.CTk):
             report_delay = 0.75
         enrich = bool(self.nsopw_enrich.get())
         save_html = bool(self.nsopw_save_html.get())
+        all_surnames = bool(self.nsopw_all_surnames.get())
+        try:
+            surnames_limit = int(self.nsopw_surnames_limit.get())
+        except (TypeError, ValueError):
+            surnames_limit = 15
+        resume = bool(self.nsopw_resume.get())
+        skip_existing = bool(self.nsopw_skip_existing.get())
+        new_files_only = bool(self.nsopw_new_files_only.get())
 
         self._nsopw_cancel = False
         self._nsopw_insert_count = 0
@@ -1068,13 +1126,16 @@ class ArchiverApp(ctk.CTk):
             try:
                 stats = builder.build(
                     ethnicity=self.nsopw_ethnicity.get(),
-                    surnames_limit=int(self.nsopw_surnames),
+                    surnames_limit=surnames_limit,
+                    all_surnames=all_surnames,
                     first_names=None,
                     first_mode=self.nsopw_first_mode,
                     jurisdictions=None,
                     max_searches=int(self.nsopw_max_searches.get()),
                     max_report_fetches=int(self.nsopw_max_reports.get()),
-                    skip_existing_urls=bool(self.nsopw_skip_existing),
+                    skip_existing_urls=skip_existing,
+                    skip_completed_searches=resume,
+                    new_files_only=new_files_only,
                     enrich_reports=enrich,
                     save_html=save_html,
                     log=log,
@@ -1091,7 +1152,8 @@ class ArchiverApp(ctk.CTk):
                         text=(
                             f"Done · {stats.inserted} inserted · "
                             f"{stats.reports_with_race} with race · "
-                            f"{stats.html_saved} HTML · {stats.searches} searches"
+                            f"{stats.html_saved} HTML · {stats.searches} searches · "
+                            f"{stats.searches_skipped} resumed"
                         )
                     )
                     self.db_path = db_path
@@ -1099,8 +1161,11 @@ class ArchiverApp(ctk.CTk):
                         "NSOPW complete",
                         (
                             f"Inserted {stats.inserted}\n"
+                            f"New searches: {stats.searches}\n"
+                            f"Skipped completed searches: {stats.searches_skipped}\n"
                             f"Reports with race: {stats.reports_with_race}\n"
                             f"HTML saved: {stats.html_saved}\n"
+                            f"HTML skipped (cached): {stats.reports_skipped_existing_file}\n"
                             f"{db_path}"
                         ),
                     )

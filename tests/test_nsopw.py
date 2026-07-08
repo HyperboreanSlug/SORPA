@@ -177,6 +177,27 @@ class BuilderSurnameTests(unittest.TestCase):
         finally:
             b.close()
 
+    def test_all_surnames_exceeds_cap(self):
+        b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=2.0, report_delay=0.25)
+        try:
+            capped = b.surnames_for_ethnicity("hispanic", limit_per_group=3, all_surnames=False)
+            all_s = b.surnames_for_ethnicity("hispanic", limit_per_group=3, all_surnames=True)
+            self.assertEqual(len(capped), 3)
+            self.assertGreater(len(all_s), len(capped))
+        finally:
+            b.close()
+
+    def test_query_log_resume(self):
+        b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=2.0, report_delay=0.25)
+        try:
+            self.assertFalse(b._query_done("A", "Garcia", "hispanic"))
+            b._mark_query_done("A", "Garcia", "hispanic", hit_count=5)
+            self.assertTrue(b._query_done("A", "Garcia", "hispanic"))
+            self.assertTrue(b._query_done("a", "garcia", "HISPANIC"))  # normalized
+            self.assertFalse(b._query_done("B", "Garcia", "hispanic"))
+        finally:
+            b.close()
+
     def test_report_html_column_exists(self):
         from scraper.database import Database
         db = Database(":memory:")

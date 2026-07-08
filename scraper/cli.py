@@ -392,12 +392,15 @@ def cmd_nsopw(args: argparse.Namespace) -> None:
         stats = builder.build(
             ethnicity=args.ethnicity,
             surnames_limit=args.surnames,
+            all_surnames=bool(getattr(args, "all_surnames", False)),
             first_names=first_names,
             first_mode=first_mode,
             jurisdictions=jurisdictions,
             max_searches=args.max_searches,
             max_report_fetches=args.max_reports,
             skip_existing_urls=not args.force_reinsert,
+            skip_completed_searches=not bool(getattr(args, "no_resume", False)),
+            new_files_only=not bool(getattr(args, "redownload_html", False)),
             enrich_reports=not args.skip_reports,
             save_html=not getattr(args, "no_save_html", False),
         )
@@ -549,7 +552,19 @@ Examples:
     )
     p_nsopw.add_argument(
         "--surnames", type=int, default=10,
-        help="Max surnames per ethnic group (default: 10)",
+        help="Max surnames per ethnic group (default: 10; ignored with --all-surnames)",
+    )
+    p_nsopw.add_argument(
+        "--all-surnames", action="store_true",
+        help="Search every surname in the selected ethnic list(s)",
+    )
+    p_nsopw.add_argument(
+        "--no-resume", action="store_true",
+        help="Do not skip previously completed (first, surname) searches",
+    )
+    p_nsopw.add_argument(
+        "--redownload-html", action="store_true",
+        help="Re-fetch report pages even when local HTML already exists",
     )
     p_nsopw.add_argument(
         "--first-mode",
