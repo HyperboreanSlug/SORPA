@@ -114,6 +114,46 @@ python scripts/verify_scrapers.py
 
 Most SOR websites are JavaScript search apps (disclaimer → CAPTCHA → query). Landing-page HTML does **not** contain the offender database.
 
+## NSOPW ethnic name search (GUI preferred)
+
+**Prefer the GUI:** run `python gui.py` → **NSOPW** tab. All settings (ethnicity,
+surname count, first-name mode, jurisdictions, max searches/reports, delays,
+HTML archive path, database path) are available there.
+
+### Partial first-name matching
+
+NSOPW accepts **partial first names**. Example: first=`M`, last=`Singh` returns
+offenders whose given names expand around that prefix (e.g. Mandhir, Manjit,
+Mitchell). Default mode uses **A–Z initials** so each surname needs at most 26
+queries instead of dozens of full first names.
+
+### CLI (optional)
+
+```bash
+# Default: A–Z initials + Hispanic surnames
+python -m scraper nsopw --ethnicity hispanic --surnames 8 --max-searches 40
+
+# Full first-name list mode
+python -m scraper nsopw --first-mode full --ethnicity asian --max-searches 30
+
+# Custom prefixes only
+python -m scraper nsopw --first-names "M,J,R,S" --ethnicity hispanic
+```
+
+### What is stored
+
+| Field | Content |
+|--------|---------|
+| `source_url` | Click-through jurisdiction report link from NSOPW |
+| `report_html_path` | Local HTML snapshot of that report (for offline validation) |
+| demographics | Best-effort race/ethnicity/height/etc. from the report page |
+| `likely_ethnicity` | From the ethnic surname list used in the search |
+
+Rate limits: search/report delays default to **2.0s** (floor **1.5s**). Double-click
+a result row in the GUI to open the saved HTML or live report URL.
+
+Respect [NSOPW Conditions of Use](https://www.nsopw.gov/).
+
 ## Tests
 
 ```bash

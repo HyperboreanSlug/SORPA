@@ -204,7 +204,13 @@ class SexOffenderGUI:
         self.tabs.add(self.tab_misclass, text="⚠️ Misclassification")
         self._build_misclass_tab()
 
-        # --- TAB 4: Data Viewer ---
+        # --- TAB 4: NSOPW ethnic search ---
+        self.tab_nsopw = ModernFrame(self.tabs)
+        self.tabs.add(self.tab_nsopw, text="🌐 NSOPW")
+        self._build_nsopw_tab()
+        self._nsopw_cancel = False
+
+        # --- TAB 5: Data Viewer ---
         self.tab_viewer = ModernFrame(self.tabs)
         self.tabs.add(self.tab_viewer, text="📊 Data Viewer")
         self._build_data_viewer_tab()
@@ -649,6 +655,394 @@ class SexOffenderGUI:
         messagebox.showinfo("Exported", f"Exported {count} records to {filepath}")
 
     # -----------------------------------------------------------------------
+    # NSOPW ethnic search tab
+    # -----------------------------------------------------------------------
+    def _build_nsopw_tab(self):
+        frame = self.tab_nsopw
+
+        # Scrollable container for many settings
+        canvas = tk.Canvas(frame, background=COLORS["bg"], highlightthickness=0)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        inner = ModernFrame(canvas)
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        ModernLabel(
+            inner,
+            text="NSOPW Ethnic Name Search → Local Database",
+            style="Header.TLabel",
+        ).pack(anchor=tk.W, padx=10, pady=(8, 2))
+        ModernLabel(
+            inner,
+            text="Uses partial first-name matching (e.g. 'M' + surname) to cut query count. "
+                 "Rate limits protect nsopw.gov. Report HTML is archived for validation.",
+        ).pack(anchor=tk.W, padx=10, pady=(0, 8))
+
+        # --- Search settings ---
+        search_box = ModernFrameWithBorder(inner, text="Search settings")
+        search_box.pack(fill=tk.X, padx=10, pady=4)
+
+        row1 = ModernFrame(search_box)
+        row1.pack(fill=tk.X, pady=2)
+        ModernLabel(row1, text="Ethnicity list:").pack(side=tk.LEFT)
+        self.nsopw_ethnicity = tk.StringVar(value="hispanic")
+        ttk.Combobox(
+            row1, textvariable=self.nsopw_ethnicity, width=18, state="readonly",
+            values=[
+                "hispanic", "asian", "african_american", "arabic",
+                "jewish", "portuguese", "native_american", "european", "all",
+            ],
+        ).pack(side=tk.LEFT, padx=6)
+
+        ModernLabel(row1, text="Surnames / group:").pack(side=tk.LEFT, padx=(12, 0))
+        self.nsopw_surnames = tk.IntVar(value=10)
+        ttk.Spinbox(row1, from_=1, to=100, textvariable=self.nsopw_surnames, width=6).pack(
+            side=tk.LEFT, padx=4
+        )
+
+        row2 = ModernFrame(search_box)
+        row2.pack(fill=tk.X, pady=2)
+        ModernLabel(row2, text="First-name mode:").pack(side=tk.LEFT)
+        self.nsopw_first_mode = tk.StringVar(value="initials")
+        ttk.Combobox(
+            row2, textvariable=self.nsopw_first_mode, width=12, state="readonly",
+            values=["initials", "full", "custom"],
+        ).pack(side=tk.LEFT, padx=6)
+        ModernLabel(
+            row2,
+            text="initials = A–Z partial match (fewest queries)",
+        ).pack(side=tk.LEFT, padx=4)
+
+        row3 = ModernFrame(search_box)
+        row3.pack(fill=tk.X, pady=2)
+        ModernLabel(row3, text="Custom first names/prefixes:").pack(side=tk.LEFT)
+        self.nsopw_custom_firsts = tk.StringVar(value="")
+        ModernEntry(row3, textvariable=self.nsopw_custom_firsts, width=50).pack(
+            side=tk.LEFT, padx=6, fill=tk.X, expand=True
+        )
+
+        row4 = ModernFrame(search_box)
+        row4.pack(fill=tk.X, pady=2)
+        ModernLabel(row4, text="Jurisdictions (blank = all):").pack(side=tk.LEFT)
+        self.nsopw_jurisdictions = tk.StringVar(value="")
+        ModernEntry(row4, textvariable=self.nsopw_jurisdictions, width=40).pack(
+            side=tk.LEFT, padx=6, fill=tk.X, expand=True
+        )
+        ModernLabel(row4, text="e.g. CA,TX,FL,NY").pack(side=tk.LEFT)
+
+        # --- Caps ---
+        caps_box = ModernFrameWithBorder(inner, text="Run limits")
+        caps_box.pack(fill=tk.X, padx=10, pady=4)
+
+        crow = ModernFrame(caps_box)
+        crow.pack(fill=tk.X, pady=2)
+        ModernLabel(crow, text="Max searches:").pack(side=tk.LEFT)
+        self.nsopw_max_searches = tk.IntVar(value=40)
+        ttk.Spinbox(crow, from_=1, to=5000, textvariable=self.nsopw_max_searches, width=8).pack(
+            side=tk.LEFT, padx=4
+        )
+        ModernLabel(crow, text="Max report fetches:").pack(side=tk.LEFT, padx=(12, 0))
+        self.nsopw_max_reports = tk.IntVar(value=80)
+        ttk.Spinbox(crow, from_=0, to=10000, textvariable=self.nsopw_max_reports, width=8).pack(
+            side=tk.LEFT, padx=4
+        )
+
+        # --- Rate limits ---
+        rate_box = ModernFrameWithBorder(inner, text="Rate limits (protect NSOPW / state sites)")
+        rate_box.pack(fill=tk.X, padx=10, pady=4)
+
+        rrow = ModernFrame(rate_box)
+        rrow.pack(fill=tk.X, pady=2)
+        ModernLabel(rrow, text="Search delay (sec):").pack(side=tk.LEFT)
+        self.nsopw_search_delay = tk.DoubleVar(value=2.0)
+        ttk.Spinbox(
+            rrow, from_=1.5, to=30.0, increment=0.5,
+            textvariable=self.nsopw_search_delay, width=8,
+        ).pack(side=tk.LEFT, padx=4)
+        ModernLabel(rrow, text="Report delay (sec):").pack(side=tk.LEFT, padx=(12, 0))
+        self.nsopw_report_delay = tk.DoubleVar(value=2.0)
+        ttk.Spinbox(
+            rrow, from_=1.5, to=30.0, increment=0.5,
+            textvariable=self.nsopw_report_delay, width=8,
+        ).pack(side=tk.LEFT, padx=4)
+        ModernLabel(rrow, text="(minimum 1.5s enforced)").pack(side=tk.LEFT, padx=6)
+
+        # --- Storage ---
+        store_box = ModernFrameWithBorder(inner, text="Storage & enrichment")
+        store_box.pack(fill=tk.X, padx=10, pady=4)
+
+        srow = ModernFrame(store_box)
+        srow.pack(fill=tk.X, pady=2)
+        ModernLabel(srow, text="Database:").pack(side=tk.LEFT)
+        self.nsopw_db_path = tk.StringVar(value=self.db_path)
+        ModernEntry(srow, textvariable=self.nsopw_db_path, width=40).pack(
+            side=tk.LEFT, padx=4, fill=tk.X, expand=True
+        )
+        ttk.Button(srow, text="Browse…", command=self._nsopw_browse_db).pack(side=tk.LEFT, padx=2)
+
+        srow2 = ModernFrame(store_box)
+        srow2.pack(fill=tk.X, pady=2)
+        ModernLabel(srow2, text="HTML archive folder:").pack(side=tk.LEFT)
+        self.nsopw_html_dir = tk.StringVar(value="data/report_pages")
+        ModernEntry(srow2, textvariable=self.nsopw_html_dir, width=40).pack(
+            side=tk.LEFT, padx=4, fill=tk.X, expand=True
+        )
+        ttk.Button(srow2, text="Browse…", command=self._nsopw_browse_html).pack(side=tk.LEFT, padx=2)
+        ttk.Button(srow2, text="Open folder", command=self._nsopw_open_html_folder).pack(
+            side=tk.LEFT, padx=2
+        )
+
+        srow3 = ModernFrame(store_box)
+        srow3.pack(fill=tk.X, pady=4)
+        self.nsopw_save_html = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            srow3, text="Save report HTML and link to each DB entry",
+            variable=self.nsopw_save_html,
+        ).pack(side=tk.LEFT, padx=2)
+        self.nsopw_enrich = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            srow3, text="Fetch report pages for demographics",
+            variable=self.nsopw_enrich,
+        ).pack(side=tk.LEFT, padx=8)
+        self.nsopw_skip_existing = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            srow3, text="Skip existing report URLs",
+            variable=self.nsopw_skip_existing,
+        ).pack(side=tk.LEFT, padx=8)
+
+        # --- Actions ---
+        act = ModernFrame(inner)
+        act.pack(fill=tk.X, padx=10, pady=8)
+        self.nsopw_start_btn = ModernButton(
+            act, text="▶ Start NSOPW Search", style="Accent.TButton",
+            command=self._start_nsopw,
+        )
+        self.nsopw_start_btn.pack(side=tk.LEFT, ipady=4, padx=(0, 8))
+        self.nsopw_cancel_btn = ttk.Button(
+            act, text="Cancel", command=self._cancel_nsopw, state=tk.DISABLED
+        )
+        self.nsopw_cancel_btn.pack(side=tk.LEFT, padx=4)
+        ttk.Button(act, text="Open Database Folder", command=self._nsopw_open_db_folder).pack(
+            side=tk.LEFT, padx=4
+        )
+
+        self.nsopw_progress = ttk.Progressbar(inner, mode="indeterminate")
+        self.nsopw_progress.pack(fill=tk.X, padx=10, pady=(0, 4))
+
+        self.nsopw_status = ModernLabel(
+            inner,
+            text="Ready. Prefer 'initials' mode + polite delays.",
+            style="Status.TLabel",
+        )
+        self.nsopw_status.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # Recent results preview
+        prev = ModernFrameWithBorder(inner, text="Recent inserts (this session)")
+        prev.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        cols = ("name", "state", "url", "html")
+        self.nsopw_tree = ttk.Treeview(prev, columns=cols, show="headings", height=8)
+        for c, w in zip(cols, (160, 50, 320, 200)):
+            self.nsopw_tree.heading(c, text=c.upper())
+            self.nsopw_tree.column(c, width=w)
+        self.nsopw_tree.pack(fill=tk.BOTH, expand=True)
+        self.nsopw_tree.bind("<Double-1>", self._nsopw_open_selected)
+
+    def _nsopw_browse_db(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".db",
+            filetypes=[("SQLite", "*.db"), ("All", "*.*")],
+            initialfile=Path(self.nsopw_db_path.get()).name,
+        )
+        if path:
+            self.nsopw_db_path.set(path)
+            self.db_path = path
+
+    def _nsopw_browse_html(self):
+        path = filedialog.askdirectory(initialdir=self.nsopw_html_dir.get() or "data")
+        if path:
+            self.nsopw_html_dir.set(path)
+
+    def _nsopw_open_html_folder(self):
+        path = Path(self.nsopw_html_dir.get() or "data/report_pages")
+        path.mkdir(parents=True, exist_ok=True)
+        self._open_path(path)
+
+    def _nsopw_open_db_folder(self):
+        path = Path(self.nsopw_db_path.get() or self.db_path).expanduser().resolve().parent
+        path.mkdir(parents=True, exist_ok=True)
+        self._open_path(path)
+
+    def _open_path(self, path: Path):
+        try:
+            import os
+            if os.name == "nt":
+                os.startfile(str(path))
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", str(path)])
+        except Exception as e:
+            messagebox.showerror("Cannot open", str(e))
+
+    def _cancel_nsopw(self):
+        self._nsopw_cancel = True
+        self.log_queue.put("NSOPW cancel requested…")
+        self.nsopw_status.config(text="Cancelling…")
+
+    def _start_nsopw(self):
+        if self.is_running:
+            return
+
+        ethnicity = self.nsopw_ethnicity.get()
+        first_mode = self.nsopw_first_mode.get()
+        custom = self.nsopw_custom_firsts.get().strip()
+        first_names = None
+        if first_mode == "custom" or custom:
+            first_names = [x.strip() for x in custom.split(",") if x.strip()]
+            if not first_names and first_mode == "custom":
+                messagebox.showwarning(
+                    "Custom first names",
+                    "Enter comma-separated first names or prefixes, or switch mode to 'initials'.",
+                )
+                return
+            if first_names:
+                first_mode = "custom"
+
+        jurs_raw = self.nsopw_jurisdictions.get().strip()
+        jurisdictions = (
+            [x.strip().upper() for x in jurs_raw.split(",") if x.strip()]
+            if jurs_raw else None
+        )
+
+        db_path = self.nsopw_db_path.get().strip() or self.db_path
+        html_dir = self.nsopw_html_dir.get().strip() or "data/report_pages"
+        search_delay = max(1.5, float(self.nsopw_search_delay.get()))
+        report_delay = max(1.5, float(self.nsopw_report_delay.get()))
+
+        self._nsopw_cancel = False
+        self._set_running(True)
+        self.nsopw_start_btn.config(state=tk.DISABLED)
+        self.nsopw_cancel_btn.config(state=tk.NORMAL)
+        self.nsopw_progress.start(12)
+        self.nsopw_status.config(text="Running NSOPW search…")
+
+        def log(msg):
+            self.log_queue.put(msg)
+
+        def worker():
+            from scraper.nsopw_builder import NSOPWEthnicDatabaseBuilder
+
+            builder = NSOPWEthnicDatabaseBuilder(
+                db_path=db_path,
+                delay=search_delay,
+                report_delay=report_delay,
+                html_dir=html_dir,
+                cancel_check=lambda: self._nsopw_cancel,
+            )
+            try:
+                stats = builder.build(
+                    ethnicity=ethnicity,
+                    surnames_limit=int(self.nsopw_surnames.get()),
+                    first_names=first_names,
+                    first_mode=first_mode,
+                    jurisdictions=jurisdictions,
+                    max_searches=int(self.nsopw_max_searches.get()),
+                    max_report_fetches=int(self.nsopw_max_reports.get()),
+                    skip_existing_urls=bool(self.nsopw_skip_existing.get()),
+                    enrich_reports=bool(self.nsopw_enrich.get()),
+                    save_html=bool(self.nsopw_save_html.get()),
+                    log=log,
+                )
+                # Preview last few rows
+                try:
+                    rows = builder.db._conn.execute(
+                        "SELECT first_name, last_name, state, source_url, report_html_path "
+                        "FROM offenders ORDER BY id DESC LIMIT 50"
+                    ).fetchall()
+                    preview = [dict(r) for r in rows]
+                except Exception:
+                    preview = []
+
+                def done():
+                    self._set_running(False)
+                    self.nsopw_start_btn.config(state=tk.NORMAL)
+                    self.nsopw_cancel_btn.config(state=tk.DISABLED)
+                    self.nsopw_progress.stop()
+                    self.nsopw_status.config(
+                        text=(
+                            f"Done: {stats.inserted} inserted, "
+                            f"{stats.reports_fetched} reports, "
+                            f"{stats.html_saved} HTML saved, "
+                            f"{stats.searches} searches"
+                        )
+                    )
+                    self.db_path = db_path
+                    for item in self.nsopw_tree.get_children():
+                        self.nsopw_tree.delete(item)
+                    for r in preview:
+                        name = f"{r.get('first_name') or ''} {r.get('last_name') or ''}".strip()
+                        self.nsopw_tree.insert(
+                            "",
+                            "end",
+                            values=(
+                                name,
+                                r.get("state") or "",
+                                (r.get("source_url") or "")[:80],
+                                (r.get("report_html_path") or "")[:60],
+                            ),
+                        )
+                    messagebox.showinfo(
+                        "NSOPW complete",
+                        f"Inserted {stats.inserted} records.\n"
+                        f"HTML pages saved: {stats.html_saved}\n"
+                        f"Database: {db_path}",
+                    )
+
+                self.root.after(0, done)
+            except Exception as e:
+                log(f"NSOPW ERROR: {e}")
+
+                def fail():
+                    self._set_running(False)
+                    self.nsopw_start_btn.config(state=tk.NORMAL)
+                    self.nsopw_cancel_btn.config(state=tk.DISABLED)
+                    self.nsopw_progress.stop()
+                    self.nsopw_status.config(text=f"Error: {e}")
+                    messagebox.showerror("NSOPW error", str(e))
+
+                self.root.after(0, fail)
+            finally:
+                builder.close()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _nsopw_open_selected(self, event=None):
+        sel = self.nsopw_tree.selection()
+        if not sel:
+            return
+        vals = self.nsopw_tree.item(sel[0], "values")
+        if len(vals) < 4:
+            return
+        url, html_path = vals[2], vals[3]
+        # Prefer local HTML for validation
+        if html_path:
+            p = Path(html_path)
+            if p.exists():
+                self._open_path(p)
+                return
+        if url:
+            try:
+                import webbrowser
+                webbrowser.open(url)
+            except Exception as e:
+                messagebox.showerror("Open link", str(e))
+
+    # -----------------------------------------------------------------------
     # Data Viewer tab
     # -----------------------------------------------------------------------
     def _build_data_viewer_tab(self):
@@ -750,6 +1144,10 @@ class SexOffenderGUI:
     def _set_running(self, running: bool):
         self.is_running = running
         self.scrape_btn.config(state=tk.DISABLED if running else tk.NORMAL)
+        if hasattr(self, "nsopw_start_btn"):
+            # Keep NSOPW start disabled while any job runs
+            if running and not getattr(self, "_nsopw_cancel", False):
+                pass  # NSOPW worker manages its own buttons when it is the runner
 
     def _load_sources(self):
         from scraper.config import REGISTRIES

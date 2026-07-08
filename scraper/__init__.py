@@ -16,8 +16,10 @@ from .scrapers.api_scraper import APIScraper
 from .scrapers.html_scraper import HTMLScraper
 from .scrapers.hybrid_scraper import HybridScraper
 from .scrapers.arcgis_scraper import ArcGISScraper
+from .nsopw_client import NSOPWClient
+from .nsopw_builder import NSOPWEthnicDatabaseBuilder
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "Database",
@@ -38,5 +40,7 @@ __all__ = [
     "HTMLScraper",
     "HybridScraper",
     "ArcGISScraper",
+    "NSOPWClient",
+    "NSOPWEthnicDatabaseBuilder",
     "__version__",
 ]

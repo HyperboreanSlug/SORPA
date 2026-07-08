@@ -357,6 +357,58 @@ def cmd_status(args: argparse.Namespace) -> None:
     print("Most states are interactive search only and cannot be bulk-scraped.\n")
 
 
+def cmd_nsopw(args: argparse.Namespace) -> None:
+    """Search NSOPW for common ethnic surnames and build a local database."""
+    from .nsopw_builder import NSOPWEthnicDatabaseBuilder
+
+    first_names = None
+    first_mode = getattr(args, "first_mode", "initials") or "initials"
+    if args.first_names:
+        first_names = [x.strip() for x in args.first_names.split(",") if x.strip()]
+        first_mode = "custom"
+    elif getattr(args, "initials_only", False):
+        first_names = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        first_mode = "initials"
+
+    jurisdictions = None
+    if args.jurisdictions:
+        jurisdictions = [x.strip().upper() for x in args.jurisdictions.split(",") if x.strip()]
+
+    print("\n" + "=" * 60)
+    print("  NSOPW Ethnic Name Search → Local Database")
+    print("=" * 60)
+    print("  Source: https://www.nsopw.gov/")
+    print("  Partial first names (e.g. M + surname) reduce query count.")
+    print("  Rate limits enforced; Conditions of Use apply.")
+    print("=" * 60 + "\n")
+
+    builder = NSOPWEthnicDatabaseBuilder(
+        db_path=args.database or "data/offenders.db",
+        delay=args.delay,
+        report_delay=args.report_delay,
+        html_dir=getattr(args, "html_dir", None) or "data/report_pages",
+    )
+    try:
+        stats = builder.build(
+            ethnicity=args.ethnicity,
+            surnames_limit=args.surnames,
+            first_names=first_names,
+            first_mode=first_mode,
+            jurisdictions=jurisdictions,
+            max_searches=args.max_searches,
+            max_report_fetches=args.max_reports,
+            skip_existing_urls=not args.force_reinsert,
+            enrich_reports=not args.skip_reports,
+            save_html=not getattr(args, "no_save_html", False),
+        )
+        print(f"\nDatabase: {args.database or 'data/offenders.db'}")
+        print(f"Inserted {stats.inserted} new records "
+              f"({stats.reports_with_demographics} with race/ethnicity from reports, "
+              f"{stats.html_saved} HTML pages saved).")
+    finally:
+        builder.close()
+
+
 def cmd_import(args: argparse.Namespace) -> None:
     """Import CSV files into the database."""
     from .database import Database
@@ -419,6 +471,9 @@ Examples:
 
   # Export to CSV
   python -m scraper.cli export --output results.csv
+
+  # NSOPW ethnic surname search → database (polite rate limits)
+  python -m scraper.cli nsopw --ethnicity hispanic --surnames 5 --max-searches 20
         """
     )
 
@@ -478,6 +533,76 @@ Examples:
     p_status = subparsers.add_parser("status", help="Show per-state scrape support matrix")
     p_status.add_argument("-v", "--verbose", action="store_true", help="Show notes")
 
+    # NSOPW ethnic search command
+    p_nsopw = subparsers.add_parser(
+        "nsopw",
+        help="Search NSOPW for common ethnic surnames; save report links + demographics",
+    )
+    p_nsopw.add_argument(
+        "--ethnicity",
+        choices=[
+            "all", "hispanic", "asian", "african_american",
+            "arabic", "jewish", "portuguese", "native_american", "european",
+        ],
+        default="hispanic",
+        help="Ethnic surname list to search (default: hispanic)",
+    )
+    p_nsopw.add_argument(
+        "--surnames", type=int, default=10,
+        help="Max surnames per ethnic group (default: 10)",
+    )
+    p_nsopw.add_argument(
+        "--first-mode",
+        choices=["initials", "full", "custom"],
+        default="initials",
+        help="First-name strategy: initials A–Z (partial match, default), full names, or custom list",
+    )
+    p_nsopw.add_argument(
+        "--first-names", type=str, default=None,
+        help="Comma-separated first names/prefixes (implies custom mode)",
+    )
+    p_nsopw.add_argument(
+        "--initials-only", action="store_true",
+        help="Deprecated alias for --first-mode initials",
+    )
+    p_nsopw.add_argument(
+        "--html-dir", default="data/report_pages",
+        help="Directory to store archived report HTML pages",
+    )
+    p_nsopw.add_argument(
+        "--no-save-html", action="store_true",
+        help="Do not save report HTML snapshots",
+    )
+    p_nsopw.add_argument(
+        "--jurisdictions", type=str, default=None,
+        help="Comma-separated jurisdiction codes (default: all states/territories)",
+    )
+    p_nsopw.add_argument(
+        "--max-searches", type=int, default=40,
+        help="Maximum NSOPW name queries to run (default: 40)",
+    )
+    p_nsopw.add_argument(
+        "--max-reports", type=int, default=80,
+        help="Maximum jurisdiction report pages to fetch (default: 80)",
+    )
+    p_nsopw.add_argument(
+        "--delay", type=float, default=2.0,
+        help="Seconds between NSOPW API calls (default: 2.0)",
+    )
+    p_nsopw.add_argument(
+        "--report-delay", type=float, default=2.0,
+        help="Seconds between report page fetches (default: 2.0)",
+    )
+    p_nsopw.add_argument(
+        "--skip-reports", action="store_true",
+        help="Only save NSOPW hits + links; do not fetch report pages",
+    )
+    p_nsopw.add_argument(
+        "--force-reinsert", action="store_true",
+        help="Insert even if source_url already exists",
+    )
+    _add_database_arg(p_nsopw)
+
     args = parser.parse_args()
 
     commands = {
@@ -487,6 +612,7 @@ Examples:
         "export": cmd_export,
         "import": cmd_import,
         "status": cmd_status,
+        "nsopw": cmd_nsopw,
     }
     commands[args.command](args)
 

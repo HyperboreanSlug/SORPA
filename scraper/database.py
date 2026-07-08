@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 
 # Schema version - increment when schema changes
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Default database path (relative to project root)
 DEFAULT_DB_PATH = "data/offenders.db"
@@ -25,6 +25,7 @@ _OFFENDER_INSERT_COLUMNS = (
     "offense_type", "offense_description", "risk_level", "conviction_date",
     "registration_date", "last_verified", "source_state", "source_url", "external_id", "raw_data_json",
     "likely_ethnicity", "name_confidence", "flags",
+    "report_html_path",
 )
 _OFFENDER_INSERT_SQL = (
     "INSERT INTO offenders ("
@@ -72,20 +73,7 @@ class Database:
             )
         """)
 
-        # Check if we need to upgrade
-        current_version = 0
-        for row in cursor.execute("SELECT MAX(version) FROM schema_version"):
-            current_version = row[0] or 0
-
-        if current_version < SCHEMA_VERSION:
-            self._upgrade_schema(cursor, current_version)
-            cursor.execute(
-                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                (SCHEMA_VERSION, _utc_now_iso())
-            )
-            self._conn.commit()
-
-        # Main offenders table
+        # Create base table first so upgrades can ALTER it safely
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS offenders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,8 +121,11 @@ class Database:
 
                 -- For misclassification detection
                 likely_ethnicity TEXT,
-                name_confidence REAL,  -- 0.0 to 1.0 how confident we are in the ethnicity match
-                flags TEXT  -- JSON array of flag strings
+                name_confidence REAL,
+                flags TEXT,
+
+                -- Local archive of the jurisdiction report HTML (for validation)
+                report_html_path TEXT
             )
         """)
 
@@ -146,6 +137,10 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_offenders_county ON offenders(county)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_offenders_risk_level ON offenders(risk_level)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_offenders_source_state ON offenders(source_state)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_offenders_source_url ON offenders(source_url)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_offenders_report_html ON offenders(report_html_path)"
+        )
 
         # Full-text search virtual table (optional, created on demand)
         cursor.execute("""
@@ -156,13 +151,29 @@ class Database:
             )
         """)
 
+        # Apply migrations after table exists
+        current_version = 0
+        for row in cursor.execute("SELECT MAX(version) FROM schema_version"):
+            current_version = row[0] or 0
+
+        if current_version < SCHEMA_VERSION:
+            self._upgrade_schema(cursor, current_version)
+            cursor.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (SCHEMA_VERSION, _utc_now_iso())
+            )
+
         self._conn.commit()
 
     def _upgrade_schema(self, cursor: sqlite3.Cursor, from_version: int):
         """Upgrade schema to current version."""
         if from_version < 1:
-            # Add new columns as needed
             pass
+        if from_version < 2:
+            # Add local HTML archive path for report pages
+            cols = {row[1] for row in cursor.execute("PRAGMA table_info(offenders)")}
+            if "report_html_path" not in cols:
+                cursor.execute("ALTER TABLE offenders ADD COLUMN report_html_path TEXT")
 
     def close(self):
         """Close the database connection."""
