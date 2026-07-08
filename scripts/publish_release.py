@@ -70,7 +70,7 @@ def api_request(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="v1.3.0")
+    ap.add_argument("--tag", default="v1.3.1")
     ap.add_argument(
         "--zip",
         type=Path,
@@ -121,6 +121,7 @@ Standalone **Windows** GUI package (no Python install required).
 
 ### Highlights
 - Live NSOPW Recent inserts with **race** from detail sheets
+- **Search all surnames**, **resume/skip completed searches**, **new HTML only**
 - Automatic **disclaimer click-through** (iCrimeWatch / sheriffalerts)
 - Granular **search vs report/HTML** rate limits
 - Cloudflare-hardened NSOPW client (`curl_cffi`)
