@@ -15,28 +15,54 @@
     "chinese": [
       "Chen", "Wang", "Li", "Zhang", "Liu", "Yang", "Huang", "Wu", "Zhao", "Zhou",
       "Xu", "Sun", "Ma", "Zhu", "Hu", "Guo", "He", "Lin", "Gao", "Luo",
-      "Zheng", "Xie", "Tang", "Han", "Cao", "Yan", "Yuan", "Jiang", "Shi", "Pan"
+      "Zheng", "Xie", "Tang", "Han", "Cao", "Yan", "Yuan", "Jiang", "Shi", "Pan",
+      "Wong", "Tan", "Lim", "Ng", "Chan", "Cheng", "Chung", "Fung", "Ho", "Lau",
+      "Leung", "Mak", "Tsang", "Yeung", "Yip"
     ],
     "korean": [
       "Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Han",
-      "Oh", "Seo", "Shin", "Kwon", "Hwang", "Ahn", "Song", "Hong", "Ko", "Moon"
+      "Oh", "Seo", "Shin", "Kwon", "Hwang", "Ahn", "Song", "Hong", "Ko", "Moon",
+      "Bae", "Baek", "Cha", "Chae", "Ha", "Im", "Jang", "Jeon", "Nam", "Ryu", "Yoo"
     ],
     "vietnamese": [
       "Nguyen", "Tran", "Le", "Pham", "Hoang", "Huynh", "Ngo", "Vu", "Do", "Bui",
-      "Dang", "Vo", "Duong", "Mai", "Thai", "Phan", "Truong", "Ho"
-    ],
-    "indian": [
-      "Patel", "Shah", "Singh", "Kumar", "Gupta", "Agarwal", "Joshi", "Pandey",
-      "Verma", "Mehta", "Rao", "Reddy", "Nair", "Iyer", "Pillai", "Srivastava"
+      "Dang", "Vo", "Duong", "Mai", "Thai", "Phan", "Truong", "Ho", "Ly", "Quach",
+      "Trinh", "Lam", "Cao", "Dinh", "Ha"
     ],
     "japanese": [
       "Yamamoto", "Tanaka", "Ito", "Nakamura", "Kobayashi", "Sato", "Watanabe", "Yoshida",
-      "Yamada", "Suzuki", "Takahashi", "Kato", "Shimizu", "Yamazaki", "Mori", "Ikeda"
+      "Yamada", "Suzuki", "Takahashi", "Kato", "Shimizu", "Yamazaki", "Mori", "Ikeda",
+      "Inoue", "Kimura", "Hayashi", "Saito", "Matsumoto", "Yamaguchi", "Abe", "Fujita"
     ],
     "thai": [
-      "Chaiyaphum", "Srisawat", "Wong", "Tan", "Lim", "Ng"
+      "Srisawat", "Chaiyaphum", "Suksamran", "Thongchai", "Rattanakul", "Phanit",
+      "Wongsawat", "Chaiyasit", "Saengchan", "Boonsri"
+    ],
+    "filipino": [
+      "Bautista", "Dela Cruz", "Villanueva", "Aquino", "Magbanua", "Macapagal",
+      "Panganiban", "Manalo", "Salvador", "Mercado", "Alcantara", "Pascual",
+      "Galang", "Dimaculangan", "Enriquez"
     ]
   },
+
+  "indian_surnames": [
+    "Patel", "Shah", "Singh", "Kumar", "Gupta", "Agarwal", "Joshi", "Pandey",
+    "Verma", "Mehta", "Rao", "Reddy", "Nair", "Iyer", "Pillai", "Srivastava",
+    "Sharma", "Chopra", "Kapoor", "Malhotra", "Bhatia", "Khanna", "Arora", "Bansal",
+    "Saxena", "Tiwari", "Mishra", "Chaturvedi", "Desai", "Trivedi", "Pathak", "Dwivedi",
+    "Banerjee", "Mukherjee", "Chatterjee", "Bose", "Das", "Ghosh", "Sen", "Dutta",
+    "Iyer", "Iyengar", "Menon", "Nambiar", "Krishnan", "Raman", "Subramanian", "Venkatesh",
+    "Naidu", "Choudhury", "Chowdhury", "Hussain", "Khan", "Ahmed", "Sheikh", "Qureshi",
+    "Malik", "Siddiqui", "Ansari", "Mirza", "Bhat", "Kaul", "Raina", "Pandit",
+    "Gill", "Dhillon", "Sandhu", "Bajwa", "Sidhu", "Brar", "Mann", "Grewal",
+    "Kaur", "Thapa", "Gurung", "Rai", "Limbu", "Shrestha", "Maharjan", "Adhikari",
+    "Fernando", "Perera", "Silva", "Jayawardena", "Wickramasinghe", "Bandara",
+    "Wijesinghe", "Dissanayake", "Gunawardena", "Rathnayake",
+    "Rahman", "Islam", "Hasan", "Uddin", "Hossain", "Chowdhury", "Miah", "Sarker",
+    "Jain", "Parekh", "Modi", "Amin", "Bhatt", "Dave", "Gandhi", "Thakkar",
+    "Kulkarni", "Jadhav", "Patil", "Deshmukh", "More", "Gaikwad", "Shinde", "Pawar",
+    "Bhattacharya", "Chakraborty", "Roy", "Saha", "Biswas", "Mondal", "Sarkar", "Basu"
+  ],
 
   "african_american_surnames": [
     "Washington", "Jefferson", "Booker", "Freeman", "Mosley", "Baptiste",

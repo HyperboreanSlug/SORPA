@@ -77,6 +77,9 @@ class EthnicAndSearchTests(unittest.TestCase):
         eth = EthnicNameDatabase()
         self.assertEqual(eth.classify_by_name("Garcia")[0], "Hispanic")
         self.assertTrue(eth.classify_by_name("Chen")[0].startswith("Asian"))
+        self.assertEqual(eth.classify_by_name("Patel")[0], "Indian")
+        self.assertTrue(eth.is_indian_surname("Singh"))
+        self.assertFalse(eth.is_asian_surname("Patel")[0])
         self.assertEqual(eth.classify_by_name("Smith")[0], "Unknown")
 
     def test_misclassification_filters(self):

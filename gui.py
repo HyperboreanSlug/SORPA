@@ -821,10 +821,11 @@ class ArchiverApp(ctk.CTk):
         ctk.CTkComboBox(
             eth_row,
             variable=self.nsopw_ethnicity,
-            width=200,
+            width=220,
             values=[
                 "hispanic",
                 "asian",
+                "indian",
                 "african_american",
                 "arabic",
                 "jewish",
@@ -839,20 +840,26 @@ class ArchiverApp(ctk.CTk):
             text_color=C["text"],
             dropdown_fg_color=C["panel"],
         ).pack(side="left", padx=6)
+        ctk.CTkLabel(
+            eth_card,
+            text="asian = East/Southeast Asian · indian = South Asian (India, Pakistan, Bangladesh, Sri Lanka, Nepal…)",
+            font=FONT_SM, text_color=C["dim"],
+        ).pack(anchor="w", padx=14, pady=(0, 6))
 
-        self.nsopw_all_surnames = ctk.BooleanVar(value=True)
+        # Cap toggle: off = search entire selected surname list
+        self.nsopw_limit_surnames = ctk.BooleanVar(value=False)
         self.nsopw_surnames_limit = ctk.IntVar(value=15)
         sn_row = ctk.CTkFrame(eth_card, fg_color="transparent")
         sn_row.pack(fill="x", padx=14, pady=(0, 10))
         ctk.CTkCheckBox(
-            sn_row, text="Search all surnames in list",
-            variable=self.nsopw_all_surnames, font=FONT_SM, text_color=C["text"],
+            sn_row, text="Limit max surnames / group",
+            variable=self.nsopw_limit_surnames, font=FONT_SM, text_color=C["text"],
             fg_color=C["accent"], hover_color=C["accent_hover"],
             checkmark_color=C["bg"], border_color=C["border"],
             command=self._nsopw_toggle_surname_cap,
         ).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(
-            sn_row, text="Max / group", font=FONT_SM, text_color=C["muted"]
+            sn_row, text="Max", font=FONT_SM, text_color=C["muted"]
         ).pack(side="left", padx=(0, 4))
         self.nsopw_surnames_entry = ctk.CTkEntry(
             sn_row, textvariable=self.nsopw_surnames_limit, width=64,
@@ -1016,11 +1023,11 @@ class ArchiverApp(ctk.CTk):
         self._nsopw_insert_count = 0
 
     def _nsopw_toggle_surname_cap(self):
-        """Enable max-surnames entry only when not searching all surnames."""
-        if self.nsopw_all_surnames.get():
-            self.nsopw_surnames_entry.configure(state="disabled")
-        else:
+        """Enable max-surnames entry only when the limit toggle is on."""
+        if self.nsopw_limit_surnames.get():
             self.nsopw_surnames_entry.configure(state="normal")
+        else:
+            self.nsopw_surnames_entry.configure(state="disabled")
 
     def _nsopw_append_row(self, record: Dict[str, Any]) -> None:
         """UI-thread: prepend a live insert into the Recent inserts table."""
@@ -1088,11 +1095,13 @@ class ArchiverApp(ctk.CTk):
             report_delay = 0.75
         enrich = bool(self.nsopw_enrich.get())
         save_html = bool(self.nsopw_save_html.get())
-        all_surnames = bool(self.nsopw_all_surnames.get())
+        # Limit off → search entire list (all_surnames=True)
+        limit_on = bool(self.nsopw_limit_surnames.get())
+        all_surnames = not limit_on
         try:
-            surnames_limit = int(self.nsopw_surnames_limit.get())
+            surnames_limit = int(self.nsopw_surnames_limit.get()) if limit_on else 0
         except (TypeError, ValueError):
-            surnames_limit = 15
+            surnames_limit = 15 if limit_on else 0
         resume = bool(self.nsopw_resume.get())
         skip_existing = bool(self.nsopw_skip_existing.get())
         new_files_only = bool(self.nsopw_new_files_only.get())

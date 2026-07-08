@@ -187,6 +187,23 @@ class BuilderSurnameTests(unittest.TestCase):
         finally:
             b.close()
 
+    def test_indian_separate_from_asian(self):
+        b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=2.0, report_delay=0.25)
+        try:
+            asian = b.surnames_for_ethnicity("asian", all_surnames=True)
+            indian = b.surnames_for_ethnicity("indian", all_surnames=True)
+            self.assertTrue(len(asian) >= 1)
+            self.assertTrue(len(indian) >= 1)
+            asian_names = {s.lower() for s, _ in asian}
+            indian_names = {s.lower() for s, _ in indian}
+            self.assertIn("patel", indian_names)
+            self.assertNotIn("patel", asian_names)
+            self.assertIn("chen", asian_names)
+            self.assertTrue(all(label.startswith("Asian") for _, label in asian))
+            self.assertTrue(all(label == "Indian" for _, label in indian))
+        finally:
+            b.close()
+
     def test_query_log_resume(self):
         b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=2.0, report_delay=0.25)
         try:

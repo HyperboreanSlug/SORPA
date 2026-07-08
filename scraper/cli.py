@@ -544,11 +544,11 @@ Examples:
     p_nsopw.add_argument(
         "--ethnicity",
         choices=[
-            "all", "hispanic", "asian", "african_american",
+            "all", "hispanic", "asian", "indian", "african_american",
             "arabic", "jewish", "portuguese", "native_american", "european",
         ],
         default="hispanic",
-        help="Ethnic surname list to search (default: hispanic)",
+        help="Ethnic surname list (asian=East/SE Asian; indian=South Asian; default: hispanic)",
     )
     p_nsopw.add_argument(
         "--surnames", type=int, default=10,

@@ -33,7 +33,14 @@ _ETHNICITY_COMPATIBLE_RACES = {
     "hispanic": {"HISPANIC", "LATINO", "LATINA", "LATINX", "H", "WHITE HISPANIC"},
     "asian": {
         "ASIAN", "ASIAN / PACIFIC ISLANDER", "ASIAN/PACIFIC ISLANDER",
-        "PACIFIC ISLANDER", "A", "API",
+        "PACIFIC ISLANDER", "A", "API", "CHINESE", "KOREAN", "JAPANESE",
+        "VIETNAMESE", "FILIPINO",
+    },
+    # South Asian / Indian subcontinent — often coded Asian or Other on registries
+    "indian": {
+        "ASIAN", "ASIAN / PACIFIC ISLANDER", "ASIAN/PACIFIC ISLANDER",
+        "ASIAN INDIAN", "EAST INDIAN", "INDIAN", "SOUTH ASIAN",
+        "A", "API", "OTHER", "UNKNOWN",
     },
     "african_american": {
         "BLACK", "AFRICAN AMERICAN", "AFRICAN-AMERICAN", "B", "BLACK OR AFRICAN AMERICAN",
@@ -55,6 +62,8 @@ _ETHNICITY_COMPATIBLE_RACES = {
 def _ethnicity_family(likely_ethnicity: str) -> str:
     """Normalize a classify_by_name label to a coarse family key."""
     eth = (likely_ethnicity or "").strip().lower()
+    if eth == "indian" or eth.startswith("indian ("):
+        return "indian"
     if eth.startswith("asian"):
         return "asian"
     if eth.startswith("european"):

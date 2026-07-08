@@ -10,7 +10,10 @@ class EthnicNameDatabase:
 
     def __init__(self):
         self.hispanic_surnames = set()
-        self.asian_surnames = {}  # nested dict by sub-ethnicity
+        # East / Southeast Asian only (Chinese, Korean, Japanese, Vietnamese, Thai, Filipino, …)
+        self.asian_surnames = {}  # nested dict by sub-group
+        # South Asian / Indian subcontinent (India, Pakistan, Bangladesh, Sri Lanka, Nepal, …)
+        self.indian_surnames = set()
         self.african_american_surnames = set()
         self.native_american_surnames = set()
         self.european_surnames = {}  # nested dict by country
@@ -36,11 +39,21 @@ class EthnicNameDatabase:
         # Hispanic surnames (also includes some common ones that overlap)
         self.hispanic_surnames = set(data.get("hispanic_surnames", []))
 
-        # Asian surnames by sub-group
+        # Asian surnames by sub-group (East/Southeast only — no South Asian)
         asian_data = data.get("asian_surnames", {})
         for group, names in asian_data.items():
+            if group.lower() in ("indian", "south_asian", "southasian"):
+                # Legacy key: fold into indian list
+                if isinstance(names, list):
+                    self.indian_surnames.update(n.strip() for n in names if n and n.strip())
+                continue
             if isinstance(names, list):
                 self.asian_surnames[group] = set(n.strip() for n in names)
+
+        # Indian / South Asian surnames (top-level preferred)
+        top_indian = data.get("indian_surnames", [])
+        if isinstance(top_indian, list):
+            self.indian_surnames.update(n.strip() for n in top_indian if n and n.strip())
 
         # African-American surnames
         self.african_american_surnames = set(data.get("african_american_surnames", []))
@@ -76,6 +89,14 @@ class EthnicNameDatabase:
             "Perez", "Sanchez", "Ramirez", "Torres", "Flores", "Rivera", "Gomez",
             "Diaz", "Cruz", "Morales", "Ortiz", "Ramos", "Gutierrez", "Alvarez"
         }
+        self.asian_surnames = {
+            "chinese": {"Chen", "Wang", "Li", "Zhang", "Liu"},
+            "korean": {"Kim", "Park", "Choi"},
+            "japanese": {"Tanaka", "Suzuki", "Yamamoto"},
+        }
+        self.indian_surnames = {
+            "Patel", "Shah", "Singh", "Kumar", "Gupta", "Sharma", "Reddy", "Nair"
+        }
 
     def _build_lookup_sets(self) -> None:
         """Cache lowercased sets for O(1) surname membership checks."""
@@ -87,6 +108,7 @@ class EthnicNameDatabase:
         self._jewish_lc = {n.lower() for n in self.jewish_surnames}
         self._portuguese_lc = {n.lower() for n in self.portuguese_surnames}
         self._arabic_lc = {n.lower() for n in self.arabic_surnames}
+        self._indian_lc = {n.lower() for n in self.indian_surnames}
         self._asian_lc = {
             group: {n.lower() for n in names}
             for group, names in self.asian_surnames.items()
@@ -115,6 +137,10 @@ class EthnicNameDatabase:
 
         if surname_lc in self._hispanic_lc:
             matches.append(("Hispanic", "hispanic_surnames"))
+
+        # South Asian / Indian before generic Asian so lists stay distinct
+        if surname_lc in self._indian_lc:
+            matches.append(("Indian", "indian_surnames"))
 
         for group, names in self._asian_lc.items():
             if surname_lc in names:
@@ -147,9 +173,10 @@ class EthnicNameDatabase:
             return ("Unknown", 0.0, [])
 
         # Prefer distinctive ethnic matches over broad/overlapping ones.
-        # African American is separate from African (regional).
         def sort_key(item: Tuple[str, str]) -> float:
             ethnicity, _source = item
+            if ethnicity == "Indian":
+                return -1.05
             if ethnicity.startswith("Asian"):
                 return -1.0
             if ethnicity == "Hispanic":
@@ -183,13 +210,18 @@ class EthnicNameDatabase:
         return surname.strip().lower() in self._hispanic_lc
 
     def is_asian_surname(self, surname: str) -> Tuple[bool, str]:
-        """Check if a surname is commonly Asian. Returns (is_asian, sub_group)."""
+        """Check if a surname is East/Southeast Asian. Returns (is_asian, sub_group)."""
         self._build_lookup_sets()
         surname_lc = surname.strip().lower()
         for group, names in self._asian_lc.items():
             if surname_lc in names:
                 return True, group
         return False, ""
+
+    def is_indian_surname(self, surname: str) -> bool:
+        """Check if a surname is commonly South Asian / Indian-subcontinent."""
+        self._build_lookup_sets()
+        return surname.strip().lower() in self._indian_lc
 
     def is_african_american_surname(self, surname: str) -> bool:
         """Check if a surname is commonly African-American."""
@@ -207,7 +239,9 @@ class EthnicNameDatabase:
         # Distinct family groups that also matched reduce confidence
         families = set()
         for ethnicity, _source in matches:
-            if ethnicity.startswith("Asian"):
+            if ethnicity == "Indian":
+                families.add("indian")
+            elif ethnicity.startswith("Asian"):
                 families.add("asian")
             elif ethnicity.startswith("European"):
                 families.add("european")
