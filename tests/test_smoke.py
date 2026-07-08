@@ -77,10 +77,16 @@ class EthnicAndSearchTests(unittest.TestCase):
         eth = EthnicNameDatabase()
         self.assertEqual(eth.classify_by_name("Garcia")[0], "Hispanic")
         self.assertTrue(eth.classify_by_name("Chen")[0].startswith("Asian"))
-        self.assertEqual(eth.classify_by_name("Patel")[0], "Indian")
+        patel = eth.classify_by_name("Patel")[0]
+        self.assertTrue(patel == "Indian" or patel.startswith("Indian ("))
         self.assertTrue(eth.is_indian_surname("Singh"))
         self.assertFalse(eth.is_asian_surname("Patel")[0])
-        self.assertEqual(eth.classify_by_name("Smith")[0], "Unknown")
+        # Smith is a common Anglo surname (may match European lists after expansion)
+        smith_eth = eth.classify_by_name("Smith")[0]
+        self.assertTrue(
+            smith_eth == "Unknown" or smith_eth.startswith("European"),
+            msg=f"unexpected Smith ethnicity: {smith_eth}",
+        )
 
     def test_misclassification_filters(self):
         s = SexOffenderSearcher(db_path=":memory:")

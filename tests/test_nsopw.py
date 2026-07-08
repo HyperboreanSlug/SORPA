@@ -200,7 +200,9 @@ class BuilderSurnameTests(unittest.TestCase):
             self.assertNotIn("patel", asian_names)
             self.assertIn("chen", asian_names)
             self.assertTrue(all(label.startswith("Asian") for _, label in asian))
-            self.assertTrue(all(label == "Indian" for _, label in indian))
+            self.assertTrue(all(label.startswith("Indian") for _, label in indian))
+            # Asian should include multiple East/SE groups after expansion
+            self.assertTrue(any("chinese" in lab.lower() for _, lab in asian))
         finally:
             b.close()
 

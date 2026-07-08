@@ -842,7 +842,10 @@ class ArchiverApp(ctk.CTk):
         ).pack(side="left", padx=6)
         ctk.CTkLabel(
             eth_card,
-            text="asian = East/Southeast Asian · indian = South Asian (India, Pakistan, Bangladesh, Sri Lanka, Nepal…)",
+            text=(
+                "asian = East/SE Asian (Chinese, Korean, Japanese, Vietnamese, Thai, Filipino…) · "
+                "indian = South Asian (India, Pakistan, Bangladesh, Sri Lanka, Nepal…)"
+            ),
             font=FONT_SM, text_color=C["dim"],
         ).pack(anchor="w", padx=14, pady=(0, 6))
 

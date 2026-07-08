@@ -14,6 +14,7 @@ class EthnicNameDatabase:
         self.asian_surnames = {}  # nested dict by sub-group
         # South Asian / Indian subcontinent (India, Pakistan, Bangladesh, Sri Lanka, Nepal, …)
         self.indian_surnames = set()
+        self.indian_surnames_by_group = {}  # optional nested: india, pakistani, …
         self.african_american_surnames = set()
         self.native_american_surnames = set()
         self.european_surnames = {}  # nested dict by country
@@ -50,9 +51,16 @@ class EthnicNameDatabase:
             if isinstance(names, list):
                 self.asian_surnames[group] = set(n.strip() for n in names)
 
-        # Indian / South Asian surnames (top-level preferred)
+        # Indian / South Asian — list or nested dict by region
         top_indian = data.get("indian_surnames", [])
-        if isinstance(top_indian, list):
+        if isinstance(top_indian, dict):
+            for group, names in top_indian.items():
+                if not isinstance(names, list):
+                    continue
+                cleaned = {n.strip() for n in names if n and str(n).strip()}
+                self.indian_surnames_by_group[group] = cleaned
+                self.indian_surnames.update(cleaned)
+        elif isinstance(top_indian, list):
             self.indian_surnames.update(n.strip() for n in top_indian if n and n.strip())
 
         # African-American surnames
@@ -109,6 +117,10 @@ class EthnicNameDatabase:
         self._portuguese_lc = {n.lower() for n in self.portuguese_surnames}
         self._arabic_lc = {n.lower() for n in self.arabic_surnames}
         self._indian_lc = {n.lower() for n in self.indian_surnames}
+        self._indian_group_lc = {
+            group: {n.lower() for n in names}
+            for group, names in (self.indian_surnames_by_group or {}).items()
+        }
         self._asian_lc = {
             group: {n.lower() for n in names}
             for group, names in self.asian_surnames.items()
@@ -139,7 +151,11 @@ class EthnicNameDatabase:
             matches.append(("Hispanic", "hispanic_surnames"))
 
         # South Asian / Indian before generic Asian so lists stay distinct
-        if surname_lc in self._indian_lc:
+        if getattr(self, "indian_surnames_by_group", None):
+            for group, names in getattr(self, "_indian_group_lc", {}).items():
+                if surname_lc in names:
+                    matches.append((f"Indian ({group})", f"indian_{group}"))
+        if surname_lc in self._indian_lc and not any(m[0].startswith("Indian") for m in matches):
             matches.append(("Indian", "indian_surnames"))
 
         for group, names in self._asian_lc.items():
@@ -175,8 +191,11 @@ class EthnicNameDatabase:
         # Prefer distinctive ethnic matches over broad/overlapping ones.
         def sort_key(item: Tuple[str, str]) -> float:
             ethnicity, _source = item
-            if ethnicity == "Indian":
+            if ethnicity == "Indian" or ethnicity.startswith("Indian ("):
                 return -1.05
+            # East Asian groups before Hispanic; Filipino Spanish surnames after Hispanic
+            if ethnicity.startswith("Asian (filipino)"):
+                return -0.9
             if ethnicity.startswith("Asian"):
                 return -1.0
             if ethnicity == "Hispanic":
@@ -239,7 +258,7 @@ class EthnicNameDatabase:
         # Distinct family groups that also matched reduce confidence
         families = set()
         for ethnicity, _source in matches:
-            if ethnicity == "Indian":
+            if ethnicity == "Indian" or ethnicity.startswith("Indian ("):
                 families.add("indian")
             elif ethnicity.startswith("Asian"):
                 families.add("asian")
@@ -253,7 +272,8 @@ class EthnicNameDatabase:
         if len(families) > 1:
             base -= 0.1 * (len(families) - 1)
 
-        return max(0.4, min(base, 1.0))
+        # Round to avoid float noise (e.g. 0.4999999999 < 0.5 thresholds)
+        return round(max(0.4, min(base, 1.0)), 2)
 
 
 # Singleton instance

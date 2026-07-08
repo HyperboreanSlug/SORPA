@@ -243,9 +243,15 @@ class NSOPWEthnicDatabaseBuilder:
             for group, names in sorted(self.ethnic_db.asian_surnames.items()):
                 n = cap if unlimited else max(3, cap // 3)
                 take(names, f"Asian ({group})", n)
-        # Indian subcontinent / South Asian (separate list)
+        # Indian subcontinent / South Asian (separate list; optional regional groups)
         if eth in ("all", "indian"):
-            take(self.ethnic_db.indian_surnames, "Indian", cap)
+            by_group = getattr(self.ethnic_db, "indian_surnames_by_group", None) or {}
+            if by_group:
+                for group, names in sorted(by_group.items()):
+                    n = cap if unlimited else max(3, cap // 3)
+                    take(names, f"Indian ({group})", n)
+            else:
+                take(self.ethnic_db.indian_surnames, "Indian", cap)
         if eth in ("all", "african_american"):
             take(self.ethnic_db.african_american_surnames, "African American", cap)
         if eth in ("all", "arabic"):

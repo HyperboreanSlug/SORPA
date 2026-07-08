@@ -62,7 +62,7 @@ _ETHNICITY_COMPATIBLE_RACES = {
 def _ethnicity_family(likely_ethnicity: str) -> str:
     """Normalize a classify_by_name label to a coarse family key."""
     eth = (likely_ethnicity or "").strip().lower()
-    if eth == "indian" or eth.startswith("indian ("):
+    if eth == "indian" or eth.startswith("indian"):
         return "indian"
     if eth.startswith("asian"):
         return "asian"
