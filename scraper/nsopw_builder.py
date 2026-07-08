@@ -312,6 +312,7 @@ class NSOPWEthnicDatabaseBuilder:
         jurisdictions: Optional[Sequence[str]] = None,
         max_searches: Optional[int] = 50,
         max_report_fetches: Optional[int] = 100,
+        max_names: Optional[int] = None,
         skip_existing_urls: bool = True,
         skip_completed_searches: bool = True,
         new_files_only: bool = True,
@@ -328,7 +329,11 @@ class NSOPWEthnicDatabaseBuilder:
           - "full": use DEFAULT_FIRST_NAMES or provided first_names list
           - "custom": only the provided first_names list
 
-        max_searches / max_report_fetches:
+        max_searches:
+          Cap on new NSOPW API queries. None or <= 0 means unlimited.
+        max_names / max_report_fetches:
+          Cap on unique offender names processed (GUI "Max reports" = max names).
+          max_report_fetches is an alias kept for CLI compatibility.
           None or <= 0 means unlimited.
 
         skip_completed_searches:
@@ -358,7 +363,9 @@ class NSOPWEthnicDatabaseBuilder:
             return None if n <= 0 else n
 
         search_cap = _cap(max_searches)
-        report_cap = _cap(max_report_fetches)
+        # "Max reports" in the GUI means max unique names, not HTTP report fetches.
+        # Prefer explicit max_names; fall back to max_report_fetches for CLI.
+        names_cap = _cap(max_names if max_names is not None else max_report_fetches)
 
         mode = (first_mode or "initials").lower().strip()
         if first_names is not None:
@@ -392,7 +399,7 @@ class NSOPWEthnicDatabaseBuilder:
         _log(f"Jurisdictions: {len(jurs)}")
         _log(
             f"Max new searches: {'unlimited' if search_cap is None else search_cap}, "
-            f"max report fetches: {'unlimited' if report_cap is None else report_cap}"
+            f"max names: {'unlimited' if names_cap is None else names_cap}"
         )
         _log(
             f"Rate limits — search: {self.search_delay:.2f}s  |  "
@@ -411,24 +418,25 @@ class NSOPWEthnicDatabaseBuilder:
         seen_urls: Set[str] = set()
         search_count = 0
         report_count = 0
+        names_processed = 0  # unique names after dedupe (counts toward max names)
 
         def _search_limit_reached() -> bool:
             return search_cap is not None and search_count >= search_cap
 
-        def _report_limit_reached() -> bool:
-            return report_cap is not None and report_count >= report_cap
+        def _names_limit_reached() -> bool:
+            return names_cap is not None and names_processed >= names_cap
 
         for surname, eth_label in surname_pairs:
             if self.cancel_check():
                 _log("Cancelled by user.")
                 break
-            if _search_limit_reached():
+            if _search_limit_reached() or _names_limit_reached():
                 break
             for first in firsts:
                 if self.cancel_check():
                     _log("Cancelled by user.")
                     break
-                if _search_limit_reached():
+                if _search_limit_reached() or _names_limit_reached():
                     break
 
                 # Resume: skip API queries already completed successfully
@@ -465,6 +473,8 @@ class NSOPWEthnicDatabaseBuilder:
                 for hit in hits:
                     if self.cancel_check():
                         break
+                    if _names_limit_reached():
+                        break
                     st = (hit.jurisdiction_id or hit.state or "UNK").upper()
                     self._state_stats(st).hits += 1
 
@@ -474,6 +484,8 @@ class NSOPWEthnicDatabaseBuilder:
                         continue
                     seen_urls.add(dedupe_key)
                     self.stats.unique_offenders += 1
+                    names_processed += 1
+                    ncap_label = "∞" if names_cap is None else str(names_cap)
 
                     record = hit.to_record()
                     record["likely_ethnicity"] = eth_label
@@ -494,7 +506,7 @@ class NSOPWEthnicDatabaseBuilder:
                         self.stats.skipped_existing += 1
                         continue
 
-                    if enrich_reports and url and not _report_limit_reached():
+                    if enrich_reports and url:
                         existing_html = (
                             self._existing_html_path(url, st) if new_files_only else None
                         )
@@ -511,10 +523,9 @@ class NSOPWEthnicDatabaseBuilder:
                             sst = self._state_stats(st)
                             sst.reports_attempted += 1
                             self.report_limiter.wait()
-                            rcap_label = "∞" if report_cap is None else str(report_cap)
                             _log(
-                                f"  Report ({report_count}/{rcap_label}) "
-                                f"[{st}]: {url[:90]}"
+                                f"  Name ({names_processed}/{ncap_label}) "
+                                f"report [{st}]: {url[:90]}"
                             )
                             demo = self.reports.fetch_demographics(
                                 url,

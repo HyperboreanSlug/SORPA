@@ -63,8 +63,7 @@ REGISTRIES: List[RegistryConfig] = [
         scrape_method="direct",
         notes=(
             "DPS publishes az_offenders.csv via OffenderWatch/iCrimewatch. "
-            "Automated fetch often returns HTTP 403 (bot protection); "
-            "download manually from the DPS page if needed."
+            "Fetched with Chrome TLS impersonation (curl_cffi) to avoid 403 bot walls."
         ),
     ),
     RegistryConfig(

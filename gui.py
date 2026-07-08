@@ -939,7 +939,7 @@ class ArchiverApp(ctk.CTk):
         row1.pack(fill="x", padx=14, pady=2)
         for label, var, width in (
             ("Max new searches", self.nsopw_max_searches, 72),
-            ("Max reports", self.nsopw_max_reports, 72),
+            ("Max names", self.nsopw_max_reports, 72),
         ):
             ctk.CTkLabel(row1, text=label, font=FONT_SM, text_color=C["muted"]).pack(
                 side="left", padx=(0, 4)
@@ -1004,8 +1004,9 @@ class ArchiverApp(ctk.CTk):
         ctk.CTkLabel(
             lim,
             text=(
-                "Leave Max new searches / Max reports blank for unlimited. "
-                "Resume logs queries in the DB. Floors: search ≥2.0s · report ≥0.25s."
+                "Max names = unique offenders to process (blank = unlimited). "
+                "Max new searches = NSOPW API queries (blank = unlimited). "
+                "Floors: search ≥2.0s · report ≥0.25s."
             ),
             font=FONT_SM, text_color=C["dim"],
         ).pack(anchor="w", padx=14, pady=(6, 12))
@@ -1233,7 +1234,7 @@ class ArchiverApp(ctk.CTk):
             return None if n <= 0 else n
 
         max_searches = _parse_optional_limit(self.nsopw_max_searches.get())
-        max_reports = _parse_optional_limit(self.nsopw_max_reports.get())
+        max_names = _parse_optional_limit(self.nsopw_max_reports.get())  # field = max names
 
         self._nsopw_cancel = False
         self._nsopw_insert_count = 0
@@ -1271,7 +1272,7 @@ class ArchiverApp(ctk.CTk):
                     first_mode=self.nsopw_first_mode,
                     jurisdictions=None,
                     max_searches=max_searches,
-                    max_report_fetches=max_reports,
+                    max_names=max_names,
                     skip_existing_urls=skip_existing,
                     skip_completed_searches=resume,
                     new_files_only=new_files_only,

@@ -398,7 +398,11 @@ def cmd_nsopw(args: argparse.Namespace) -> None:
             first_mode=first_mode,
             jurisdictions=jurisdictions,
             max_searches=args.max_searches,
-            max_report_fetches=args.max_reports,
+            max_names=(
+                args.max_names
+                if getattr(args, "max_names", None) is not None
+                else args.max_reports
+            ),
             skip_existing_urls=not args.force_reinsert,
             skip_completed_searches=not bool(getattr(args, "no_resume", False)),
             new_files_only=not bool(getattr(args, "redownload_html", False)),
@@ -603,7 +607,11 @@ Examples:
     )
     p_nsopw.add_argument(
         "--max-reports", type=int, default=80,
-        help="Maximum jurisdiction report pages to fetch (default: 80; 0 = unlimited)",
+        help="Maximum unique offender names to process (default: 80; 0 = unlimited)",
+    )
+    p_nsopw.add_argument(
+        "--max-names", type=int, default=None,
+        help="Alias for --max-reports (max unique names; 0 = unlimited)",
     )
     p_nsopw.add_argument(
         "--delay", type=float, default=3.0,
