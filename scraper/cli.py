@@ -71,7 +71,13 @@ def cmd_scrape(args: argparse.Namespace) -> None:
     print(f"  Delay between requests: {delay}s")
     print(f"{'='*60}\n")
 
+    do_import = not bool(getattr(args, "no_import_db", False))
+    db_path = getattr(args, "database", None) or "data/offenders.db"
+    skip_urls = not bool(getattr(args, "force_reinsert", False))
+
     total_records = 0
+    total_imported = 0
+    total_skipped = 0
     for reg in registries:
         abbr = reg.abbr
         print(f"\n[{abbr}] Scraping {reg.name}...")
@@ -100,6 +106,25 @@ def cmd_scrape(args: argparse.Namespace) -> None:
 
                 print(f"  ✓ Saved {len(records)} records to {csv_path}")
                 total_records += len(records)
+
+                if do_import:
+                    from .database import Database
+
+                    db = Database(db_path)
+                    try:
+                        imp = db.import_records(
+                            records,
+                            state=abbr,
+                            skip_existing_urls=skip_urls,
+                        )
+                    finally:
+                        db.close()
+                    total_imported += int(imp.get("imported") or 0)
+                    total_skipped += int(imp.get("skipped") or 0)
+                    print(
+                        f"  ✓ DB import: +{imp.get('imported', 0)} "
+                        f"(skipped {imp.get('skipped', 0)}) → {db_path}"
+                    )
             else:
                 print("  - No records found (may need direct download or API access)")
 
@@ -108,6 +133,12 @@ def cmd_scrape(args: argparse.Namespace) -> None:
 
     print(f"\n{'='*60}")
     print(f"  Total records scraped: {total_records}")
+    if do_import:
+        print(f"  DB imported: {total_imported} (skipped {total_skipped})")
+        print(f"  Database: {db_path}")
+        print("  Next: python -m scraper.cli misclassify --ethnicity all")
+    else:
+        print("  DB import skipped (--no-import-db); use: python -m scraper.cli import -i …")
     print(f"  Output directory: {output_dir}")
     print(f"{'='*60}\n")
 
@@ -461,6 +492,119 @@ def cmd_import(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_dedupe(args: argparse.Namespace) -> None:
+    """Check and/or remove duplicate offender rows in the database."""
+    from .database import DUPLICATE_STRATEGIES, Database
+
+    db_path = args.database or "data/offenders.db"
+    db = Database(db_path)
+    strategy = (args.strategy or "source_url").strip().lower()
+    do_remove = bool(args.remove)
+    dry_run = bool(args.dry_run) or not do_remove
+    # --check is default when not --remove; --dry-run with --remove previews deletes
+    if args.check and not do_remove:
+        dry_run = True
+
+    try:
+        print(f"\n{'='*60}")
+        print("  Duplicate check / removal")
+        print(f"{'='*60}")
+        print(f"  Database: {db_path}")
+        print(f"  Total offenders: {db.get_total_count():,}")
+
+        if strategy == "all":
+            strats = ["source_url", "external_id", "name_state_dob"]
+            if args.include_name_state:
+                strats.append("name_state")
+            summary = db.count_duplicates(strats)
+            print("\n  Duplicate summary (extra = beyond keeper; safe = OK to auto-remove):")
+            for s, info in summary["by_strategy"].items():
+                print(
+                    f"    {s:<16}  groups={info['groups']:>5,}  "
+                    f"extra={info['extra_rows']:>6,}  "
+                    f"safe_extra={info.get('safe_extra_rows', 0):>6,}  "
+                    f"unsafe_groups={info.get('unsafe_groups', 0):>4,}"
+                )
+            print(
+                f"\n  Safe removable rows: {summary.get('total_safe_extra_rows', 0):,}  "
+                f"(raw extra sum may include CAPTCHA/portal clusters)"
+            )
+
+            if do_remove:
+                print(
+                    f"\n  Removing duplicates ({'DRY RUN' if dry_run else 'LIVE'}) "
+                    f"in order: {', '.join(strats)}"
+                    f"{'' if args.force_unsafe else ' [safe URL groups only]'}"
+                )
+                result = db.remove_duplicates_all(
+                    strats,
+                    dry_run=dry_run,
+                    merge_fields=not args.no_merge,
+                    safe_only=not args.force_unsafe,
+                )
+                for r in result["strategies"]:
+                    print(
+                        f"    {r['strategy']:<16}  groups={r['groups']:,}  "
+                        f"{'would delete' if dry_run else 'deleted'}={r['deleted']:,}  "
+                        f"skipped_unsafe={r.get('skipped_unsafe', 0):,}  "
+                        f"merged_fields={r['merged_fields']:,}"
+                    )
+                print(
+                    f"\n  Total {'would delete' if dry_run else 'deleted'}: "
+                    f"{result['total_deleted']:,}"
+                )
+                print(f"  Offenders now: {result['total_offenders']:,}")
+            else:
+                print("\n  Tip: re-run with --remove to delete safe extras (add --dry-run first).")
+        else:
+            if strategy not in DUPLICATE_STRATEGIES:
+                print(f"  Unknown strategy {strategy!r}. Choose: all, {', '.join(DUPLICATE_STRATEGIES)}")
+                return
+            groups = db.find_duplicate_groups(strategy, limit_groups=args.max_show)
+            full = db.find_duplicate_groups(strategy)
+            full_extra = sum(max(0, g["count"] - 1) for g in full)
+            safe_extra = sum(max(0, g["count"] - 1) for g in full if g.get("safe", True))
+            unsafe_n = sum(1 for g in full if not g.get("safe", True))
+            print(f"\n  Strategy: {strategy}")
+            print(
+                f"  Groups: {len(full):,}  ·  extra rows: {full_extra:,}  "
+                f"·  safe extra: {safe_extra:,}  ·  unsafe groups: {unsafe_n:,}"
+            )
+            if groups:
+                print(f"\n  Sample groups (up to {args.max_show}):")
+                for g in groups[: args.max_show]:
+                    tag = "" if g.get("safe", True) else " [UNSAFE portal/CAPTCHA — not auto-removed]"
+                    print(
+                        f"    keep id={g['keep_id']} ({g['keep_preview']})  "
+                        f"count={g['count']}  remove={g['remove_ids'][:6]}"
+                        f"{'…' if len(g['remove_ids']) > 6 else ''}{tag}"
+                    )
+                    print(f"      key: {str(g['key'])[:80]}")
+
+            if do_remove:
+                print(f"\n  Removing ({'DRY RUN' if dry_run else 'LIVE'})…")
+                result = db.remove_duplicates(
+                    strategy,
+                    dry_run=dry_run,
+                    merge_fields=not args.no_merge,
+                    safe_only=not args.force_unsafe,
+                )
+                print(
+                    f"  Groups={result['groups']:,}  "
+                    f"{'would delete' if dry_run else 'deleted'}={result['deleted']:,}  "
+                    f"skipped_unsafe={result.get('skipped_unsafe', 0):,}  "
+                    f"merged_fields={result['merged_fields']:,}"
+                )
+                print(f"  Offenders now: {db.get_total_count():,}")
+            elif not groups and full_extra == 0:
+                print("  No duplicates found for this strategy.")
+            else:
+                print("\n  Tip: re-run with --remove to delete safe extras (add --dry-run first).")
+        print(f"{'='*60}\n")
+    finally:
+        db.close()
+
+
 def _add_database_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--database", "-d",
@@ -511,6 +655,17 @@ Examples:
     )
     p_scrape.add_argument("--output", default="data/downloads", help="Output directory for scraped data")
     p_scrape.add_argument("--delay", type=float, default=1.0, help="Delay between requests (seconds)")
+    p_scrape.add_argument(
+        "--no-import-db",
+        action="store_true",
+        help="Only write CSVs; do not insert scrape results into SQLite (Misclassify needs DB rows)",
+    )
+    p_scrape.add_argument(
+        "--force-reinsert",
+        action="store_true",
+        help="When importing scrape results, do not skip existing source_url rows",
+    )
+    _add_database_arg(p_scrape)
 
     # Search command
     p_search = subparsers.add_parser("search", help="Search offender database")
@@ -525,12 +680,19 @@ Examples:
     p_misclassify = subparsers.add_parser("misclassify", help="Find potential race/ethnicity misclassifications")
     p_misclassify.add_argument(
         "--ethnicity",
-        choices=["all", "hispanic", "asian", "african_american"],
+        choices=[
+            "all", "hispanic", "asian", "indian", "indian_high_confidence",
+            "african_american", "african", "arabic", "jewish", "portuguese",
+            "native_american", "european",
+        ],
         default="all",
         help="Type of ethnicity to check for misclassification",
     )
     p_misclassify.add_argument("--confidence", type=float, default=0.5, help="Minimum confidence threshold (0-1)")
-    p_misclassify.add_argument("--limit", type=int, default=10000, help="Max records to analyze")
+    p_misclassify.add_argument(
+        "--limit", type=int, default=0,
+        help="Max records to scan (0 = entire DB; when set, newest ids first so new imports are included)",
+    )
     p_misclassify.add_argument("--max-display", type=int, default=20, help="Max results to display")
     p_misclassify.add_argument("--export", type=str, help="Export misclassifications to CSV file")
     _add_database_arg(p_misclassify)
@@ -549,6 +711,54 @@ Examples:
     p_import.add_argument("--input", "-i", default="data/downloads", help="Input directory or CSV file")
     p_import.add_argument("--state", type=str, help="Default state for imported records")
     _add_database_arg(p_import)
+
+    # Dedupe command
+    p_dedupe = subparsers.add_parser(
+        "dedupe",
+        help="Find and remove duplicate offender rows (by URL, external id, or name+DOB)",
+    )
+    p_dedupe.add_argument(
+        "--strategy",
+        choices=["all", "source_url", "external_id", "name_state_dob", "name_state"],
+        default="all",
+        help=(
+            "Match key: source_url (strongest), external_id, name_state_dob, "
+            "name_state (weaker), or all safe strategies (default)"
+        ),
+    )
+    p_dedupe.add_argument(
+        "--check", action="store_true", default=True,
+        help="Report duplicate groups (default action)",
+    )
+    p_dedupe.add_argument(
+        "--remove", action="store_true",
+        help="Delete extras (keeps richest row per group; merges missing fields onto keeper)",
+    )
+    p_dedupe.add_argument(
+        "--dry-run", action="store_true",
+        help="With --remove, show what would be deleted without writing",
+    )
+    p_dedupe.add_argument(
+        "--no-merge", action="store_true",
+        help="Do not copy filled fields from deleted rows onto the kept row",
+    )
+    p_dedupe.add_argument(
+        "--include-name-state", action="store_true",
+        help="With --strategy all, also run weaker name+state matching",
+    )
+    p_dedupe.add_argument(
+        "--force-unsafe",
+        action="store_true",
+        help=(
+            "Also collapse shared CAPTCHA/portal URL groups (dangerous — "
+            "can merge many different offenders). Default skips those."
+        ),
+    )
+    p_dedupe.add_argument(
+        "--max-show", type=int, default=15,
+        help="Max sample groups to print (default 15)",
+    )
+    _add_database_arg(p_dedupe)
 
     # Status command
     p_status = subparsers.add_parser("status", help="Show per-state scrape support matrix")
@@ -672,6 +882,7 @@ Examples:
         "misclassify": cmd_misclassify,
         "export": cmd_export,
         "import": cmd_import,
+        "dedupe": cmd_dedupe,
         "status": cmd_status,
         "nsopw": cmd_nsopw,
     }

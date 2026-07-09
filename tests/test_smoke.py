@@ -107,6 +107,247 @@ class DatabaseTests(unittest.TestCase):
             rows = self.db.search_by_name("Lopez")
             self.assertEqual(rows[0]["first_name"], "Ana")
             self.assertEqual(rows[0]["state"], "GA")
+            self.assertEqual(rows[0]["source_state"], "GA")
+            self.assertEqual(rows[0]["full_name"], "Ana Lopez")
+
+    def test_import_csv_feeds_integrity_and_misclass_stats(self):
+        """Imported CSV rows must show up in Integrity totals and Misclassify Analyze."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fl_offenders.csv"
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "First Name", "Last Name", "Race", "Crime", "Source URL",
+                    ],
+                )
+                w.writeheader()
+                w.writerow({
+                    "First Name": "Juan", "Last Name": "Garcia",
+                    "Race": "White", "Crime": "A",
+                    "Source URL": "https://example.gov/1",
+                })
+                w.writerow({
+                    "First Name": "Bob", "Last Name": "Smith",
+                    "Race": "White", "Crime": "",
+                    "Source URL": "https://example.gov/2",
+                })
+                w.writerow({
+                    "First Name": "Raj", "Last Name": "Patel",
+                    "Race": "White", "Crime": "B",
+                    "Source URL": "https://example.gov/3",
+                })
+            result = self.db.import_csv(str(path), skip_existing_urls=True)
+            self.assertEqual(result["imported"], 3)
+            self.assertEqual(self.db.get_total_count(), 3)
+
+            rep = self.db.get_integrity_report()
+            self.assertEqual(rep["overall"]["total"], 3)
+            self.assertEqual(rep["overall"]["with_race"], 3)
+            self.assertEqual(rep["overall"]["with_crime"], 2)
+            self.assertEqual(rep["overall"]["with_url"], 3)
+            by_st = {s["state"]: s for s in rep["by_state"]}
+            self.assertEqual(by_st["FL"]["total"], 3)
+            self.assertEqual(by_st["FL"]["with_race"], 3)
+
+            races = {r["race"]: r["count"] for r in self.db.get_race_distribution()}
+            self.assertEqual(races.get("White"), 3)
+
+            searcher = SexOffenderSearcher()
+            orphan = searcher.db
+            searcher.db = self.db  # analyze the imported in-memory rows
+            try:
+                hisp, hisp_base = searcher.analyze_ethnicities(
+                    min_confidence=0.5,
+                    limit=0,
+                    ethnicity_filter="hispanic",
+                    return_base_count=True,
+                )
+                self.assertGreaterEqual(hisp_base, 1)
+                hisp_names = {(m.record.get("last_name") or "").lower() for m in hisp}
+                self.assertIn("garcia", hisp_names)
+
+                indian, indian_base = searcher.analyze_ethnicities(
+                    min_confidence=0.5,
+                    limit=0,
+                    ethnicity_filter="indian",
+                    return_base_count=True,
+                )
+                self.assertGreaterEqual(indian_base, 1)
+                indian_names = {
+                    (m.record.get("last_name") or "").lower() for m in indian
+                }
+                self.assertIn("patel", indian_names)
+            finally:
+                searcher.db = orphan
+                searcher.close()
+
+    def test_find_and_remove_duplicates(self):
+        """Duplicate check keeps richest row, merges fields, deletes extras."""
+        # Same URL twice; second has race, first has photo
+        self.db.insert_offender({
+            "first_name": "A", "last_name": "One",
+            "source_url": "https://ex/dup/1",
+            "photo_path": "data/p.jpg",
+            "state": "FL",
+        })
+        self.db.insert_offender({
+            "first_name": "A", "last_name": "One",
+            "source_url": "https://ex/dup/1",
+            "race": "White",
+            "crime": "X",
+            "state": "FL",
+        })
+        # Unique row
+        self.db.insert_offender({
+            "first_name": "B", "last_name": "Two",
+            "source_url": "https://ex/unique/2",
+            "state": "GA",
+        })
+        # Name+state+dob duplicates
+        self.db.insert_offender({
+            "first_name": "C", "last_name": "Three",
+            "state": "TX",
+            "date_of_birth": "1990-01-01",
+            "source_url": "https://ex/n1",
+        })
+        self.db.insert_offender({
+            "first_name": "C", "last_name": "Three",
+            "state": "TX",
+            "date_of_birth": "1990-01-01",
+            "race": "Black",
+            "source_url": "https://ex/n2",
+        })
+        # Shared CAPTCHA URL for many people — must NOT be safe-removed
+        for i in range(10):
+            self.db.insert_offender({
+                "first_name": f"Cap{i}",
+                "last_name": f"Tive{i}",
+                "source_url": "https://apps.example.gov/public/captcha",
+                "state": "WI",
+            })
+
+        summary = self.db.count_duplicates(["source_url", "name_state_dob"])
+        self.assertGreaterEqual(summary["by_strategy"]["source_url"]["groups"], 1)
+        self.assertGreaterEqual(summary["by_strategy"]["source_url"]["extra_rows"], 1)
+        self.assertGreaterEqual(summary["by_strategy"]["name_state_dob"]["groups"], 1)
+        # CAPTCHA cluster counted but not safe
+        self.assertGreaterEqual(
+            summary["by_strategy"]["source_url"].get("unsafe_groups", 0), 1
+        )
+
+        dry = self.db.remove_duplicates("source_url", dry_run=True, safe_only=True)
+        self.assertEqual(dry["deleted"], 1)  # only the real URL dup
+        self.assertGreaterEqual(dry.get("skipped_unsafe", 0), 1)
+        before = self.db.get_total_count()
+        self.assertEqual(before, 15)
+
+        live = self.db.remove_duplicates(
+            "source_url", dry_run=False, merge_fields=True, safe_only=True
+        )
+        self.assertEqual(live["deleted"], 1)
+        self.assertEqual(self.db.get_total_count(), 14)
+        # CAPTCHA people still present
+        captcha_left = sum(
+            1
+            for r in self.db.iter_offenders()
+            if "captcha" in (r.get("source_url") or "").lower()
+        )
+        self.assertEqual(captcha_left, 10)
+        # Keeper should have both race and photo after merge
+        kept = None
+        for row in self.db.iter_offenders():
+            if (row.get("source_url") or "") == "https://ex/dup/1":
+                kept = row
+                break
+        self.assertIsNotNone(kept)
+        self.assertEqual(kept.get("race"), "White")
+        self.assertEqual(kept.get("photo_path"), "data/p.jpg")
+        self.assertEqual(kept.get("crime"), "X")
+
+        # Second pass: name_state_dob
+        r2 = self.db.remove_duplicates("name_state_dob", dry_run=False)
+        self.assertEqual(r2["deleted"], 1)
+        self.assertEqual(self.db.get_total_count(), 13)
+        # No more safe URL dups
+        self.assertEqual(
+            self.db.count_duplicates(["source_url"])["by_strategy"]["source_url"][
+                "safe_extra_rows"
+            ],
+            0,
+        )
+
+    def test_scrape_records_and_newest_misclass_scan(self):
+        """Scrape-like import_records + limited Analyze must include newest ethnic rows."""
+        # Old fillers first
+        fillers = [
+            {
+                "first_name": f"O{i}",
+                "last_name": "Smith",
+                "race": "White",
+                "source_url": f"https://ex/old/{i}",
+            }
+            for i in range(15)
+        ]
+        self.assertEqual(
+            self.db.import_records(fillers, state="TX")["imported"], 15
+        )
+        # New scrape batch with clear misclass candidates
+        scrape = [
+            {
+                "first_name": "Ana",
+                "last_name": "Garcia",
+                "race": "White",
+                "source_url": "https://ex/new/g",
+            },
+            {
+                "first_name": "Raj",
+                "last_name": "Patel",
+                "race": "White",
+                "source_url": "https://ex/new/p",
+            },
+        ]
+        self.assertEqual(
+            self.db.import_records(scrape, state="GA")["imported"], 2
+        )
+        self.assertEqual(self.db.get_total_count(), 17)
+        self.assertEqual(self.db.search_by_name("Garcia")[0]["state"], "GA")
+
+        searcher = SexOffenderSearcher()
+        orphan = searcher.db
+        searcher.db = self.db
+        try:
+            # Full scan finds both
+            hisp, _ = searcher.analyze_ethnicities(
+                min_confidence=0.5, limit=0, ethnicity_filter="hispanic",
+                return_base_count=True,
+            )
+            self.assertIn(
+                "garcia",
+                {(m.record.get("last_name") or "").lower() for m in hisp},
+            )
+            indian, _ = searcher.analyze_ethnicities(
+                min_confidence=0.5, limit=0, ethnicity_filter="indian",
+                return_base_count=True,
+            )
+            self.assertIn(
+                "patel",
+                {(m.record.get("last_name") or "").lower() for m in indian},
+            )
+            # Cap of 3 with newest_first must include new GA rows (not only Smith)
+            lim_hisp, _ = searcher.analyze_ethnicities(
+                min_confidence=0.5, limit=3, ethnicity_filter="hispanic",
+                return_base_count=True,
+            )
+            lim_names = {
+                (m.record.get("last_name") or "").lower() for m in lim_hisp
+            }
+            self.assertIn("garcia", lim_names)
+            oldest = list(self.db.iter_offenders(limit=3, newest_first=False))
+            self.assertTrue(all((r.get("last_name") or "") == "Smith" for r in oldest))
+        finally:
+            searcher.db = orphan
+            searcher.close()
 
     def test_integrity_and_incomplete_and_update(self):
         self.db.insert_offender({

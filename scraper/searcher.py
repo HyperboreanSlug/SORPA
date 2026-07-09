@@ -348,6 +348,8 @@ class SexOffenderSearcher:
         """
         # Stream rows instead of materializing the whole table as a list first
         # (faster, lower memory; same misclassification rules).
+        # When a scan cap is set, walk newest ids first so recent scrapes/imports
+        # are checked — ASC + LIMIT used to miss brand-new high-id rows.
         misclassifications: List[Misclassification] = []
         base_count = 0
         filter_key = (ethnicity_filter or "").strip().lower() or None
@@ -362,8 +364,12 @@ class SexOffenderSearcher:
         else:
             family_filter = filter_key
         scan_limit = None if limit is None or int(limit) <= 0 else int(limit)
+        # Cap set → prefer newest; unlimited → full table ASC is fine
+        newest_first = bool(scan_limit)
 
-        for record in self.db.iter_offenders(limit=scan_limit):
+        for record in self.db.iter_offenders(
+            limit=scan_limit, newest_first=newest_first
+        ):
             last_name = _last_name_from_record(record)
             recorded_race = (record.get("race") or "").strip()
 

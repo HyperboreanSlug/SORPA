@@ -1206,8 +1206,16 @@ class ArchiverApp(ctk.CTk):
         ).pack(anchor="w", padx=14, pady=(12, 4))
         _muted(
             right,
-            "Load scrape CSVs (e.g. ga_offenders.csv) into the local SQLite DB for Search / Integrity.",
+            "Scraped rows must be in the SQLite DB for Search, Integrity, and Misclassify. "
+            "Auto-import after scrape is on by default; you can also load CSVs manually.",
         ).pack(anchor="w", padx=14, pady=(0, 6))
+        self.scrape_auto_import = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            right, text="Import scrape results into DB (for Misclassify)",
+            variable=self.scrape_auto_import, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+        ).pack(anchor="w", padx=14, pady=2)
         self.scrape_import_skip = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             right, text="Skip existing source URLs",
@@ -1294,6 +1302,9 @@ class ArchiverApp(ctk.CTk):
 
         output_dir = Path(self.scrape_output_var.get())
         output_dir.mkdir(parents=True, exist_ok=True)
+        auto_import = bool(self.scrape_auto_import.get()) if hasattr(self, "scrape_auto_import") else True
+        skip_urls = bool(self.scrape_import_skip.get()) if hasattr(self, "scrape_import_skip") else True
+        db_path = self.db_path
         self._set_running(True)
         self.scrape_progress.set(0)
         total = len(registries)
@@ -1302,8 +1313,12 @@ class ArchiverApp(ctk.CTk):
             self.log_queue.put(msg)
 
         def worker():
+            from scraper.database import Database
+
             try:
                 total_records = 0
+                total_imported = 0
+                total_skipped = 0
                 for i, reg in enumerate(registries):
                     log(f"[{reg.abbr}] Scraping {reg.name}…")
                     scraper = ScraperFactory.create(reg.abbr, delay=delay)
@@ -1326,11 +1341,39 @@ class ArchiverApp(ctk.CTk):
                             w.writerows(records)
                         log(f"  Saved {len(records)} → {csv_path}")
                         total_records += len(records)
+                        if auto_import:
+                            try:
+                                db = Database(db_path)
+                                try:
+                                    imp = db.import_records(
+                                        records,
+                                        state=reg.abbr,
+                                        skip_existing_urls=skip_urls,
+                                    )
+                                finally:
+                                    db.close()
+                                total_imported += int(imp.get("imported") or 0)
+                                total_skipped += int(imp.get("skipped") or 0)
+                                log(
+                                    f"  DB import: +{imp.get('imported', 0)} "
+                                    f"(skipped {imp.get('skipped', 0)})"
+                                )
+                            except Exception as ie:
+                                log(f"  DB import error: {ie}")
                     else:
                         log("  No records")
                     pct = (i + 1) / max(total, 1)
                     self.after(0, lambda p=pct: self.scrape_progress.set(p))
-                log(f"Done. Total records: {total_records}")
+                log(
+                    f"Done. Scraped {total_records}"
+                    + (
+                        f" · DB imported {total_imported} (skipped {total_skipped})"
+                        if auto_import
+                        else " · (DB auto-import off — use Import for Misclassify)"
+                    )
+                )
+                if auto_import and total_imported:
+                    self.after(0, self._after_db_data_changed)
             except Exception as e:
                 log(f"ERROR: {e}")
             finally:
@@ -1365,12 +1408,7 @@ class ArchiverApp(ctk.CTk):
         self.log_queue.put(f"CSV import folder: {msg}")
         for err in summary.get("errors") or []:
             self.log_queue.put(f"  import error: {err}")
-        if hasattr(self, "_refresh_integrity"):
-            try:
-                self._refresh_integrity()
-            except Exception:
-                pass
-        self._refresh_header_db_path()
+        self._after_db_data_changed()
 
     def _import_csv_file(self):
         from scraper.database import Database
@@ -1397,12 +1435,168 @@ class ArchiverApp(ctk.CTk):
         )
         self.scrape_import_status.configure(text=msg)
         self.log_queue.put(f"CSV import: {msg}")
+        self._after_db_data_changed()
+
+    def _after_db_data_changed(self) -> None:
+        """Refresh Integrity / header; mark Misclassify stats as needing re-Analyze."""
         if hasattr(self, "_refresh_integrity"):
             try:
                 self._refresh_integrity()
             except Exception:
                 pass
-        self._refresh_header_db_path()
+        try:
+            self._refresh_header_db_path()
+        except Exception:
+            pass
+        # Misclassify / Statistics are computed on demand — prompt re-run
+        note = "DB updated · open Misclassify → Analyze to include new rows"
+        if hasattr(self, "misclass_status"):
+            try:
+                self.misclass_status.configure(text=note)
+            except Exception:
+                pass
+        if hasattr(self, "mcstat_status"):
+            try:
+                self.mcstat_status.configure(text=note)
+            except Exception:
+                pass
+        self.log_queue.put(note)
+
+    def _check_duplicates(self) -> None:
+        """Scan DB for duplicate groups and show a summary dialog."""
+        from scraper.database import Database
+
+        try:
+            db = Database(self.db_path)
+            try:
+                summary = db.count_duplicates(
+                    ["source_url", "external_id", "name_state_dob"]
+                )
+                samples = db.find_duplicate_groups("source_url", limit_groups=8)
+            finally:
+                db.close()
+        except Exception as e:
+            messagebox.showerror("Duplicate check failed", str(e))
+            return
+
+        lines = [
+            f"Total offenders: {summary['total_offenders']:,}",
+            "",
+            "By match key (safe extras are auto-removable; portal/CAPTCHA clusters are not):",
+        ]
+        for s, info in (summary.get("by_strategy") or {}).items():
+            lines.append(
+                f"  · {s}: {info.get('safe_extra_rows', 0):,} safe removable "
+                f"/ {info.get('extra_rows', 0):,} raw extra "
+                f"({info.get('unsafe_groups', 0)} unsafe groups)"
+            )
+        safe_samples = [g for g in samples if g.get("safe", True)][:5]
+        unsafe_samples = [g for g in samples if not g.get("safe", True)][:3]
+        if safe_samples:
+            lines.append("")
+            lines.append("Sample safe source_url duplicates:")
+            for g in safe_samples:
+                lines.append(
+                    f"  · keep #{g['keep_id']} {g['keep_preview']} "
+                    f"(×{g['count']}) remove {g['remove_ids'][:4]}"
+                )
+        if unsafe_samples:
+            lines.append("")
+            lines.append("Skipped portal/CAPTCHA URL clusters (not removed):")
+            for g in unsafe_samples:
+                lines.append(f"  · ×{g['count']}  {str(g.get('key') or '')[:60]}")
+        lines.append("")
+        lines.append("Use Remove duplicates… to delete safe extras (merges sparse fields first).")
+        msg = "\n".join(lines)
+        self.log_queue.put("Duplicate check:\n" + msg)
+        if hasattr(self, "integrity_status"):
+            safe_extra = int(summary.get("total_safe_extra_rows") or 0)
+            self.integrity_status.configure(
+                text=f"Duplicates: {safe_extra:,} safe removable"
+            )
+        messagebox.showinfo("Duplicate check", msg)
+        try:
+            self._refresh_integrity()
+        except Exception:
+            pass
+
+    def _remove_duplicates(self) -> None:
+        """Confirm and remove duplicates (safe strategies, merge fields)."""
+        from scraper.database import Database
+
+        try:
+            db = Database(self.db_path)
+            try:
+                preview = db.remove_duplicates_all(
+                    ["source_url", "external_id", "name_state_dob"],
+                    dry_run=True,
+                    merge_fields=True,
+                    safe_only=True,
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            messagebox.showerror("Duplicate scan failed", str(e))
+            return
+
+        would = int(preview.get("total_deleted") or 0)
+        skipped_u = int(preview.get("total_skipped_unsafe") or 0)
+        if would <= 0:
+            messagebox.showinfo(
+                "Remove duplicates",
+                "No safe duplicates found for source_url / external_id / name+DOB.\n"
+                f"(Skipped {skipped_u} portal/CAPTCHA URL clusters.)",
+            )
+            return
+
+        detail_lines = []
+        for r in preview.get("strategies") or []:
+            if r.get("deleted"):
+                detail_lines.append(
+                    f"  · {r['strategy']}: {r['deleted']:,} rows in {r['groups']:,} groups"
+                )
+        detail = "\n".join(detail_lines) if detail_lines else ""
+        ok = messagebox.askyesno(
+            "Remove duplicates?",
+            (
+                f"About to permanently delete {would:,} safe duplicate row(s).\n\n"
+                f"{detail}\n\n"
+                f"Portal/CAPTCHA URL clusters skipped: {skipped_u}\n\n"
+                "Keeps the richest record per group and copies missing fields "
+                "from deleted rows onto the keeper.\n\n"
+                "Continue?"
+            ),
+        )
+        if not ok:
+            return
+
+        try:
+            db = Database(self.db_path)
+            try:
+                result = db.remove_duplicates_all(
+                    ["source_url", "external_id", "name_state_dob"],
+                    dry_run=False,
+                    merge_fields=True,
+                    safe_only=True,
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            messagebox.showerror("Remove duplicates failed", str(e))
+            return
+
+        deleted = int(result.get("total_deleted") or 0)
+        left = int(result.get("total_offenders") or 0)
+        skipped_u = int(result.get("total_skipped_unsafe") or 0)
+        msg = (
+            f"Deleted {deleted:,} duplicates · {left:,} remain"
+            + (f" · skipped {skipped_u} unsafe URL clusters" if skipped_u else "")
+        )
+        self.log_queue.put(f"Dedupe: {msg}")
+        if hasattr(self, "integrity_status"):
+            self.integrity_status.configure(text=msg)
+        messagebox.showinfo("Duplicates removed", msg)
+        self._after_db_data_changed()
 
     # -----------------------------------------------------------------------
     # Search
@@ -1880,6 +2074,16 @@ class ArchiverApp(ctk.CTk):
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
         ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            top, text="Check duplicates", width=130, command=self._check_duplicates,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            top, text="Remove duplicates…", width=140, command=self._remove_duplicates,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left", padx=4)
         self.integrity_status = ctk.CTkLabel(
             top, text="", font=FONT_SM, text_color=C["muted"],
         )
@@ -1948,6 +2152,12 @@ class ArchiverApp(ctk.CTk):
                     need_race=True, need_crime=True, need_photo=True, need_html=False,
                     limit=5000,
                 )
+                try:
+                    dup_summary = db.count_duplicates(
+                        ["source_url", "external_id", "name_state_dob"]
+                    )
+                except Exception:
+                    dup_summary = None
             finally:
                 db.close()
         except Exception as e:
@@ -1957,6 +2167,21 @@ class ArchiverApp(ctk.CTk):
         o = report["overall"]
         complete = int(o.get("with_everything") or 0)
         total = int(o.get("total") or 0)
+        dup_line = ""
+        if dup_summary and isinstance(dup_summary.get("by_strategy"), dict):
+            parts = []
+            for s, info in dup_summary["by_strategy"].items():
+                safe_e = int(info.get("safe_extra_rows") or 0)
+                unsafe_g = int(info.get("unsafe_groups") or 0)
+                if safe_e or unsafe_g or info.get("extra_rows"):
+                    bit = f"{s}: {safe_e:,} safe"
+                    if unsafe_g:
+                        bit += f" (+{unsafe_g} portal/CAPTCHA clusters skipped)"
+                    parts.append(bit)
+            if parts:
+                dup_line = "\nDuplicates: " + " · ".join(parts)
+            else:
+                dup_line = "\nDuplicates: none found (source_url / external_id / name+DOB)"
         self.integrity_summary.configure(
             text=(
                 f"Total records: {total:,}  ·  "
@@ -1966,6 +2191,7 @@ class ArchiverApp(ctk.CTk):
                 f"Crime: {o['with_crime']:,} ({o.get('pct_crime', 0)}%)  ·  "
                 f"Photo: {o['with_photo']:,} ({o.get('pct_photo', 0)}%)  ·  "
                 f"HTML: {o['with_html']:,} ({o.get('pct_html', 0)}%)"
+                f"{dup_line}"
             )
         )
         self.requeue_incomplete_label.configure(
@@ -2177,7 +2403,8 @@ class ArchiverApp(ctk.CTk):
         if not hasattr(self, "misclass_ethnicity_var"):
             self.misclass_ethnicity_var = ctk.StringVar(value="all")
             self.misclass_conf_var = ctk.DoubleVar(value=0.5)
-            self.misclass_limit_var = ctk.IntVar(value=10000)
+            # 0 = scan entire DB; when capped, Analyze walks newest ids first
+            self.misclass_limit_var = ctk.IntVar(value=0)
 
         ctk.CTkComboBox(
             bar, variable=self.misclass_ethnicity_var, width=160,
@@ -2197,7 +2424,7 @@ class ArchiverApp(ctk.CTk):
             fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
         ).pack(side="left")
 
-        ctk.CTkLabel(bar, text="Max rows", font=FONT_SM, text_color=C["muted"]).pack(
+        ctk.CTkLabel(bar, text="Scan cap (0=all)", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(12, 4)
         )
         ctk.CTkEntry(

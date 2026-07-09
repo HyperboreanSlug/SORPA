@@ -16,6 +16,14 @@ from datetime import datetime, timezone
 # Schema version - increment when schema changes
 SCHEMA_VERSION = 4
 
+# Strategies for find/remove_duplicates
+DUPLICATE_STRATEGIES = (
+    "source_url",       # same report URL (strongest)
+    "external_id",      # same external_id within state
+    "name_state_dob",   # same first+last+state+DOB
+    "name_state",       # same first+last+state (weaker — different people can share names)
+)
+
 # Default database path (relative to project root)
 DEFAULT_DB_PATH = "data/offenders.db"
 
@@ -300,17 +308,28 @@ class Database:
         ).fetchall()
         return {str(r[0]).strip() for r in rows if r and r[0]}
 
-    def iter_offenders(self, limit: Optional[int] = None, offset: int = 0):
-        """Stream offender rows (dicts) without loading the whole table at once."""
+    def iter_offenders(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        *,
+        newest_first: bool = False,
+    ):
+        """Stream offender rows (dicts) without loading the whole table at once.
+
+        When *limit* is set, ``newest_first=True`` scans highest ids first so
+        recent scrapes/imports are included in misclassification Analyze.
+        """
         offset = max(0, int(offset or 0))
+        order = "DESC" if newest_first else "ASC"
         if limit is None or int(limit) <= 0:
-            sql = "SELECT * FROM offenders ORDER BY id ASC"
+            sql = f"SELECT * FROM offenders ORDER BY id {order}"
             params: tuple = ()
             if offset:
                 sql += " LIMIT -1 OFFSET ?"
                 params = (offset,)
         else:
-            sql = "SELECT * FROM offenders ORDER BY id ASC LIMIT ? OFFSET ?"
+            sql = f"SELECT * FROM offenders ORDER BY id {order} LIMIT ? OFFSET ?"
             params = (int(limit), offset)
         cur = self._conn.execute(sql, params)
         for row in cur:
@@ -684,7 +703,396 @@ class Database:
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
-    # ---- Ethnicity analysis ----
+    # ---- Duplicate detection / removal ----
+
+    # Shared CAPTCHA / search / portal URLs must not collapse many people into one.
+    _GENERIC_URL_MARKERS = (
+        "captcha",
+        "login",
+        "signin",
+        "sign-in",
+        "challenge",
+        "cloudflare",
+        "just a moment",
+        "cf-browser",
+        "accessdenied",
+        "access-denied",
+        "botdetect",
+        "search-public",
+        "publicregistrantsearch",
+        "sor_public",
+        "sort_public",
+        "coveredoffender",  # Hawaii landing (often non-unique)
+    )
+
+    @classmethod
+    def is_generic_source_url(cls, url: str, *, group_count: int = 1) -> bool:
+        """
+        True when *url* is likely a shared portal/CAPTCHA page, not a unique
+        offender report. High fan-out groups are treated as generic too.
+        """
+        u = (url or "").strip().lower()
+        if not u:
+            return True
+        compact = re.sub(r"[\s_\-]+", "", u)
+        for m in cls._GENERIC_URL_MARKERS:
+            if m.replace("-", "").replace("_", "").replace(" ", "") in compact:
+                return True
+            if m in u:
+                return True
+        # Bare search home pages (no query / id segment)
+        if group_count >= 8:
+            return True
+        # Extremely short path after host → landing page
+        try:
+            from urllib.parse import urlparse
+
+            path = (urlparse(u).path or "").strip("/")
+            if path.count("/") == 0 and len(path) < 12 and group_count > 2:
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _row_richness(row: Dict[str, Any]) -> int:
+        """How complete a record is — higher is better when choosing a survivor."""
+        score = 0
+        for col, weight in (
+            ("race", 3),
+            ("crime", 2),
+            ("offense_description", 2),
+            ("photo_path", 3),
+            ("report_html_path", 2),
+            ("source_url", 2),
+            ("photo_url", 1),
+            ("ethnicity", 1),
+            ("date_of_birth", 1),
+            ("address", 1),
+            ("county", 1),
+            ("city", 1),
+            ("gender", 1),
+            ("risk_level", 1),
+        ):
+            val = row.get(col)
+            if val is not None and str(val).strip():
+                score += weight
+        return score
+
+    @staticmethod
+    def _normalize_dup_key_part(value: Any) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    def _duplicate_group_sql(self, strategy: str) -> Tuple[str, str]:
+        """
+        Return (select_sql, key_label) for a strategy.
+
+        select_sql must yield rows with columns: dup_key, cnt, id_list
+        (id_list = comma-separated ids).
+        """
+        s = (strategy or "source_url").strip().lower()
+        if s == "source_url":
+            sql = """
+                SELECT TRIM(source_url) AS dup_key,
+                       COUNT(*) AS cnt,
+                       GROUP_CONCAT(id) AS id_list
+                FROM offenders
+                WHERE source_url IS NOT NULL AND TRIM(source_url) != ''
+                GROUP BY TRIM(source_url)
+                HAVING COUNT(*) > 1
+                ORDER BY cnt DESC
+            """
+            return sql, "source_url"
+        if s == "external_id":
+            sql = """
+                SELECT LOWER(TRIM(external_id)) || '|' ||
+                       UPPER(COALESCE(NULLIF(TRIM(state), ''),
+                                      NULLIF(TRIM(source_state), ''), '')) AS dup_key,
+                       COUNT(*) AS cnt,
+                       GROUP_CONCAT(id) AS id_list
+                FROM offenders
+                WHERE external_id IS NOT NULL AND TRIM(external_id) != ''
+                GROUP BY LOWER(TRIM(external_id)),
+                         UPPER(COALESCE(NULLIF(TRIM(state), ''),
+                                        NULLIF(TRIM(source_state), ''), ''))
+                HAVING COUNT(*) > 1
+                ORDER BY cnt DESC
+            """
+            return sql, "external_id+state"
+        if s == "name_state_dob":
+            sql = """
+                SELECT LOWER(TRIM(COALESCE(first_name, ''))) || '|' ||
+                       LOWER(TRIM(COALESCE(last_name, ''))) || '|' ||
+                       UPPER(COALESCE(NULLIF(TRIM(state), ''),
+                                      NULLIF(TRIM(source_state), ''), '')) || '|' ||
+                       LOWER(TRIM(date_of_birth)) AS dup_key,
+                       COUNT(*) AS cnt,
+                       GROUP_CONCAT(id) AS id_list
+                FROM offenders
+                WHERE last_name IS NOT NULL AND TRIM(last_name) != ''
+                  AND date_of_birth IS NOT NULL AND TRIM(date_of_birth) != ''
+                GROUP BY LOWER(TRIM(COALESCE(first_name, ''))),
+                         LOWER(TRIM(COALESCE(last_name, ''))),
+                         UPPER(COALESCE(NULLIF(TRIM(state), ''),
+                                        NULLIF(TRIM(source_state), ''), '')),
+                         LOWER(TRIM(date_of_birth))
+                HAVING COUNT(*) > 1
+                ORDER BY cnt DESC
+            """
+            return sql, "name+state+dob"
+        if s == "name_state":
+            sql = """
+                SELECT LOWER(TRIM(COALESCE(first_name, ''))) || '|' ||
+                       LOWER(TRIM(COALESCE(last_name, ''))) || '|' ||
+                       UPPER(COALESCE(NULLIF(TRIM(state), ''),
+                                      NULLIF(TRIM(source_state), ''), '')) AS dup_key,
+                       COUNT(*) AS cnt,
+                       GROUP_CONCAT(id) AS id_list
+                FROM offenders
+                WHERE last_name IS NOT NULL AND TRIM(last_name) != ''
+                  AND (
+                    (state IS NOT NULL AND TRIM(state) != '')
+                    OR (source_state IS NOT NULL AND TRIM(source_state) != '')
+                  )
+                GROUP BY LOWER(TRIM(COALESCE(first_name, ''))),
+                         LOWER(TRIM(COALESCE(last_name, ''))),
+                         UPPER(COALESCE(NULLIF(TRIM(state), ''),
+                                        NULLIF(TRIM(source_state), ''), ''))
+                HAVING COUNT(*) > 1
+                ORDER BY cnt DESC
+            """
+            return sql, "name+state"
+        raise ValueError(
+            f"Unknown duplicate strategy {strategy!r}; "
+            f"choose one of {', '.join(DUPLICATE_STRATEGIES)}"
+        )
+
+    def find_duplicate_groups(
+        self,
+        strategy: str = "source_url",
+        *,
+        limit_groups: Optional[int] = None,
+        include_unsafe: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find groups of duplicate offender rows for *strategy*.
+
+        Each group: {
+          strategy, key, count, ids, keep_id, remove_ids, keep_preview,
+          richness, safe (False for shared CAPTCHA/portal URL clusters)
+        }
+        """
+        sql, key_label = self._duplicate_group_sql(strategy)
+        rows = self._conn.execute(sql).fetchall()
+        groups: List[Dict[str, Any]] = []
+        for row in rows:
+            d = dict(row)
+            id_list = str(d.get("id_list") or "")
+            ids = [int(x) for x in id_list.split(",") if x.strip().isdigit()]
+            if len(ids) < 2:
+                continue
+            members = []
+            for rid in ids:
+                rec = self.get_offender_by_id(rid)
+                if rec:
+                    members.append(rec)
+            if len(members) < 2:
+                continue
+            # Prefer richest row; break ties with lowest id (stable survivor)
+            members.sort(
+                key=lambda r: (-self._row_richness(r), int(r.get("id") or 0))
+            )
+            keep = members[0]
+            remove_ids = [int(m["id"]) for m in members[1:]]
+            keep_name = (
+                f"{keep.get('first_name') or ''} {keep.get('last_name') or ''}"
+            ).strip() or (keep.get("full_name") or "—")
+            key = d.get("dup_key") or ""
+            safe = True
+            if (strategy or "").lower() == "source_url":
+                safe = not self.is_generic_source_url(str(key), group_count=len(members))
+            if not include_unsafe and not safe:
+                continue
+            groups.append({
+                "strategy": strategy,
+                "key_label": key_label,
+                "key": key,
+                "count": len(members),
+                "ids": [int(m["id"]) for m in members],
+                "keep_id": int(keep["id"]),
+                "remove_ids": remove_ids,
+                "keep_preview": keep_name,
+                "richness": self._row_richness(keep),
+                "safe": safe,
+                "members": members,
+            })
+            if limit_groups is not None and len(groups) >= int(limit_groups):
+                break
+        return groups
+
+    def count_duplicates(
+        self,
+        strategies: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Summary of duplicate groups/rows per strategy.
+
+        Returns {
+          total_offenders,
+          by_strategy: {name: {groups, extra_rows, safe_groups, safe_extra_rows, unsafe_groups}},
+          total_extra_rows, total_safe_extra_rows
+        }
+        """
+        strats = strategies or ["source_url", "external_id", "name_state_dob"]
+        total = self.get_total_count()
+        by: Dict[str, Dict[str, int]] = {}
+        total_extra = 0
+        total_safe_extra = 0
+        for s in strats:
+            try:
+                groups = self.find_duplicate_groups(s, include_unsafe=True)
+            except ValueError:
+                continue
+            groups_n = len(groups)
+            extra = sum(max(0, g["count"] - 1) for g in groups)
+            safe_groups = [g for g in groups if g.get("safe", True)]
+            unsafe_groups = groups_n - len(safe_groups)
+            safe_extra = sum(max(0, g["count"] - 1) for g in safe_groups)
+            by[s] = {
+                "groups": groups_n,
+                "extra_rows": extra,
+                "safe_groups": len(safe_groups),
+                "safe_extra_rows": safe_extra,
+                "unsafe_groups": unsafe_groups,
+            }
+            total_extra += extra
+            total_safe_extra += safe_extra
+        return {
+            "total_offenders": total,
+            "by_strategy": by,
+            "total_extra_rows": total_extra,
+            "total_safe_extra_rows": total_safe_extra,
+        }
+
+    def remove_duplicates(
+        self,
+        strategy: str = "source_url",
+        *,
+        dry_run: bool = False,
+        merge_fields: bool = True,
+        limit_groups: Optional[int] = None,
+        safe_only: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Remove duplicate rows for *strategy*, keeping the richest record per group.
+
+        When *merge_fields* is True, non-empty fields from deleted rows fill blanks
+        on the kept row before deletion.
+
+        *safe_only* (default True): skip shared CAPTCHA/portal URL clusters so
+        many different offenders are not collapsed into one row.
+
+        Returns {
+          strategy, dry_run, groups, kept, deleted, deleted_ids, merged_fields,
+          skipped_unsafe
+        }
+        """
+        groups = self.find_duplicate_groups(
+            strategy, limit_groups=limit_groups, include_unsafe=True
+        )
+        deleted_ids: List[int] = []
+        kept = 0
+        merged_n = 0
+        skipped_unsafe = 0
+        acted_groups = 0
+
+        for g in groups:
+            if safe_only and not g.get("safe", True):
+                skipped_unsafe += 1
+                continue
+            keep_id = int(g["keep_id"])
+            remove_ids = list(g["remove_ids"])
+            if not remove_ids:
+                continue
+            keep_row = self.get_offender_by_id(keep_id)
+            if not keep_row:
+                continue
+            kept += 1
+            acted_groups += 1
+
+            if merge_fields:
+                updates: Dict[str, Any] = {}
+                for rid in remove_ids:
+                    loser = self.get_offender_by_id(rid)
+                    if not loser:
+                        continue
+                    for col in _OFFENDER_INSERT_COLUMNS:
+                        cur = keep_row.get(col)
+                        alt = loser.get(col)
+                        if (cur is None or str(cur).strip() == "") and alt is not None and str(alt).strip():
+                            updates[col] = alt
+                            keep_row[col] = alt
+                if updates and not dry_run:
+                    self.update_offender(keep_id, updates)
+                    merged_n += len(updates)
+
+            if not dry_run and remove_ids:
+                placeholders = ",".join("?" for _ in remove_ids)
+                self._conn.execute(
+                    f"DELETE FROM offenders WHERE id IN ({placeholders})",
+                    remove_ids,
+                )
+            deleted_ids.extend(remove_ids)
+
+        if not dry_run and deleted_ids:
+            self._conn.commit()
+
+        return {
+            "strategy": strategy,
+            "dry_run": dry_run,
+            "groups": acted_groups,
+            "kept": kept,
+            "deleted": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+            "merged_fields": merged_n,
+            "skipped_unsafe": skipped_unsafe,
+        }
+
+    def remove_duplicates_all(
+        self,
+        strategies: Optional[List[str]] = None,
+        *,
+        dry_run: bool = False,
+        merge_fields: bool = True,
+        safe_only: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Run remove_duplicates for each strategy in order (strongest first).
+
+        Default order: source_url → external_id → name_state_dob
+        (name_state is weaker and not included unless requested).
+        """
+        strats = strategies or ["source_url", "external_id", "name_state_dob"]
+        results = []
+        total_deleted = 0
+        total_skipped_unsafe = 0
+        for s in strats:
+            r = self.remove_duplicates(
+                s,
+                dry_run=dry_run,
+                merge_fields=merge_fields,
+                safe_only=safe_only,
+            )
+            results.append(r)
+            total_deleted += int(r.get("deleted") or 0)
+            total_skipped_unsafe += int(r.get("skipped_unsafe") or 0)
+        return {
+            "dry_run": dry_run,
+            "strategies": results,
+            "total_deleted": total_deleted,
+            "total_skipped_unsafe": total_skipped_unsafe,
+            "total_offenders": self.get_total_count(),
+        }
 
     def find_misclassifications(
         self,
@@ -724,6 +1132,76 @@ class Database:
 
     # ---- CSV import/export ----
 
+    def import_records(
+        self,
+        records: List[Dict[str, Any]],
+        state: Optional[str] = None,
+        *,
+        skip_existing_urls: bool = True,
+        source_hint: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """
+        Import in-memory offender dicts (e.g. scrape results) into the DB.
+
+        Same normalization / de-dupe rules as ``import_csv``.
+        Returns dict: {imported, skipped, total_rows}.
+        """
+        prepared: List[Dict[str, Any]] = []
+        for row in records or []:
+            if not isinstance(row, dict):
+                continue
+            record = dict(row)
+            self._normalize_record(record)
+            if state:
+                record["state"] = state
+                record.setdefault("source_state", state)
+            if not record.get("source_state") and record.get("state"):
+                record["source_state"] = record["state"]
+            # Filename-style hint (e.g. "ga_offenders") when state not set
+            if (
+                not record.get("state")
+                and not record.get("source_state")
+                and source_hint
+            ):
+                stem = (
+                    str(source_hint)
+                    .lower()
+                    .replace("_offenders", "")
+                    .replace("_data", "")
+                    .replace(".csv", "")
+                )
+                if len(stem) == 2 and stem.isalpha():
+                    record["state"] = stem.upper()
+                    record["source_state"] = stem.upper()
+            if not record.get("crime"):
+                record["crime"] = (
+                    record.get("offense_description")
+                    or record.get("offense_type")
+                    or record.get("offense")
+                    or record.get("charge")
+                )
+            prepared.append(record)
+
+        total_rows = len(prepared)
+        if skip_existing_urls:
+            existing_urls = self.existing_source_urls()
+            kept: List[Dict[str, Any]] = []
+            skipped = 0
+            for rec in prepared:
+                url = (rec.get("source_url") or rec.get("external_id") or "").strip()
+                if url and url in existing_urls:
+                    skipped += 1
+                    continue
+                if url:
+                    existing_urls.add(url)
+                kept.append(rec)
+            prepared = kept
+        else:
+            skipped = 0
+
+        imported = self.insert_offenders_batch(prepared) if prepared else 0
+        return {"imported": imported, "skipped": skipped, "total_rows": total_rows}
+
     def import_csv(
         self,
         csv_path: str,
@@ -746,51 +1224,21 @@ class Database:
 
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             reader = csv_module.DictReader(f)
-            records = []
-            for row in reader:
-                record = dict(row)
-                self._normalize_record(record)
-                if state:
-                    record["state"] = state
-                    record.setdefault("source_state", state)
-                # Infer source_state from filename like fl_offenders.csv / ga_offenders.csv
-                if not record.get("source_state") and not record.get("state"):
-                    stem = path.stem.lower().replace("_offenders", "").replace("_data", "")
-                    if len(stem) == 2 and stem.isalpha():
-                        record["state"] = stem.upper()
-                        record["source_state"] = stem.upper()
-                elif not record.get("source_state") and record.get("state"):
-                    record["source_state"] = record["state"]
-                # Crime aliases
-                if not record.get("crime"):
-                    record["crime"] = (
-                        record.get("offense_description")
-                        or record.get("offense_type")
-                        or record.get("offense")
-                        or record.get("charge")
-                    )
-                records.append(record)
+            raw_rows = [dict(row) for row in reader]
 
-        total_rows = len(records)
-        if skip_existing_urls:
-            # One set load beats N SELECT 1 queries (critical for large re-imports)
-            existing_urls = self.existing_source_urls()
-            kept = []
-            skipped = 0
-            for rec in records:
-                url = (rec.get("source_url") or rec.get("external_id") or "").strip()
-                if url and url in existing_urls:
-                    skipped += 1
-                    continue
-                if url:
-                    existing_urls.add(url)  # de-dupe within the same CSV batch
-                kept.append(rec)
-            records = kept
-        else:
-            skipped = 0
+        # Infer state from filename like fl_offenders.csv when not passed
+        st = state
+        if not st:
+            stem = path.stem.lower().replace("_offenders", "").replace("_data", "")
+            if len(stem) == 2 and stem.isalpha():
+                st = stem.upper()
 
-        imported = self.insert_offenders_batch(records) if records else 0
-        return {"imported": imported, "skipped": skipped, "total_rows": total_rows}
+        return self.import_records(
+            raw_rows,
+            state=st,
+            skip_existing_urls=skip_existing_urls,
+            source_hint=path.stem,
+        )
 
     def import_csv_directory(
         self,
@@ -932,6 +1380,20 @@ class Database:
                 new_record.setdefault("last_name", parts[-1])
             elif parts:
                 new_record.setdefault("last_name", parts[0])
+
+        # Derive full_name from first+last when scrapers export split names only
+        if not new_record.get("full_name"):
+            parts = [
+                str(p).strip()
+                for p in (new_record.get("first_name"), new_record.get("last_name"))
+                if p and str(p).strip()
+            ]
+            if parts:
+                new_record["full_name"] = " ".join(parts)
+
+        # Keep source_state in sync when only state is present
+        if new_record.get("state") and not new_record.get("source_state"):
+            new_record["source_state"] = new_record["state"]
 
         record.clear()
         record.update(new_record)
