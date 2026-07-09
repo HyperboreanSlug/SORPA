@@ -10,7 +10,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scraper.nsopw_client import NSOPWClient, NSOPWOffender
-from scraper.nsopw_builder import NSOPWEthnicDatabaseBuilder
+from scraper.nsopw_builder import (
+    NSOPWEthnicDatabaseBuilder,
+    compact_search_plan,
+    last_matches_target_surnames,
+    last_name_search_prefix,
+)
 from scraper.report_fetcher import ReportFetcher
 
 
@@ -200,6 +205,60 @@ class ReportFetcherTests(unittest.TestCase):
         self.assertEqual(data.get("agree"), "1")
         self.assertEqual(data.get("continue"), "Continue")
         self.assertEqual(data.get("fwd"), "abc123")
+
+
+class CompactPrefixTests(unittest.TestCase):
+    def test_last_prefix_min_combined_3(self):
+        self.assertEqual(last_name_search_prefix("Ahmed", "M"), "Ah")
+        self.assertEqual(last_name_search_prefix("Ahmed", "MO"), "A")
+        self.assertEqual(last_name_search_prefix("Li", "M"), "Li")
+        self.assertEqual(last_name_search_prefix("O", "M"), "O")  # still short
+
+    def test_compact_plan_collapses_shared_prefix(self):
+        pairs = [("Ahmed", "Arabic"), ("Ahmad", "Arabic"), ("Ali", "Arabic")]
+        plan = compact_search_plan(pairs, ["M"])
+        # M+Ah covers Ahmed+Ahmad; M+Al covers Ali → 2 queries not 3
+        keys = {(f.upper(), p.upper()) for f, p, _e, _s in plan}
+        self.assertIn(("M", "AH"), keys)
+        self.assertIn(("M", "AL"), keys)
+        self.assertEqual(len(plan), 2)
+        for _f, pref, _e, covered in plan:
+            if pref.upper() == "AH":
+                self.assertEqual(set(c.lower() for c in covered), {"ahmed", "ahmad"})
+
+    def test_last_matches_targets_filters_off_list(self):
+        self.assertTrue(last_matches_target_surnames("Ahmed", ["Ahmed", "Ahmad"]))
+        self.assertTrue(last_matches_target_surnames("AHMAD", ["Ahmed", "Ahmad"]))
+        self.assertFalse(last_matches_target_surnames("Ahern", ["Ahmed", "Ahmad"]))
+        self.assertTrue(last_matches_target_surnames("Garciaz", ["Garcia"]))
+
+    def test_ethnicity_bucket_split(self):
+        """Hits with list surnames vs other surnames for the same short prefix."""
+        eth_list = ["Ahmed", "Ahmad"]
+        samples = [
+            ("MOMEN", "AHMED", True),
+            ("MICHAEL", "AHERN", False),
+            ("MUBASHAR", "AHMAD", True),
+            ("MATTHEW", "ASHLEY", False),
+        ]
+        matched, other = [], []
+        for _f, last, expect_match in samples:
+            is_m = last_matches_target_surnames(last, eth_list)
+            self.assertEqual(is_m, expect_match, last)
+            (matched if is_m else other).append(last)
+        self.assertEqual(matched, ["AHMED", "AHMAD"])
+        self.assertEqual(other, ["AHERN", "ASHLEY"])
+
+    def test_compact_fewer_than_naive(self):
+        pairs = [(f"Name{i:03d}xyz", "X") for i in range(50)]
+        # Many unique 2-letter prefixes from Name### - actually all start with "Na"
+        # Better: varied surnames
+        pairs = [(s, "H") for s in ("Garcia", "Garza", "Martinez", "Marquez", "Lopez", "Long")]
+        plan = compact_search_plan(pairs, list("ABC"))
+        naive = len(pairs) * 3
+        self.assertLess(len(plan), naive)
+        # Ga* collapse Garcia+Garza; Ma* Martinez+Marquez; Lo* Lopez+Long
+        self.assertEqual(len(plan), 9)  # 3 prefixes × 3 firsts
 
 
 class BuilderSurnameTests(unittest.TestCase):

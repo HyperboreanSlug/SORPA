@@ -378,7 +378,7 @@ def cmd_nsopw(args: argparse.Namespace) -> None:
     print("  NSOPW Ethnic Name Search → Local Database")
     print("=" * 60)
     print("  Source: https://www.nsopw.gov/")
-    print("  Partial first names (e.g. M + surname) reduce query count.")
+    print("  Short partials (e.g. M + AH) meet the 3-letter min and collapse surnames.")
     print("  Rate limits enforced; Conditions of Use apply.")
     print("=" * 60 + "\n")
 

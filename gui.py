@@ -9,6 +9,7 @@ Double-click run_gui.bat (recommended) or gui.py.
 from __future__ import annotations
 
 import csv
+import json
 import os
 import queue
 import subprocess
@@ -226,7 +227,97 @@ def _tree_frame(parent) -> tuple[ctk.CTkFrame, ttk.Treeview]:
     vsb.pack(side="right", fill="y", padx=(0, 4), pady=4)
     hsb.pack(side="bottom", fill="x", padx=4, pady=(0, 4))
     tree.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+    wrap._tree_vsb = vsb  # type: ignore[attr-defined]
+    wrap._tree_hsb = hsb  # type: ignore[attr-defined]
     return wrap, tree
+
+
+def _bind_tree_scroll_isolation(tree: ttk.Treeview, wrap: ctk.CTkFrame) -> None:
+    """
+    When the pointer is over the inserts tree, wheel scrolls only the tree —
+    not a parent CTkScrollableFrame (which uses bind_all MouseWheel).
+    """
+    def _on_wheel(event):
+        delta = getattr(event, "delta", 0) or 0
+        if delta:
+            # Windows / macOS
+            steps = int(-1 * (delta / 120)) if abs(delta) >= 120 else int(-1 * delta)
+            if steps == 0:
+                steps = -1 if delta > 0 else 1
+            tree.yview_scroll(steps, "units")
+        else:
+            # Linux Button-4/5
+            num = getattr(event, "num", 0)
+            if num == 4:
+                tree.yview_scroll(-3, "units")
+            elif num == 5:
+                tree.yview_scroll(3, "units")
+        return "break"
+
+    targets = [tree, wrap]
+    vsb = getattr(wrap, "_tree_vsb", None)
+    hsb = getattr(wrap, "_tree_hsb", None)
+    if vsb is not None:
+        targets.append(vsb)
+    if hsb is not None:
+        targets.append(hsb)
+    for w in targets:
+        w.bind("<MouseWheel>", _on_wheel)
+        w.bind("<Button-4>", _on_wheel)
+        w.bind("<Button-5>", _on_wheel)
+
+
+def _enable_tree_column_sort(
+    tree: ttk.Treeview,
+    columns: List[str],
+    labels: Optional[Dict[str, str]] = None,
+) -> None:
+    """Click column headers to sort ascending/descending (toggle)."""
+    labels = labels or {c: c.upper() for c in columns}
+    state: Dict[str, Any] = {"col": None, "reverse": False}
+
+    def _sort_key(val: str):
+        s = (val or "").strip()
+        # numeric-ish first for mixed columns
+        try:
+            return (0, float(s.replace(",", "")))
+        except ValueError:
+            return (1, s.casefold())
+
+    def apply_sort(col: str, reverse: bool, update_headings: bool = True) -> None:
+        rows = [(tree.set(iid, col), iid) for iid in tree.get_children("")]
+        rows.sort(key=lambda t: _sort_key(t[0]), reverse=reverse)
+        for idx, (_val, iid) in enumerate(rows):
+            tree.move(iid, "", idx)
+        state["col"] = col
+        state["reverse"] = reverse
+        tree._sort_state = state  # type: ignore[attr-defined]
+        if update_headings:
+            for c in columns:
+                base = labels.get(c, c.upper())
+                if c == col:
+                    arrow = " ▼" if reverse else " ▲"
+                    tree.heading(
+                        c,
+                        text=base + arrow,
+                        command=lambda cc=c: on_heading(cc),
+                    )
+                else:
+                    tree.heading(c, text=base, command=lambda cc=c: on_heading(cc))
+
+    def on_heading(col: str) -> None:
+        reverse = state["col"] == col and not state["reverse"]
+        apply_sort(col, reverse)
+
+    def reapply() -> None:
+        col = state.get("col")
+        if col:
+            apply_sort(col, bool(state.get("reverse")), update_headings=False)
+
+    tree._sort_state = state  # type: ignore[attr-defined]
+    tree._reapply_sort = reapply  # type: ignore[attr-defined]
+    for c in columns:
+        tree.heading(c, text=labels.get(c, c.upper()), command=lambda cc=c: on_heading(cc))
 
 
 # ===========================================================================
@@ -792,15 +883,23 @@ class ArchiverApp(ctk.CTk):
     # -----------------------------------------------------------------------
     def _build_nsopw(self, tab):
         tab.configure(fg_color=C["surface"])
+        # Controls scroll independently of the Recent inserts table (nested wheel fix).
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
         scroll = ctk.CTkScrollableFrame(tab, fg_color=C["surface"])
-        scroll.pack(fill="both", expand=True, padx=8, pady=8)
+        scroll.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
 
         _section_label(scroll, "NSOPW ethnic name search").pack(anchor="w", padx=8, pady=(4, 2))
         _muted(
             scroll,
-            "Searches the selected ethnic surname list with A–Z first-name prefixes (partial match). "
-            "Race comes from each jurisdiction detail sheet (not NSOPW search itself). "
-            "Use Resume + New HTML only to continue a long run without redoing work.",
+            "Searches the selected ethnic surname list with A–Z first-name prefixes and short "
+            "last-name prefixes (API min first+last = 3 letters, e.g. M + AH → Mohamed Ahmed). "
+            "Shared last prefixes collapse many surnames into one query. "
+            "Race comes from each jurisdiction detail sheet. "
+            "Use Resume + New HTML only to continue a long run without redoing work. "
+            "Click column headers in Recent inserts to sort.",
         ).pack(anchor="w", padx=8, pady=(0, 12))
 
         self.nsopw_first_mode = "initials"
@@ -1052,27 +1151,67 @@ class ArchiverApp(ctk.CTk):
         )
         self.nsopw_status.pack(fill="x", padx=10, pady=(0, 8))
 
-        prev = _card(scroll)
-        prev.pack(fill="both", expand=True, padx=4, pady=(4, 12))
-        _section_label(prev, "Recent inserts (live) · race from detail sheet · double-click HTML/URL").pack(
-            anchor="w", padx=14, pady=(12, 6)
+        # Recent inserts live outside the controls scrollable so wheel over the
+        # table never pans the whole NSOPW form (CTkScrollableFrame bind_all).
+        prev = _card(tab)
+        prev.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        _section_label(
+            prev,
+            "Recent inserts (live) · ethnicity match vs other · click headers to sort · double-click HTML/URL",
+        ).pack(anchor="w", padx=14, pady=(12, 4))
+        _muted(
+            prev,
+            "Primary tab: surnames in the selected ethnicity list. "
+            "Other surnames tab: still saved to DB/HTML, filtered out of the ethnicity view.",
+        ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        insert_tabs = ctk.CTkTabview(
+            prev,
+            fg_color=C["panel"],
+            segmented_button_fg_color=C["elevated"],
+            segmented_button_selected_color=C["accent_dim"],
+            segmented_button_selected_hover_color=C["border"],
+            segmented_button_unselected_color=C["elevated"],
+            segmented_button_unselected_hover_color=C["border"],
+            text_color=C["text"],
         )
-        wrap, self.nsopw_tree = _tree_frame(prev)
-        wrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
-        self.nsopw_tree.configure(
-            columns=("name", "state", "race", "url", "html"), show="headings"
-        )
-        for c, w in zip(
-            ("name", "state", "race", "url", "html"),
-            (150, 50, 110, 280, 180),
-        ):
-            self.nsopw_tree.heading(c, text=c.upper())
-            self.nsopw_tree.column(c, width=w)
-        self.nsopw_tree.bind("<Double-1>", self._nsopw_open_selected)
+        insert_tabs.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        tab_matched = insert_tabs.add("Ethnicity match")
+        tab_other = insert_tabs.add("Other surnames")
+        self.nsopw_insert_tabs = insert_tabs
+
+        cols = ("name", "state", "race", "url", "html")
+        col_labels = {
+            "name": "NAME",
+            "state": "STATE",
+            "race": "RACE",
+            "url": "URL",
+            "html": "HTML",
+        }
+        col_widths = (150, 50, 110, 280, 180)
+
+        def _setup_insert_tree(parent) -> ttk.Treeview:
+            wrap, tree = _tree_frame(parent)
+            wrap.pack(fill="both", expand=True, padx=4, pady=4)
+            tree.configure(columns=cols, show="headings")
+            for c, w in zip(cols, col_widths):
+                tree.column(c, width=w)
+            _enable_tree_column_sort(tree, list(cols), labels=col_labels)
+            _bind_tree_scroll_isolation(tree, wrap)
+            tree.bind("<Double-1>", self._nsopw_open_selected)
+            return tree
+
+        self.nsopw_tree = _setup_insert_tree(tab_matched)
+        self.nsopw_tree_other = _setup_insert_tree(tab_other)
+        self._nsopw_insert_count = 0
+        self._nsopw_other_count = 0
 
     def _nsopw_clear_tree(self):
         self.nsopw_tree.delete(*self.nsopw_tree.get_children())
+        if getattr(self, "nsopw_tree_other", None) is not None:
+            self.nsopw_tree_other.delete(*self.nsopw_tree_other.get_children())
         self._nsopw_insert_count = 0
+        self._nsopw_other_count = 0
 
     def _nsopw_toggle_surname_cap(self):
         """Enable max-surnames entry only when the limit toggle is on."""
@@ -1123,7 +1262,11 @@ class ArchiverApp(ctk.CTk):
         """Show how many unique surnames the current filters select."""
         try:
             from scraper.ethnic_names import get_ethnic_database
-            from scraper.nsopw_builder import FIRST_INITIALS, NSOPWEthnicDatabaseBuilder
+            from scraper.nsopw_builder import (
+                FIRST_INITIALS,
+                NSOPWEthnicDatabaseBuilder,
+                estimate_compact_query_count,
+            )
 
             eth, sub, all_surnames, surnames_limit = self._nsopw_surname_selection_params()
             # Avoid full builder init (HTTP clients) — only need ethnic_db for selection
@@ -1137,13 +1280,14 @@ class ArchiverApp(ctk.CTk):
                 subcategory=sub,
             )
             n = len(pairs)
-            # Default first-mode is A–Z initials
-            est = n * len(FIRST_INITIALS)
+            naive = n * len(FIRST_INITIALS)
+            est = estimate_compact_query_count(pairs, FIRST_INITIALS)
             scope = f"{eth}" + (f" / {sub}" if sub and sub != "all" else " / all groups")
             self.nsopw_surname_count_label.configure(
                 text=(
-                    f"Surnames to search: {n:,}  ({scope})  ·  "
-                    f"Est. NSOPW queries (A–Z prefixes): {est:,}"
+                    f"Surnames in list: {n:,}  ({scope})  ·  "
+                    f"Est. NSOPW queries (short prefixes): {est:,}"
+                    + (f"  (was {naive:,} full×A–Z)" if naive != est else "")
                 )
             )
         except Exception as e:
@@ -1152,7 +1296,7 @@ class ArchiverApp(ctk.CTk):
             )
 
     def _nsopw_append_row(self, record: Dict[str, Any]) -> None:
-        """UI-thread: prepend a live insert into the Recent inserts table."""
+        """UI-thread: route insert into ethnicity-match or other-surnames table."""
         name = (
             (record.get("full_name") or "").strip()
             or f"{record.get('first_name') or ''} {record.get('last_name') or ''}".strip()
@@ -1171,15 +1315,45 @@ class ArchiverApp(ctk.CTk):
             (record.get("source_url") or "")[:90],
             (record.get("report_html_path") or "")[:70],
         )
-        self.nsopw_tree.insert("", 0, values=vals)
+
+        bucket = (record.get("nsopw_result_bucket") or "").strip().lower()
+        if not bucket:
+            # Fallback from flags JSON if builder field missing
+            try:
+                flags = record.get("flags")
+                fl = json.loads(flags) if isinstance(flags, str) else (flags or [])
+                if "other_surname" in fl:
+                    bucket = "other"
+                else:
+                    bucket = "matched"
+            except Exception:
+                bucket = "matched"
+        is_other = bucket == "other"
+        tree = self.nsopw_tree_other if is_other else self.nsopw_tree
+
+        sort_state = getattr(tree, "_sort_state", None) or {}
+        if sort_state.get("col"):
+            tree.insert("", "end", values=vals)
+        else:
+            tree.insert("", 0, values=vals)
         # Cap live table size
-        kids = self.nsopw_tree.get_children()
+        kids = tree.get_children()
         if len(kids) > 200:
             for iid in kids[200:]:
-                self.nsopw_tree.delete(iid)
-        self._nsopw_insert_count += 1
+                tree.delete(iid)
+        reapply = getattr(tree, "_reapply_sort", None)
+        if callable(reapply) and sort_state.get("col"):
+            reapply()
+
+        if is_other:
+            self._nsopw_other_count += 1
+        else:
+            self._nsopw_insert_count += 1
         self.nsopw_status.configure(
-            text=f"Running… {self._nsopw_insert_count} inserted (live)"
+            text=(
+                f"Running… matched {self._nsopw_insert_count} · "
+                f"other surnames {self._nsopw_other_count} (live)"
+            )
         )
 
     def _nsopw_open_data_folder(self):
@@ -1238,12 +1412,15 @@ class ArchiverApp(ctk.CTk):
 
         self._nsopw_cancel = False
         self._nsopw_insert_count = 0
+        self._nsopw_other_count = 0
         self._set_running(True)
         self.nsopw_start_btn.configure(state="disabled")
         self.nsopw_cancel_btn.configure(state="normal")
         self.nsopw_progress.start()
         self.nsopw_status.configure(text="Running NSOPW search…")
         self.nsopw_tree.delete(*self.nsopw_tree.get_children())
+        if getattr(self, "nsopw_tree_other", None) is not None:
+            self.nsopw_tree_other.delete(*self.nsopw_tree_other.get_children())
 
         def log(msg):
             self.log_queue.put(msg)
@@ -1288,9 +1465,11 @@ class ArchiverApp(ctk.CTk):
                     self.nsopw_cancel_btn.configure(state="disabled")
                     self.nsopw_progress.stop()
                     self.nsopw_progress.set(0)
+                    matched_n = getattr(stats, "inserted_matched", stats.inserted)
+                    other_n = getattr(stats, "inserted_other", 0)
                     self.nsopw_status.configure(
                         text=(
-                            f"Done · {stats.inserted} inserted · "
+                            f"Done · matched {matched_n} · other {other_n} · "
                             f"{stats.reports_with_race} with race · "
                             f"{stats.html_saved} HTML · {stats.searches} searches · "
                             f"{stats.searches_skipped} resumed"
@@ -1300,7 +1479,8 @@ class ArchiverApp(ctk.CTk):
                     messagebox.showinfo(
                         "NSOPW complete",
                         (
-                            f"Inserted {stats.inserted}\n"
+                            f"Inserted {stats.inserted} "
+                            f"(ethnicity match {matched_n}, other surnames {other_n})\n"
                             f"New searches: {stats.searches}\n"
                             f"Skipped completed searches: {stats.searches_skipped}\n"
                             f"Reports with race: {stats.reports_with_race}\n"
@@ -1328,11 +1508,21 @@ class ArchiverApp(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _nsopw_open_selected(self, _event=None):
-        sel = self.nsopw_tree.selection()
+    def _nsopw_open_selected(self, event=None):
+        tree = event.widget if event is not None else self.nsopw_tree
+        if not isinstance(tree, ttk.Treeview):
+            tree = self.nsopw_tree
+        sel = tree.selection()
+        if not sel and getattr(self, "nsopw_tree_other", None) is not None:
+            # Fallback: selection on the other tab
+            for t in (self.nsopw_tree, self.nsopw_tree_other):
+                if t.selection():
+                    tree = t
+                    sel = t.selection()
+                    break
         if not sel:
             return
-        vals = self.nsopw_tree.item(sel[0], "values")
+        vals = tree.item(sel[0], "values")
         # columns: name, state, race, url, html
         if len(vals) < 5:
             # backward-compatible if old 4-col rows somehow present

@@ -2,9 +2,10 @@
 Build a local offender database by searching NSOPW for common ethnic surnames,
 saving report links + archived HTML, and enriching demographics from report pages.
 
-NSOPW name search accepts partial first names (e.g. first="M", last="Singh"
-returns many given names beginning with M). Default mode uses A–Z initials to
-minimize query count while maximizing coverage.
+NSOPW name search accepts partial first *and* last names. Combined first+last
+must be at least 3 characters (e.g. first="M", last="AH" matches Mohamed Ahmed).
+Default mode uses A–Z first initials + shortest valid last-name prefixes, then
+collapses surnames that share a prefix so one query covers many list names.
 """
 
 from __future__ import annotations
@@ -33,6 +34,9 @@ DEFAULT_FIRST_NAMES = [
 # Single-letter prefixes: one search per letter covers partial first-name matches
 FIRST_INITIALS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
+# NSOPW API: len(firstName) + len(lastName) >= 3 (verified live).
+MIN_COMBINED_NAME_LEN = 3
+
 # Default rate limits (seconds / caps)
 # Search hits Cloudflare on nsopw-api — keep higher.
 # Report pages are per-jurisdiction and can be faster (HTML save is the same request).
@@ -40,6 +44,111 @@ DEFAULT_SEARCH_DELAY = 3.0
 DEFAULT_REPORT_DELAY = 0.75
 DEFAULT_MIN_SEARCH_INTERVAL = 2.0
 DEFAULT_MIN_REPORT_INTERVAL = 0.25
+
+
+def last_name_search_prefix(
+    surname: str,
+    first: str,
+    min_combined: int = MIN_COMBINED_NAME_LEN,
+) -> str:
+    """
+    Shortest last-name token valid with this first name under NSOPW's min length.
+
+    With first="M" (1 char), last needs 2 chars → "AH" for Ahmed/Ahmad.
+    With first="MO" (2), last needs 1 char → "A".
+    """
+    first_s = (first or "").strip()
+    last_s = (surname or "").strip()
+    if not last_s:
+        return last_s
+    need = max(1, int(min_combined) - len(first_s))
+    if len(last_s) <= need:
+        return last_s
+    return last_s[:need]
+
+
+def last_matches_target_surnames(last_name: str, targets: Sequence[str]) -> bool:
+    """
+    True if hit last name is covered by any full list surname (prefix match).
+
+    Keeps broad short-prefix searches from inserting unrelated last names
+    (e.g. search last='AH' for Ahmed/Ahmad should not keep Ahern).
+    """
+    last = (last_name or "").strip().lower()
+    if not last:
+        return False
+    for t in targets:
+        tl = (t or "").strip().lower()
+        if not tl:
+            continue
+        if last == tl or last.startswith(tl):
+            return True
+    return False
+
+
+def compact_search_plan(
+    surname_pairs: Sequence[Tuple[str, str]],
+    firsts: Sequence[str],
+    min_combined: int = MIN_COMBINED_NAME_LEN,
+) -> List[Tuple[str, str, str, List[str]]]:
+    """
+    Collapse (first, full_surname) into unique (first, last_prefix) queries.
+
+    Returns list of (first, last_prefix, eth_label, covered_full_surnames).
+    When several list surnames share a short last prefix (Ahmed/Ahmad → AH),
+    one NSOPW query covers them all.
+    """
+    # key: (first_norm, last_prefix_norm) -> first, last_prefix, eth, surnames
+    first_disp: Dict[Tuple[str, str], str] = {}
+    prefix_disp: Dict[Tuple[str, str], str] = {}
+    eth_disp: Dict[Tuple[str, str], str] = {}
+    covered: Dict[Tuple[str, str], Set[str]] = {}
+
+    for surname, eth_label in surname_pairs:
+        sn = (surname or "").strip()
+        if not sn:
+            continue
+        eth = eth_label or ""
+        for first in firsts:
+            fn = (first or "").strip()
+            if not fn:
+                continue
+            prefix = last_name_search_prefix(sn, fn, min_combined=min_combined)
+            if len(fn) + len(prefix) < min_combined:
+                prefix = sn
+                if len(fn) + len(prefix) < min_combined:
+                    continue
+            key = (fn.upper(), prefix.upper())
+            first_disp[key] = fn
+            prefix_disp[key] = prefix
+            if eth and not eth_disp.get(key):
+                eth_disp[key] = eth
+            elif key not in eth_disp:
+                eth_disp[key] = eth
+            covered.setdefault(key, set()).add(sn)
+
+    plan: List[Tuple[str, str, str, List[str]]] = []
+    for key in covered:
+        plan.append(
+            (
+                first_disp[key],
+                prefix_disp[key],
+                eth_disp.get(key, ""),
+                sorted(covered[key], key=str.lower),
+            )
+        )
+    plan.sort(key=lambda t: (t[1].upper(), t[0].upper()))
+    return plan
+
+
+def estimate_compact_query_count(
+    surname_pairs: Sequence[Tuple[str, str]],
+    firsts: Sequence[str] | None = None,
+    min_combined: int = MIN_COMBINED_NAME_LEN,
+) -> int:
+    """Estimate unique NSOPW queries after short-prefix collapse."""
+    firsts = list(firsts) if firsts is not None else list(FIRST_INITIALS)
+    return len(compact_search_plan(surname_pairs, firsts, min_combined=min_combined))
 
 
 @dataclass
@@ -58,8 +167,12 @@ class BuildStats:
     searches: int = 0
     searches_skipped: int = 0
     search_hits: int = 0
+    search_hits_matched: int = 0
+    search_hits_other: int = 0
     unique_offenders: int = 0
     inserted: int = 0
+    inserted_matched: int = 0
+    inserted_other: int = 0
     updated: int = 0
     skipped_existing: int = 0
     reports_fetched: int = 0
@@ -329,6 +442,9 @@ class NSOPWEthnicDatabaseBuilder:
           - "full": use DEFAULT_FIRST_NAMES or provided first_names list
           - "custom": only the provided first_names list
 
+        Short last-name prefixes (min combined first+last length 3) collapse many
+        list surnames into fewer queries (e.g. M+AH covers Ahmed and Ahmad).
+
         max_searches:
           Cap on new NSOPW API queries. None or <= 0 means unlimited.
         max_names / max_report_fetches:
@@ -337,7 +453,7 @@ class NSOPWEthnicDatabaseBuilder:
           None or <= 0 means unlimited.
 
         skip_completed_searches:
-          Resume mode — skip (first, surname) pairs already in nsopw_query_log.
+          Resume mode — skip (first, last_prefix) pairs already in nsopw_query_log.
         new_files_only:
           Skip report HTTP download when local HTML already exists for that URL.
         all_surnames:
@@ -388,14 +504,30 @@ class NSOPWEthnicDatabaseBuilder:
         eth_key = (ethnicity or "").lower()
         sub_disp = (subcategory or "all").strip() or "all"
 
+        # Collapse to short last prefixes (first+last ≥ 3 chars) for fewer API calls
+        search_plan = compact_search_plan(surname_pairs, firsts)
+        naive_queries = len(surname_pairs) * len(firsts)
+        compact_queries = len(search_plan)
+        # Full selected ethnicity surname list — used to bucket hits matched vs other
+        eth_surnames_list = [s for s, _ in surname_pairs]
+
         _log(f"Ethnicity filter: {ethnicity}")
         _log(f"Subcategory: {sub_disp}")
         _log(
-            f"Surnames to search: {len(surname_pairs)}"
+            f"Surnames in list: {len(surname_pairs)}"
             + (" (ALL in list)" if all_surnames or surnames_limit <= 0 else f" (cap {surnames_limit}/group)")
+        )
+        _log(
+            "Result bucketing: ethnicity-list surnames → primary tab; "
+            "other surnames from the same queries are still saved → other tab."
         )
         _log(f"First-name mode: {mode} ({len(firsts)} prefixes/names)")
         _log(f"  Prefixes: {', '.join(firsts[:12])}{'…' if len(firsts) > 12 else ''}")
+        _log(
+            f"Compact queries: {compact_queries:,} "
+            f"(vs {naive_queries:,} full surname×first; "
+            f"short last prefixes, min combined {MIN_COMBINED_NAME_LEN} letters)"
+        )
         _log(f"Jurisdictions: {len(jurs)}")
         _log(
             f"Max new searches: {'unlimited' if search_cap is None else search_cap}, "
@@ -412,7 +544,10 @@ class NSOPWEthnicDatabaseBuilder:
         _log(f"Save report HTML: {save_html} → {self.html_dir}")
         _log(f"Enrich demographics: {enrich_reports}")
         _log("NSOPW Conditions of Use apply: https://www.nsopw.gov/")
-        _log("Partial first names (e.g. 'M' + surname) expand to matching given names.")
+        _log(
+            "Partial names: e.g. first='M' last='AH' matches Mohamed Ahmed "
+            f"(API min combined length {MIN_COMBINED_NAME_LEN})."
+        )
         _log("")
 
         seen_urls: Set[str] = set()
@@ -426,171 +561,220 @@ class NSOPWEthnicDatabaseBuilder:
         def _names_limit_reached() -> bool:
             return names_cap is not None and names_processed >= names_cap
 
-        for surname, eth_label in surname_pairs:
+        for first, last_token, eth_label, covered_surnames in search_plan:
             if self.cancel_check():
                 _log("Cancelled by user.")
                 break
             if _search_limit_reached() or _names_limit_reached():
                 break
-            for first in firsts:
-                if self.cancel_check():
-                    _log("Cancelled by user.")
-                    break
-                if _search_limit_reached() or _names_limit_reached():
-                    break
 
-                # Resume: skip API queries already completed successfully
-                if skip_completed_searches and self._query_done(first, surname, eth_key):
-                    self.stats.searches_skipped += 1
-                    _log(f"  Skip completed search: '{first}' {surname}")
+            # Resume: skip API queries already completed successfully
+            if skip_completed_searches and self._query_done(first, last_token, eth_key):
+                self.stats.searches_skipped += 1
+                cov = ",".join(covered_surnames[:4])
+                if len(covered_surnames) > 4:
+                    cov += f"…(+{len(covered_surnames) - 4})"
+                _log(f"  Skip completed search: '{first}' {last_token} [{cov}]")
+                continue
+
+            search_count += 1
+            self.stats.searches = search_count
+            self.search_limiter.wait()
+            cap_label = "∞" if search_cap is None else str(search_cap)
+            cov = ",".join(covered_surnames[:4])
+            if len(covered_surnames) > 4:
+                cov += f"…(+{len(covered_surnames) - 4})"
+            _log(
+                f"[{search_count}/{cap_label}] NSOPW: '{first}' {last_token} "
+                f"({eth_label}; covers {len(covered_surnames)}: {cov})"
+            )
+
+            try:
+                hits = self.client.search_by_name(first, last_token, jurisdictions=jurs)
+            except Exception as e:
+                msg = f"  Search error: {e}"
+                self.stats.errors.append(msg)
+                _log(msg)
+                # Do not mark complete — resume will retry
+                continue
+
+            # Split hits: ethnicity-list surnames (primary) vs other surnames from
+            # the same short-prefix search. Both are saved; GUI shows them in tabs.
+            eth_matched: List[Any] = []
+            other_hits: List[Any] = []
+            for h in hits:
+                if last_matches_target_surnames(h.last_name, eth_surnames_list):
+                    eth_matched.append(h)
+                else:
+                    other_hits.append(h)
+
+            self._mark_query_done(
+                first, last_token, eth_key, hit_count=len(eth_matched) + len(other_hits)
+            )
+            self.stats.search_hits += len(hits)
+            self.stats.search_hits_matched += len(eth_matched)
+            self.stats.search_hits_other += len(other_hits)
+            sample_firsts = sorted({(h.first_name or "?") for h in eth_matched})[:8]
+            _log(
+                f"  Hits: {len(hits)}  "
+                f"(ethnicity list: {len(eth_matched)}, other surnames: {len(other_hits)})"
+                + (
+                    f"  matched first-names: {', '.join(sample_firsts)}"
+                    if sample_firsts
+                    else ""
+                )
+            )
+
+            # Process ethnicity matches first (count toward max names), then others.
+            # Others are always saved/archived but do not consume the names cap.
+            ordered_hits: List[Tuple[Any, bool]] = [
+                (h, True) for h in eth_matched
+            ] + [(h, False) for h in other_hits]
+
+            for hit, is_eth_match in ordered_hits:
+                if self.cancel_check():
+                    break
+                # Max names applies only to ethnicity-list matches; still save "other".
+                if is_eth_match and _names_limit_reached():
                     continue
 
-                search_count += 1
-                self.stats.searches = search_count
-                self.search_limiter.wait()
-                cap_label = "∞" if search_cap is None else str(search_cap)
-                _log(
-                    f"[{search_count}/{cap_label}] NSOPW: '{first}' {surname} ({eth_label})"
+                st = (hit.jurisdiction_id or hit.state or "UNK").upper()
+                self._state_stats(st).hits += 1
+
+                url = (hit.offender_uri or "").strip()
+                dedupe_key = url or f"{hit.jurisdiction_id}:{hit.full_name}:{hit.date_of_birth}"
+                if dedupe_key in seen_urls:
+                    continue
+                seen_urls.add(dedupe_key)
+                self.stats.unique_offenders += 1
+                if is_eth_match:
+                    names_processed += 1
+                ncap_label = "∞" if names_cap is None else str(names_cap)
+
+                record = hit.to_record()
+                record["likely_ethnicity"] = eth_label
+                conf_eth, conf = self.ethnic_db.get_likely_ethnicity(
+                    hit.last_name or last_token
                 )
+                record["name_confidence"] = conf
+                if conf_eth and conf_eth != "Unknown":
+                    record["likely_ethnicity"] = conf_eth
+
+                # GUI routing: matched ethnicity list vs other surnames
+                record["nsopw_ethnicity_match"] = bool(is_eth_match)
+                record["nsopw_result_bucket"] = "matched" if is_eth_match else "other"
+
+                flags = [
+                    "nsopw",
+                    f"search_last:{last_token}",
+                    f"search_first:{first}",
+                    f"first_mode:{mode}",
+                    f"covers:{len(covered_surnames)}",
+                    "ethnicity_match" if is_eth_match else "other_surname",
+                    f"filter_ethnicity:{eth_key}",
+                ]
+                record["flags"] = json.dumps(flags)
+
+                if skip_existing_urls and url and self._url_exists(url):
+                    self.stats.skipped_existing += 1
+                    continue
+
+                if enrich_reports and url:
+                    existing_html = (
+                        self._existing_html_path(url, st) if new_files_only else None
+                    )
+                    if existing_html:
+                        self.stats.reports_skipped_existing_file += 1
+                        record["report_html_path"] = existing_html
+                        flags_list = json.loads(record["flags"])
+                        flags_list.append("html_cached")
+                        record["flags"] = json.dumps(flags_list)
+                        _log(f"  Report skip (local HTML): {existing_html}")
+                    else:
+                        report_count += 1
+                        self.stats.reports_fetched = report_count
+                        sst = self._state_stats(st)
+                        sst.reports_attempted += 1
+                        self.report_limiter.wait()
+                        _log(
+                            f"  Name ({names_processed}/{ncap_label}) "
+                            f"report [{st}]: {url[:90]}"
+                        )
+                        demo = self.reports.fetch_demographics(
+                            url,
+                            save_html=save_html,
+                            html_dir=self.html_dir,
+                            jurisdiction=st,
+                        )
+                        self._merge_demographics(record, demo)
+                        if demo.get("report_fetch_ok"):
+                            sst.reports_ok += 1
+                        if demo.get("race"):
+                            self.stats.reports_with_race += 1
+                            sst.with_race += 1
+                        if demo.get("race") or demo.get("ethnicity"):
+                            self.stats.reports_with_demographics += 1
+                        if demo.get("report_html_path"):
+                            record["report_html_path"] = demo["report_html_path"]
+                            self.stats.html_saved += 1
+                            sst.html_saved += 1
+                        block = demo.get("report_block_reason") or ""
+                        status = str(demo.get("report_fetch_status") or "")
+                        if block or status.startswith("blocked:") or status.startswith("error:"):
+                            reason = block or status
+                            sst.blocks[reason] = sst.blocks.get(reason, 0) + 1
+                            if status.startswith("error:"):
+                                sst.errors += 1
+                        if not demo.get("report_fetch_ok"):
+                            _log(
+                                f"    ↳ no demographics "
+                                f"(status={demo.get('report_fetch_status')}"
+                                f"{', ' + block if block else ''})"
+                            )
+                        else:
+                            _log(
+                                f"    ↳ race={demo.get('race') or '—'} "
+                                f"eth={demo.get('ethnicity') or '—'} "
+                                f"gender={demo.get('gender') or '—'}"
+                            )
+                        record["source_url"] = demo.get("report_final_url") or url
+                elif save_html and url and not enrich_reports:
+                    pass
+
+                if url:
+                    record["source_url"] = record.get("source_url") or url
 
                 try:
-                    hits = self.client.search_by_name(first, surname, jurisdictions=jurs)
+                    self.db.insert_offender(record)
+                    self.stats.inserted += 1
+                    if is_eth_match:
+                        self.stats.inserted_matched += 1
+                    else:
+                        self.stats.inserted_other += 1
+                    if on_insert:
+                        try:
+                            on_insert(dict(record))
+                        except Exception:
+                            pass
                 except Exception as e:
-                    msg = f"  Search error: {e}"
+                    msg = f"  Insert error: {e}"
                     self.stats.errors.append(msg)
                     _log(msg)
-                    # Do not mark complete — resume will retry
-                    continue
-
-                self._mark_query_done(first, surname, eth_key, hit_count=len(hits))
-                self.stats.search_hits += len(hits)
-                sample_firsts = sorted({(h.first_name or "?") for h in hits})[:8]
-                _log(
-                    f"  Hits: {len(hits)}"
-                    + (f"  first-names: {', '.join(sample_firsts)}" if sample_firsts else "")
-                )
-
-                for hit in hits:
-                    if self.cancel_check():
-                        break
-                    if _names_limit_reached():
-                        break
-                    st = (hit.jurisdiction_id or hit.state or "UNK").upper()
-                    self._state_stats(st).hits += 1
-
-                    url = (hit.offender_uri or "").strip()
-                    dedupe_key = url or f"{hit.jurisdiction_id}:{hit.full_name}:{hit.date_of_birth}"
-                    if dedupe_key in seen_urls:
-                        continue
-                    seen_urls.add(dedupe_key)
-                    self.stats.unique_offenders += 1
-                    names_processed += 1
-                    ncap_label = "∞" if names_cap is None else str(names_cap)
-
-                    record = hit.to_record()
-                    record["likely_ethnicity"] = eth_label
-                    conf_eth, conf = self.ethnic_db.get_likely_ethnicity(hit.last_name or surname)
-                    record["name_confidence"] = conf
-                    if conf_eth and conf_eth != "Unknown":
-                        record["likely_ethnicity"] = conf_eth
-
-                    flags = [
-                        "nsopw",
-                        f"search_surname:{surname}",
-                        f"search_first:{first}",
-                        f"first_mode:{mode}",
-                    ]
-                    record["flags"] = json.dumps(flags)
-
-                    if skip_existing_urls and url and self._url_exists(url):
-                        self.stats.skipped_existing += 1
-                        continue
-
-                    if enrich_reports and url:
-                        existing_html = (
-                            self._existing_html_path(url, st) if new_files_only else None
-                        )
-                        if existing_html:
-                            self.stats.reports_skipped_existing_file += 1
-                            record["report_html_path"] = existing_html
-                            flags_list = json.loads(record["flags"])
-                            flags_list.append("html_cached")
-                            record["flags"] = json.dumps(flags_list)
-                            _log(f"  Report skip (local HTML): {existing_html}")
-                        else:
-                            report_count += 1
-                            self.stats.reports_fetched = report_count
-                            sst = self._state_stats(st)
-                            sst.reports_attempted += 1
-                            self.report_limiter.wait()
-                            _log(
-                                f"  Name ({names_processed}/{ncap_label}) "
-                                f"report [{st}]: {url[:90]}"
-                            )
-                            demo = self.reports.fetch_demographics(
-                                url,
-                                save_html=save_html,
-                                html_dir=self.html_dir,
-                                jurisdiction=st,
-                            )
-                            self._merge_demographics(record, demo)
-                            if demo.get("report_fetch_ok"):
-                                sst.reports_ok += 1
-                            if demo.get("race"):
-                                self.stats.reports_with_race += 1
-                                sst.with_race += 1
-                            if demo.get("race") or demo.get("ethnicity"):
-                                self.stats.reports_with_demographics += 1
-                            if demo.get("report_html_path"):
-                                record["report_html_path"] = demo["report_html_path"]
-                                self.stats.html_saved += 1
-                                sst.html_saved += 1
-                            block = demo.get("report_block_reason") or ""
-                            status = str(demo.get("report_fetch_status") or "")
-                            if block or status.startswith("blocked:") or status.startswith("error:"):
-                                reason = block or status
-                                sst.blocks[reason] = sst.blocks.get(reason, 0) + 1
-                                if status.startswith("error:"):
-                                    sst.errors += 1
-                            if not demo.get("report_fetch_ok"):
-                                _log(
-                                    f"    ↳ no demographics "
-                                    f"(status={demo.get('report_fetch_status')}"
-                                    f"{', ' + block if block else ''})"
-                                )
-                            else:
-                                _log(
-                                    f"    ↳ race={demo.get('race') or '—'} "
-                                    f"eth={demo.get('ethnicity') or '—'} "
-                                    f"gender={demo.get('gender') or '—'}"
-                                )
-                            record["source_url"] = demo.get("report_final_url") or url
-                    elif save_html and url and not enrich_reports:
-                        pass
-
-                    if url:
-                        record["source_url"] = record.get("source_url") or url
-
-                    try:
-                        self.db.insert_offender(record)
-                        self.stats.inserted += 1
-                        if on_insert:
-                            try:
-                                on_insert(dict(record))
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        msg = f"  Insert error: {e}"
-                        self.stats.errors.append(msg)
-                        _log(msg)
 
         _log("")
         _log("=== Build complete ===")
         _log(f"Searches (new):        {self.stats.searches}")
         _log(f"Searches skipped:      {self.stats.searches_skipped} (already completed)")
         _log(f"Raw hits:              {self.stats.search_hits}")
+        _log(
+            f"  · ethnicity list:    {self.stats.search_hits_matched}  · other surnames: "
+            f"{self.stats.search_hits_other}"
+        )
         _log(f"Unique offenders:      {self.stats.unique_offenders}")
-        _log(f"Inserted:              {self.stats.inserted}")
+        _log(
+            f"Inserted:              {self.stats.inserted} "
+            f"(matched {self.stats.inserted_matched}, other {self.stats.inserted_other})"
+        )
         _log(f"Skipped existing URLs: {self.stats.skipped_existing}")
         _log(f"Reports fetched:       {self.stats.reports_fetched}")
         _log(f"Reports skipped HTML:  {self.stats.reports_skipped_existing_file}")

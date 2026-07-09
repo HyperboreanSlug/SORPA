@@ -195,7 +195,8 @@ class NSOPWClient:
         """
         Search NSOPW by first + last name.
 
-        Both first and last name are required by the API (min combined length 3).
+        Both first and last name are required. The API accepts short *partial*
+        prefixes; combined length must be at least 3 (e.g. first="M", last="AH").
         """
         first = (first_name or "").strip()
         last = (last_name or "").strip()
