@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 # Schema version - increment when schema changes
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Strategies for find/remove_duplicates
 DUPLICATE_STRATEGIES = (
@@ -72,7 +72,7 @@ DEFAULT_DB_PATH = "data/offenders.db"
 
 # Columns written by insert helpers (must match INSERT placeholders 1:1)
 _OFFENDER_INSERT_COLUMNS = (
-    "first_name", "last_name", "full_name", "race", "ethnicity", "gender",
+    "first_name", "middle_name", "last_name", "full_name", "race", "ethnicity", "gender",
     "age", "date_of_birth", "height", "weight", "eye_color", "hair_color", "build", "skin_tone",
     "state", "county", "city", "address", "zip_code", "latitude", "longitude",
     "offense_type", "offense_description", "crime", "risk_level", "conviction_date",
@@ -146,6 +146,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 -- Personal info
                 first_name TEXT,
+                middle_name TEXT,
                 last_name TEXT,
                 full_name TEXT,
                 race TEXT,
@@ -239,6 +240,7 @@ class Database:
             "flags": "TEXT",
             "raw_data_json": "TEXT",
             "external_id": "TEXT",
+            "middle_name": "TEXT",
         }
         for name, typ in additions.items():
             if name not in cols:
@@ -275,6 +277,9 @@ class Database:
         if from_version < 3:
             pass
         if from_version < 4:
+            pass
+        if from_version < 5:
+            # middle_name column via _ensure_offender_columns
             pass
 
     def close(self):
@@ -1990,6 +1995,9 @@ class Database:
             "Offender Name": "full_name",
             "First Name": "first_name",
             "FirstName": "first_name",
+            "Middle Name": "middle_name",
+            "MiddleName": "middle_name",
+            "Middle": "middle_name",
             "Last Name": "last_name",
             "LastName": "last_name",
             "Race": "race",
@@ -2044,18 +2052,35 @@ class Database:
 
         # Derive name parts from full_name when missing
         if not new_record.get("last_name") and new_record.get("full_name"):
-            parts = str(new_record["full_name"]).split()
-            if len(parts) >= 2:
+            parts = str(new_record["full_name"]).replace(",", " ").split()
+            if len(parts) >= 3:
+                new_record.setdefault("first_name", parts[0])
+                new_record.setdefault("middle_name", " ".join(parts[1:-1]))
+                new_record.setdefault("last_name", parts[-1])
+            elif len(parts) >= 2:
                 new_record.setdefault("first_name", parts[0])
                 new_record.setdefault("last_name", parts[-1])
             elif parts:
                 new_record.setdefault("last_name", parts[0])
 
-        # Derive full_name from first+last when scrapers export split names only
+        # Split multi-token first_name into first + middle when middle empty
+        first = str(new_record.get("first_name") or "").strip()
+        mid = str(new_record.get("middle_name") or "").strip()
+        if first and not mid:
+            fparts = first.split()
+            if len(fparts) >= 2:
+                new_record["first_name"] = fparts[0]
+                new_record["middle_name"] = " ".join(fparts[1:])
+
+        # Derive full_name from first+middle+last when scrapers export split names only
         if not new_record.get("full_name"):
             parts = [
                 str(p).strip()
-                for p in (new_record.get("first_name"), new_record.get("last_name"))
+                for p in (
+                    new_record.get("first_name"),
+                    new_record.get("middle_name"),
+                    new_record.get("last_name"),
+                )
                 if p and str(p).strip()
             ]
             if parts:

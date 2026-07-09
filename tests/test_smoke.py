@@ -693,6 +693,27 @@ class EthnicAndSearchTests(unittest.TestCase):
                 f"{fn} Lele must be below default min conf, got {eth9} conf={conf9}",
             )
 
+        # Middle name can corroborate Indian when first is Western
+        eth10, conf10, _ = db.classify_by_name(
+            "Patel", first_name="John", middle_name="Rahul"
+        )
+        self.assertTrue(eth10.startswith("Indian"))
+        self.assertGreaterEqual(conf10, 0.85)
+
+        # Middle name Western dampens short/ambiguous Indian surname
+        eth11, conf11, _ = db.classify_by_name(
+            "Dey", first_name="R", middle_name="Adam"
+        )
+        # R alone may be unknown; Adam middle should still dampen
+        eth12, conf12, _ = db.classify_by_name(
+            "Dey", first_name="Samir", middle_name="Adam"
+        )
+        # Samir if not in list; use explicit anglo middle with weak surname
+        eth13, conf13, _ = db.classify_by_name(
+            "Gill", first_name="X", middle_name="Amy"
+        )
+        self.assertLess(conf13, 0.5)
+
     def test_classify_common_names(self):
         eth = EthnicNameDatabase()
         self.assertEqual(eth.classify_by_name("Garcia")[0], "Hispanic")

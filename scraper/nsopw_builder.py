@@ -1405,7 +1405,9 @@ class NSOPWEthnicDatabaseBuilder:
                 record = hit.to_record()
                 record["likely_ethnicity"] = eth_label
                 conf_eth, conf = self.ethnic_db.get_likely_ethnicity(
-                    hit.last_name or last_token
+                    hit.last_name or last_token,
+                    first_name=getattr(hit, "first_name", None) or None,
+                    middle_name=getattr(hit, "middle_name", None) or None,
                 )
                 record["name_confidence"] = conf
                 if conf_eth and conf_eth != "Unknown":

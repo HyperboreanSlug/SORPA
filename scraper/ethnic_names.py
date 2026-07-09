@@ -278,16 +278,56 @@ class EthnicNameDatabase:
         """First names that contradict South Asian ethnicity claims."""
         return signal in ("anglo", "slavic", "hispanic")
 
+    def _resolve_given_name_signal(
+        self,
+        first_name: Optional[str] = None,
+        middle_name: Optional[str] = None,
+    ) -> str:
+        """
+        Combine first + middle name signals for ethnicity confidence.
+
+        Any Indic given name (first or middle) corroborates Indian surnames.
+        Western / Slavic / Hispanic signals dampen when no Indic given name.
+        """
+        signals: List[str] = []
+        for part in (first_name, middle_name):
+            if not part:
+                continue
+            # Score each token in multi-word middle names (e.g. "ZAHEER UDDIN")
+            tokens = re.split(r"[\s\-]+", str(part).strip())
+            for tok in tokens:
+                if not tok or len(tok) < 2:
+                    continue
+                # Skip bare initials
+                if len(tok) == 1 or (len(tok) == 2 and tok.endswith(".")):
+                    continue
+                sig = self._first_name_signal(tok)
+                if sig != "unknown":
+                    signals.append(sig)
+        if not signals:
+            return "unknown"
+        if "indian" in signals:
+            return "indian"
+        if "slavic" in signals:
+            return "slavic"
+        if "hispanic" in signals:
+            return "hispanic"
+        if "anglo" in signals:
+            return "anglo"
+        return "unknown"
+
     def classify_by_name(
         self,
         surname: str,
         first_name: Optional[str] = None,
+        middle_name: Optional[str] = None,
     ) -> Tuple[str, float, List[str]]:
         """
-        Classify a person by surname + optional first name.
+        Classify a person by surname + optional first/middle names.
 
         Returns (ethnicity, confidence, matching_labels).
         Confidence is intentionally conservative for multi-ethnic surnames.
+        Middle names are used like first names for corroboration / dampening.
         """
         if not surname:
             return ("Unknown", 0.0, [])
@@ -347,7 +387,7 @@ class EthnicNameDatabase:
         if not matches:
             return ("Unknown", 0.0, [])
 
-        fn_signal = self._first_name_signal(first_name)
+        fn_signal = self._resolve_given_name_signal(first_name, middle_name)
         is_amb = surname_lc in self._indian_amb_lc
         is_hc = surname_lc in self._indian_hc_lc
         # Very short surnames (Dey, Rai, …) are easy false positives with Western
@@ -478,9 +518,12 @@ class EthnicNameDatabase:
         self,
         surname: str,
         first_name: Optional[str] = None,
+        middle_name: Optional[str] = None,
     ) -> Tuple[str, float]:
         """Get the most likely ethnicity for a name."""
-        ethnicity, confidence, _ = self.classify_by_name(surname, first_name=first_name)
+        ethnicity, confidence, _ = self.classify_by_name(
+            surname, first_name=first_name, middle_name=middle_name
+        )
         return (ethnicity, confidence)
 
     def is_hispanic_surname(self, surname: str) -> bool:

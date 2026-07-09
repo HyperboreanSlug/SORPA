@@ -227,6 +227,24 @@ def _first_name_from_record(record: Dict[str, Any]) -> str:
     return ""
 
 
+def _middle_name_from_record(record: Dict[str, Any]) -> str:
+    """Middle name from column, multi-token first_name, or full_name."""
+    mid = (record.get("middle_name") or record.get("MiddleName") or "").strip()
+    if mid:
+        return mid
+    first = (record.get("first_name") or record.get("FirstName") or "").strip()
+    if first:
+        parts = first.split()
+        if len(parts) >= 2:
+            return " ".join(parts[1:])
+    full = (record.get("full_name") or record.get("Name") or "").strip()
+    if full:
+        parts = full.replace(",", " ").split()
+        if len(parts) >= 3:
+            return " ".join(parts[1:-1])
+    return ""
+
+
 class SexOffenderSearcher:
     """Search and filter sex offender records with misclassification detection."""
 
@@ -385,6 +403,7 @@ class SexOffenderSearcher:
         ):
             last_name = _last_name_from_record(record)
             first_name = _first_name_from_record(record)
+            middle_name = _middle_name_from_record(record)
             recorded_race = (record.get("race") or "").strip()
 
             if not last_name:
@@ -394,7 +413,9 @@ class SexOffenderSearcher:
                 continue
 
             likely_eth, confidence, matching_names = self.ethnic_db.classify_by_name(
-                last_name, first_name=first_name or None
+                last_name,
+                first_name=first_name or None,
+                middle_name=middle_name or None,
             )
 
             if confidence < min_confidence or likely_eth == "Unknown":
@@ -497,8 +518,11 @@ class SexOffenderSearcher:
                 continue
 
             first_name = _first_name_from_record(record)
+            middle_name = _middle_name_from_record(record)
             likely_eth, confidence, _ = self.ethnic_db.classify_by_name(
-                last_name, first_name=first_name or None
+                last_name,
+                first_name=first_name or None,
+                middle_name=middle_name or None,
             )
             if confidence < min_confidence or likely_eth == "Unknown":
                 continue

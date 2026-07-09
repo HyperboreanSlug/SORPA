@@ -1187,8 +1187,10 @@ class ArchiverApp(ctk.CTk):
             or record.get("offense_type")
             or "—"
         )
+        mid = (record.get("middle_name") or "").strip()
         lines = [
             f"Name: {name}",
+            f"Middle: {mid or '—'}",
             f"Race: {_format_race_display(record.get('race'))}",
             f"Ethnicity: {record.get('ethnicity') or '—'}",
             f"Gender: {record.get('gender') or '—'}",

@@ -243,6 +243,7 @@ class NSOPWOffender:
         src_st = normalize_jurisdiction_code(self.jurisdiction_id, self.state) or st or "US"
         return {
             "first_name": self.first_name or None,
+            "middle_name": self.middle_name or None,
             "last_name": self.last_name or None,
             "full_name": self.full_name or None,
             "gender": self.gender or None,
