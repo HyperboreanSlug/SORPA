@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -541,6 +542,38 @@ def _bind_tree_scroll_isolation(tree: ttk.Treeview, wrap: ctk.CTkFrame) -> None:
         w.bind("<Button-5>", _on_wheel)
 
 
+def _tree_cell_sort_key(val: Any):
+    """
+    Sort key for tree cells: numeric 0→100 (and 0%→100%) before text.
+
+    Handles "45%", "45.2 %", "1,234", bare floats, and leading numbers in bands.
+    Empty / em-dash sort last in ascending order.
+    """
+    s = str(val if val is not None else "").strip()
+    if not s or s in ("—", "–", "-", "N/A", "n/a", "None"):
+        return (2, 0.0, "")
+
+    # Strip thousands separators and trailing percent / whitespace
+    cleaned = s.replace(",", "").replace("\u00a0", " ").strip()
+    if cleaned.endswith("%"):
+        cleaned = cleaned[:-1].strip()
+
+    try:
+        return (0, float(cleaned), "")
+    except ValueError:
+        pass
+
+    # Leading number: "0.90 – 1.00 (high)", "12 items", etc.
+    m = re.match(r"^([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)", cleaned)
+    if m:
+        try:
+            return (0, float(m.group(1)), s.casefold())
+        except ValueError:
+            pass
+
+    return (1, 0.0, s.casefold())
+
+
 def _enable_tree_column_sort(
     tree: ttk.Treeview,
     columns: List[str],
@@ -550,17 +583,10 @@ def _enable_tree_column_sort(
     labels = labels or {c: c.upper() for c in columns}
     state: Dict[str, Any] = {"col": None, "reverse": False}
 
-    def _sort_key(val: str):
-        s = (val or "").strip()
-        # numeric-ish first for mixed columns
-        try:
-            return (0, float(s.replace(",", "")))
-        except ValueError:
-            return (1, s.casefold())
-
     def apply_sort(col: str, reverse: bool, update_headings: bool = True) -> None:
         rows = [(tree.set(iid, col), iid) for iid in tree.get_children("")]
-        rows.sort(key=lambda t: _sort_key(t[0]), reverse=reverse)
+        # Ascending: 0 → 100 (and 0% → 100%); empty last via key tier 2
+        rows.sort(key=lambda t: _tree_cell_sort_key(t[0]), reverse=reverse)
         for idx, (_val, iid) in enumerate(rows):
             tree.move(iid, "", idx)
         state["col"] = col
