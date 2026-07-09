@@ -4179,7 +4179,7 @@ class ArchiverApp(ctk.CTk):
         self.log_queue.put(f"Reports CSV: {n} rows → {path}")
 
     def _reports_export_html(self):
-        """Write a scrollable dark HTML gallery for presentation / sharing."""
+        """Write a scrollable dark HTML gallery (list or compact grid)."""
         if not self._report_items:
             messagebox.showinfo("Export", "Build a report list first.")
             return
@@ -4195,10 +4195,20 @@ class ArchiverApp(ctk.CTk):
             return
         verdict_filter = {"confirmed"} if only else None
 
+        compact = messagebox.askyesno(
+            "HTML layout",
+            "Use compact photo grid?\n\n"
+            "Yes = multi-column grid (more people per screen)\n"
+            "No = full-width list cards (more detail)",
+        )
+
         path = filedialog.asksaveasfilename(
             defaultextension=".html",
             filetypes=[("HTML", "*.html")],
-            initialfile=f"misclass_report_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            initialfile=(
+                f"misclass_report_{'grid' if compact else 'list'}_"
+                f"{datetime.now().strftime('%Y%m%d_%H%M')}.html"
+            ),
         )
         if not path:
             return
@@ -4212,6 +4222,7 @@ class ArchiverApp(ctk.CTk):
         eth_f = meta.get("eth_filter", "all")
         min_c = meta.get("min_conf", "")
         generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+        layout = "compact" if compact else "list"
 
         def _esc(s: Any) -> str:
             t = str(s if s is not None else "")
@@ -4247,8 +4258,29 @@ class ArchiverApp(ctk.CTk):
                 if url else ""
             )
             vclass = _esc(verdict)
-            cards_html.append(
-                f"""
+            race = _esc(mc.expected_race)
+            eth = _esc(mc.likely_ethnicity)
+            conf = f"{mc.confidence:.3f}"
+            if compact:
+                cards_html.append(
+                    f"""
+<article class="card v-{vclass}">
+  <div class="photo">{img_html}</div>
+  <div class="body">
+    <h2 title="{_esc(name)}">{_esc(name)}</h2>
+    <div class="transition">
+      <span class="pill race">{race}</span>
+      <span class="arrow">→</span>
+      <span class="pill eth">{eth}</span>
+    </div>
+    <p class="meta">{_esc(state)} · {conf} · #{i}</p>
+    {link}
+  </div>
+</article>"""
+                )
+            else:
+                cards_html.append(
+                    f"""
 <article class="card v-{vclass}">
   <div class="photo">{img_html}</div>
   <div class="body">
@@ -4258,24 +4290,125 @@ class ArchiverApp(ctk.CTk):
       <span class="badge">{_esc(verdict)}</span>
     </header>
     <div class="transition">
-      <span class="pill race">{_esc(mc.expected_race)}</span>
+      <span class="pill race">{race}</span>
       <span class="arrow">→</span>
-      <span class="pill eth">{_esc(mc.likely_ethnicity)}</span>
+      <span class="pill eth">{eth}</span>
     </div>
-    <p class="meta">Confidence {mc.confidence:.3f} · State {_esc(state)}</p>
+    <p class="meta">Confidence {conf} · State {_esc(state)}</p>
     <p class="names">Matched: {_esc('; '.join(mc.matching_names[:5]) if mc.matching_names else '—')}</p>
     {link}
   </div>
 </article>"""
-            )
+                )
 
         n_conf = sum(1 for _, v, _ in rows if v == "confirmed")
+        layout_css = (
+            """
+  main {
+    max-width: 1400px; margin: 0 auto; padding: .85rem 1rem 2.5rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: .65rem;
+  }
+  .card {
+    display: flex; flex-direction: column; gap: .45rem;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: .55rem; align-items: stretch;
+    min-width: 0;
+  }
+  .card.v-confirmed { border-color: #8a4040; }
+  .card.v-correct { border-color: #3a6a50; }
+  .photo { width: 100%; }
+  .photo img {
+    width: 100%; aspect-ratio: 4/5; height: auto; object-fit: cover;
+    border-radius: 8px; background: #101014; display: block;
+  }
+  .nophoto {
+    width: 100%; aspect-ratio: 4/5; border-radius: 8px; background: #101014;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--dim); font-size: .75rem;
+  }
+  .body { min-width: 0; }
+  .body h2 {
+    margin: 0; font-size: .88rem; font-weight: 650; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .transition {
+    display: flex; align-items: center; gap: .25rem; margin: .15rem 0;
+    flex-wrap: wrap;
+  }
+  .pill {
+    background: var(--elev); border: 1px solid var(--border);
+    border-radius: 6px; padding: .12rem .4rem; font-size: .72rem;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pill.race { color: var(--accent); border-color: #3d2e24; background: #3d2e24; }
+  .arrow { color: var(--muted); font-size: .75rem; }
+  .meta { margin: 0; color: var(--dim); font-size: .72rem; }
+  a.ext { color: var(--accent); font-size: .72rem; }
+  @media (max-width: 520px) {
+    main { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .5rem; }
+  }
+  @media print {
+    header.page { position: static; }
+    main { grid-template-columns: repeat(4, 1fr); gap: .4rem; }
+    .card { break-inside: avoid; }
+  }
+"""
+            if compact
+            else """
+  main {
+    max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem;
+    display: flex; flex-direction: column; gap: .85rem;
+  }
+  .card {
+    display: grid; grid-template-columns: 120px 1fr; gap: 1rem;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1rem; align-items: start;
+  }
+  .card.v-confirmed { border-color: #8a4040; }
+  .card.v-correct { border-color: #3a6a50; }
+  .photo img {
+    width: 112px; height: 140px; object-fit: cover; border-radius: 10px;
+    background: #101014; display: block;
+  }
+  .nophoto {
+    width: 112px; height: 140px; border-radius: 10px; background: #101014;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--dim); font-size: .85rem;
+  }
+  .body header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; }
+  .body h2 { margin: 0; font-size: 1.2rem; font-weight: 650; }
+  .idx { color: var(--dim); font-size: .85rem; }
+  .badge {
+    margin-left: auto; font-size: .75rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: .15rem .55rem;
+  }
+  .v-confirmed .badge { color: var(--danger); border-color: #8a4040; }
+  .v-correct .badge { color: var(--success); border-color: #3a6a50; }
+  .transition { display: flex; align-items: center; gap: .5rem; margin: .75rem 0 .4rem; flex-wrap: wrap; }
+  .pill {
+    background: var(--elev); border: 1px solid var(--border);
+    border-radius: 8px; padding: .3rem .7rem; font-size: .9rem;
+  }
+  .pill.race { color: var(--accent); border-color: #3d2e24; background: #3d2e24; }
+  .arrow { color: var(--muted); }
+  .meta, .names { margin: .2rem 0; color: var(--muted); font-size: .9rem; }
+  a.ext { color: var(--accent); font-size: .88rem; }
+  @media print {
+    header.page { position: static; }
+    .card { break-inside: avoid; }
+  }
+"""
+        )
+
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Misclassification report · { _esc(generated) }</title>
+<title>Misclassification report · {_esc(generated)}</title>
 <style>
   :root {{
     --bg: #0c0c0e; --panel: #1a1a20; --elev: #22222a; --border: #2e2e38;
@@ -4295,57 +4428,16 @@ class ArchiverApp(ctk.CTk):
   }}
   header.page h1 {{ margin: 0 0 .35rem; font-size: 1.35rem; font-weight: 650; }}
   header.page p {{ margin: 0; color: var(--muted); font-size: .92rem; }}
-  main {{
-    max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem;
-    display: flex; flex-direction: column; gap: .85rem;
-  }}
-  .card {{
-    display: grid; grid-template-columns: 120px 1fr; gap: 1rem;
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; padding: 1rem; align-items: start;
-  }}
-  .card.v-confirmed {{ border-color: #8a4040; }}
-  .card.v-correct {{ border-color: #3a6a50; }}
-  .photo img {{
-    width: 112px; height: 140px; object-fit: cover; border-radius: 10px;
-    background: #101014; display: block;
-  }}
-  .nophoto {{
-    width: 112px; height: 140px; border-radius: 10px; background: #101014;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--dim); font-size: .85rem;
-  }}
-  .body header {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem .75rem; }}
-  .body h2 {{ margin: 0; font-size: 1.2rem; font-weight: 650; }}
-  .idx {{ color: var(--dim); font-size: .85rem; }}
-  .badge {{
-    margin-left: auto; font-size: .75rem; text-transform: uppercase;
-    letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border);
-    border-radius: 999px; padding: .15rem .55rem;
-  }}
-  .v-confirmed .badge {{ color: var(--danger); border-color: #8a4040; }}
-  .v-correct .badge {{ color: var(--success); border-color: #3a6a50; }}
-  .transition {{ display: flex; align-items: center; gap: .5rem; margin: .75rem 0 .4rem; flex-wrap: wrap; }}
-  .pill {{
-    background: var(--elev); border: 1px solid var(--border);
-    border-radius: 8px; padding: .3rem .7rem; font-size: .9rem;
-  }}
-  .pill.race {{ color: var(--accent); border-color: #3d2e24; background: #3d2e24; }}
-  .arrow {{ color: var(--muted); }}
-  .meta, .names {{ margin: .2rem 0; color: var(--muted); font-size: .9rem; }}
-  a.ext {{ color: var(--accent); font-size: .88rem; }}
-  @media print {{
-    header.page {{ position: static; }}
-    .card {{ break-inside: avoid; }}
-  }}
+{layout_css}
 </style>
 </head>
-<body>
+<body class="layout-{layout}">
 <header class="page">
   <h1>Misclassification review</h1>
   <p>
-    Generated { _esc(generated) } · filter { _esc(eth_f) } · min conf { _esc(min_c) }
+    Generated {_esc(generated)} · filter {_esc(eth_f)} · min conf {_esc(min_c)}
     · {len(rows)} people · {n_conf} confirmed
+    · layout: {_esc(layout)}
   </p>
 </header>
 <main>
@@ -4355,8 +4447,11 @@ class ArchiverApp(ctk.CTk):
 </html>
 """
         Path(path).write_text(html, encoding="utf-8")
-        messagebox.showinfo("Exported", f"{len(rows)} cards → {path}")
-        self.log_queue.put(f"Reports HTML: {len(rows)} cards → {path}")
+        messagebox.showinfo(
+            "Exported",
+            f"{len(rows)} cards ({layout}) → {path}",
+        )
+        self.log_queue.put(f"Reports HTML ({layout}): {len(rows)} cards → {path}")
         try:
             self._open_path(Path(path))
         except Exception:
