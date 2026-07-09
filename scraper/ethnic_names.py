@@ -34,6 +34,7 @@ class EthnicNameDatabase:
         self.indian_first_names: Set[str] = set()
         self.hispanic_first_names: Set[str] = set()
         self.anglo_western_first_names: Set[str] = set()
+        self.slavic_first_names: Set[str] = set()
         self.african_american_surnames: Set[str] = set()
         self.native_american_surnames: Set[str] = set()
         self.european_surnames: Dict[str, Set[str]] = {}
@@ -126,6 +127,11 @@ class EthnicNameDatabase:
             for n in (data.get("anglo_western_first_names") or [])
             if n and str(n).strip()
         }
+        self.slavic_first_names = {
+            n.strip()
+            for n in (data.get("slavic_first_names") or [])
+            if n and str(n).strip()
+        }
 
         self.african_american_surnames = set(data.get("african_american_surnames", []))
         self.native_american_surnames = set(data.get("native_american_surnames", []))
@@ -163,7 +169,8 @@ class EthnicNameDatabase:
         self.indian_surnames_by_group = {"high_confidence": set(self.indian_surnames)}
         self.indian_first_names = {"Rahul", "Priya", "Amit", "Neha", "Raj"}
         self.hispanic_first_names = {"Alberto", "Carlos", "Maria", "Jose"}
-        self.anglo_western_first_names = {"Amy", "John", "Robert", "Emily"}
+        self.anglo_western_first_names = {"Amy", "John", "Robert", "Emily", "Andrey"}
+        self.slavic_first_names = {"Andrei", "Ivan", "Dmitri", "Sergei"}
         self.indian_ambiguous_surnames = {"Gill", "Perera", "Silva"}
 
     def _build_lookup_sets(self) -> None:
@@ -205,6 +212,7 @@ class EthnicNameDatabase:
         self._indian_first_lc = _fold_set(self.indian_first_names)
         self._hispanic_first_lc = _fold_set(self.hispanic_first_names)
         self._anglo_first_lc = _fold_set(self.anglo_western_first_names)
+        self._slavic_first_lc = _fold_set(self.slavic_first_names)
         self._asian_lc = {
             group: {n.lower() for n in names}
             for group, names in self.asian_surnames.items()
@@ -243,7 +251,10 @@ class EthnicNameDatabase:
 
     def _first_name_signal(self, first_name: Optional[str]) -> str:
         """
-        Return one of: indian | hispanic | anglo | unknown
+        Return one of: indian | hispanic | anglo | slavic | unknown
+
+        Note: *Andrey* is treated as Western/white; *Andrei* as Slavic.
+        Neither boosts Indian surname confidence.
         """
         self._build_lookup_sets()
         fn = self._normalize_given_name(first_name)
@@ -255,9 +266,16 @@ class EthnicNameDatabase:
             return "indian"
         if fn in self._hispanic_first_lc:
             return "hispanic"
+        if fn in self._slavic_first_lc:
+            return "slavic"
         if fn in self._anglo_first_lc:
             return "anglo"
         return "unknown"
+
+    @staticmethod
+    def _is_western_first_signal(signal: str) -> bool:
+        """First names that contradict South Asian ethnicity claims."""
+        return signal in ("anglo", "slavic", "hispanic")
 
     def classify_by_name(
         self,
@@ -359,7 +377,8 @@ class EthnicNameDatabase:
                     score = 1.15
                 if fn_signal == "indian":
                     score += 0.45
-                elif fn_signal == "anglo":
+                elif fn_signal in ("anglo", "slavic"):
+                    # Andrey (white) / Andrei (Slavic) both contradict South Asian
                     if is_amb or is_weak_with_western:
                         score -= 0.65
                     elif is_hc:
@@ -397,6 +416,8 @@ class EthnicNameDatabase:
                 score = 0.4
                 if fn_signal == "anglo":
                     score += 0.25
+                if fn_signal == "slavic":
+                    score += 0.4  # Andrei, Ivan, Dmitri, …
             else:
                 score = 0.3
             return -score  # sort ascending → highest score first
@@ -439,15 +460,15 @@ class EthnicNameDatabase:
 
         # Hard floors: weak/ambiguous Indian surname without Indic first name
         if best_match.startswith("Indian") and (is_amb or is_weak_with_western):
-            if fn_signal == "anglo":
-                # Adam Dey, Amy Gill — must not clear default 0.5 Analyze floor
+            if fn_signal in ("anglo", "slavic"):
+                # Adam Dey, Andrey Lele, Andrei Lele — below default 0.5 Analyze floor
                 confidence = min(confidence, 0.32)
             elif fn_signal == "hispanic":
                 confidence = min(confidence, 0.25)
             elif fn_signal == "unknown":
                 confidence = min(confidence, 0.42)
-        elif best_match.startswith("Indian") and fn_signal == "anglo" and is_hc:
-            # Amy Patel: still Indian, but not max confidence
+        elif best_match.startswith("Indian") and fn_signal in ("anglo", "slavic") and is_hc:
+            # Amy Patel / Andrei Singh: still Indian label, damped confidence
             confidence = min(confidence, 0.55)
 
         return (best_match, confidence, [m[0] for m in matches])
@@ -564,17 +585,17 @@ class EthnicNameDatabase:
                 base = min(base, 0.25 if is_ambiguous else 0.4)
             elif best_match in ("Hispanic", "Portuguese"):
                 base = min(1.0, base + 0.12)
-        elif first_name_signal == "anglo":
+        elif first_name_signal in ("anglo", "slavic"):
+            # Andrey ≈ white Western; Andrei ≈ Slavic — neither supports Indian
             if best_match.startswith("Indian"):
                 if is_ambiguous:
                     base = min(base, 0.28)
                 elif is_high_confidence_surname:
-                    # Possible intermarriage / diaspora given name — still dampen
-                    base = min(base, 0.62)
+                    base = min(base, 0.55)
                 else:
                     base = min(base, 0.45)
             elif best_match.startswith("European"):
-                base = min(1.0, base + 0.1)
+                base = min(1.0, base + (0.15 if first_name_signal == "slavic" else 0.1))
 
         if multi_family and not best_match.startswith("Indian"):
             base -= 0.08 * (self._family_count(matches) - 1)

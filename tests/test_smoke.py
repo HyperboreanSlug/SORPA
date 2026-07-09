@@ -683,6 +683,16 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertTrue(eth8.startswith("Indian"))
         self.assertGreaterEqual(conf8, 0.5)
 
+        # Andrey = white/Western; Andrei = Slavic — neither boosts Indian (Lele)
+        self.assertEqual(db._first_name_signal("Andrey"), "anglo")
+        self.assertEqual(db._first_name_signal("Andrei"), "slavic")
+        for fn in ("Andrey", "Andrei"):
+            eth9, conf9, _ = db.classify_by_name("Lele", first_name=fn)
+            self.assertLess(
+                conf9, 0.5,
+                f"{fn} Lele must be below default min conf, got {eth9} conf={conf9}",
+            )
+
     def test_classify_common_names(self):
         eth = EthnicNameDatabase()
         self.assertEqual(eth.classify_by_name("Garcia")[0], "Hispanic")
