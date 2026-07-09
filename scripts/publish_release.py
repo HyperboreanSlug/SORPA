@@ -70,7 +70,7 @@ def api_request(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="v1.3.11")
+    ap.add_argument("--tag", default="v1.3.12")
     ap.add_argument(
         "--zip",
         type=Path,
@@ -120,11 +120,11 @@ Standalone **Windows** GUI package (no Python install required).
 4. If the app fails to start, install [VC++ Redistributable 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
 
 ### Highlights ({tag})
-- **First-name-aware ethnicity confidence**: ambiguous surnames (Gill, Perera, Silva, …) no longer get high Indian scores from last name alone
-- **Amy Gill / Alberto Perera fixed**: Anglo first names tank confidence; Hispanic first names reclassify Luso/Indic overlaps away from Indian
-- **Indian first-name lists** + expanded exclusions (Shaw, Swain, Ray, Fernandes, …) and ambiguous-surname floors
-- **Reports**: single **Analyze & build**; **Confirm unchecked** only fills unreviewed cards
-- **Browse sort**: percentages and numbers sort 0→100 correctly
+- **NSOPW enrich misclassified**: re-fetch reports or name-search for people flagged as mismatches (photos/race/URLs)
+- **Cristobal More / false Indian hits**: drop English surnames like More from HC Indian list; Hispanic first names (Cristobal)
+- **State YY fix**: NSOPW junk location.state ignored — use real jurisdiction (e.g. FL); repair existing rows
+- **Statistics pie**: Misclassified-as race is always **Black / White / Other**
+- **Reports**: Analyze & build, Confirm unchecked, first-name confidence scoring
 
 ### Notes
 - Runtime data (`data/`, downloads, backups) is local-only and is **not** shipped in this package
