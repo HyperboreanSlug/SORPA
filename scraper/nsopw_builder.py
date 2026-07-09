@@ -96,6 +96,20 @@ def is_abbreviated_first_mode(mode: str) -> bool:
     )
 
 
+# Most common *Indian* surname digraphs (frequency order from HC list).
+# Abbreviated surname search uses only these letter combos — not every digraph
+# from the full list and never brute-force AA–ZZ or US surname patterns.
+INDIAN_LAST_DIGRAPHS_ABBREV = [
+    "RA", "CH", "KA", "SA", "BA", "PA", "SH", "NA", "BH", "GA",
+    "SU", "GO", "VE", "JA", "MA", "SE", "TA", "KU", "DE", "KO",
+    "MU", "SI", "DA", "TH", "VA", "MO", "SR", "SO", "GH", "KR",
+]  # top ~30
+INDIAN_LAST_DIGRAPHS_WIDE = INDIAN_LAST_DIGRAPHS_ABBREV + [
+    "WA", "MI", "AG", "RE", "AH", "VI", "BE", "PO", "PR", "LA",
+    "HA", "KH", "ME", "GU", "AN", "AR", "AS", "AT", "DI", "DU",
+]  # top ~50
+
+
 def indian_surname_digraphs(
     surnames: Sequence[str] | None = None,
 ) -> Set[str]:
@@ -128,6 +142,40 @@ def indian_surname_digraphs(
         elif len(al) == 1:
             digs.add(al.upper())
     return digs
+
+
+def top_surname_digraphs(
+    surnames: Sequence[str],
+    limit: int = 30,
+) -> List[str]:
+    """Most frequent 2-letter last prefixes among *surnames* (frequency order)."""
+    from collections import Counter
+
+    counts: Counter = Counter()
+    for sn in surnames:
+        al = _surname_alnum(sn)
+        if len(al) >= 2:
+            counts[al[:2].upper()] += 1
+        elif len(al) == 1:
+            counts[al.upper()] += 1
+    if limit <= 0:
+        return [d for d, _ in counts.most_common()]
+    return [d for d, _ in counts.most_common(int(limit))]
+
+
+def abbreviated_last_digraphs_for_mode(mode: str) -> List[str]:
+    """Static Indian-likely surname digraph set for abbreviated first modes."""
+    m = (mode or "initials").lower().strip()
+    if m in (
+        "indian_wide",
+        "common_wide",
+        "common14",
+        "top14",
+        "wide",
+    ):
+        return list(INDIAN_LAST_DIGRAPHS_WIDE)
+    # indian / common / abbreviated / top10
+    return list(INDIAN_LAST_DIGRAPHS_ABBREV)
 
 # NSOPW API: len(firstName) + len(lastName) >= 3 (verified live).
 # Keep the floor at 3 so compact short partials maximize coverage per query
@@ -306,7 +354,7 @@ def estimate_compact_query_count(
 
 
 def describe_first_mode(mode: str) -> str:
-    """Short human label for first-name strategy."""
+    """Short human label for first-name + surname abbreviated strategy."""
     m = (mode or "initials").lower().strip()
     if m in (
         "indian",
@@ -318,8 +366,9 @@ def describe_first_mode(mode: str) -> str:
         "abbrev",
     ):
         return (
-            f"Indian firsts {''.join(FIRST_INITIALS_INDIAN)} "
-            f"({len(FIRST_INITIALS_INDIAN)} letters, abbreviated)"
+            f"abbreviated: Indian firsts {''.join(FIRST_INITIALS_INDIAN)} "
+            f"({len(FIRST_INITIALS_INDIAN)}) + top {len(INDIAN_LAST_DIGRAPHS_ABBREV)} "
+            f"surname digraphs"
         )
     if m in (
         "indian_wide",
@@ -329,12 +378,13 @@ def describe_first_mode(mode: str) -> str:
         "wide",
     ):
         return (
-            f"Indian firsts wide {''.join(FIRST_INITIALS_INDIAN_WIDE)} "
-            f"({len(FIRST_INITIALS_INDIAN_WIDE)} letters, abbreviated)"
+            f"abbreviated wide: Indian firsts {''.join(FIRST_INITIALS_INDIAN_WIDE)} "
+            f"({len(FIRST_INITIALS_INDIAN_WIDE)}) + top {len(INDIAN_LAST_DIGRAPHS_WIDE)} "
+            f"surname digraphs"
         )
     if m in ("full", "full_names"):
         return f"full first names ({len(DEFAULT_FIRST_NAMES)})"
-    return f"A–Z firsts ({len(FIRST_INITIALS)} letters, default)"
+    return f"A–Z firsts ({len(FIRST_INITIALS)} letters) + all list surname digraphs"
 
 
 def last_prefix_whitelist_for(
@@ -342,16 +392,29 @@ def last_prefix_whitelist_for(
     surname_pairs: Sequence[Tuple[str, str]],
     *,
     abbreviated: bool,
+    mode: str = "indian",
 ) -> Optional[Set[str]]:
     """
-    When abbreviated Indian search is on, restrict last prefixes to digraphs
-    that appear in Indian surname data only (not US-style / brute-force AA–ZZ).
+    When abbreviated mode is on, restrict last prefixes to the most common
+    Indian-likely surname digraphs (first *and* last letters abbreviated).
 
-    Default (non-abbreviated): None → all digraphs derived from selected surnames
+    - Indian ethnicity lists: static top digraphs (INDIAN_LAST_DIGRAPHS_*)
+      intersected with digraphs that appear in the selected surnames (so we
+      only query combos present in the list).
+    - Other ethnicities: top digraphs by frequency within the selected list
+      (same abbreviated last-letter idea, ethnicity-local).
+
+    Default (non-abbreviated): None → every digraph from selected surnames
     (still list-derived; never brute-force AA–ZZ).
     """
     if not abbreviated:
         return None
+
+    selected = [s for s, _ in surname_pairs]
+    selected_digs = indian_surname_digraphs(selected)
+    if not selected_digs:
+        return set()
+
     eth = (ethnicity or "").lower().strip()
     indianish = eth in (
         "indian",
@@ -362,14 +425,30 @@ def last_prefix_whitelist_for(
         "south_asian",
         "southasian",
     ) or eth.startswith("indian")
-    if not indianish:
-        # Non-Indian ethnicity: still only list-derived prefixes (no extra filter)
-        return None
-    # Indian corpus digraphs + digraphs from the selected list surnames
-    # (selected is usually already in corpus; union keeps HC-only edge names)
-    return indian_surname_digraphs() | indian_surname_digraphs(
-        [s for s, _ in surname_pairs]
+
+    if indianish:
+        # Abbreviated: only the common Indian digraph set that also appear
+        # in the selected surname list (covers both first- and last-letter cuts).
+        seed = {d.upper() for d in abbreviated_last_digraphs_for_mode(mode)}
+        # Always keep 1-letter starters of allowed digraphs for longer firsts
+        allowed = selected_digs & seed
+        # If intersection is empty (tiny custom list), fall back to top-N of list
+        if not allowed:
+            n = len(INDIAN_LAST_DIGRAPHS_WIDE) if "wide" in (mode or "") else len(
+                INDIAN_LAST_DIGRAPHS_ABBREV
+            )
+            allowed = set(top_surname_digraphs(selected, limit=n))
+        return allowed
+
+    # Non-Indian ethnicity + abbreviated first mode: still abbreviate last
+    # prefixes by taking top digraphs from the selected list only.
+    n = (
+        len(INDIAN_LAST_DIGRAPHS_WIDE)
+        if (mode or "").lower().strip()
+        in ("indian_wide", "common_wide", "common14", "top14", "wide")
+        else len(INDIAN_LAST_DIGRAPHS_ABBREV)
     )
+    return set(top_surname_digraphs(selected, limit=n))
 
 
 @dataclass
@@ -762,19 +841,18 @@ class NSOPWEthnicDatabaseBuilder:
         Run the ethnic-name NSOPW search pipeline.
 
         first_mode:
-          - "initials" (default): full A–Z first-letter prefixes
-          - "indian" / "common": abbreviated Indian given-name letters
-            (ASRPMKVNBD) — optional fewer searches; not the default
-          - "indian_wide" / "common_wide": wider Indian set (+GJHT)
+          - "initials" (default): full A–Z firsts + all list surname digraphs
+          - "indian" / "common": abbreviated BOTH first letters
+            (ASRPMKVNBD) AND top ~30 Indian surname digraphs (RA/CH/KA/…)
+          - "indian_wide" / "common_wide": wider firsts (+GJHT) and ~50 digraphs
           - "full": use DEFAULT_FIRST_NAMES or provided first_names list
           - "custom": only the provided first_names list
 
         Short last-name prefixes (min combined first+last length 3) collapse many
         list surnames into fewer queries (e.g. M+AH covers Ahmed and Ahmad).
         Prefixes are always derived from the selected surname list (never
-        brute-force AA–ZZ). With abbreviated Indian first-mode on Indian
-        ethnicity lists, last digraphs are further restricted to Indian-likely
-        letter combos.
+        brute-force AA–ZZ). Abbreviated mode further cuts surname digraphs to
+        the most common Indian-likely letter combos only.
 
         use_compact_prefixes:
           When True (default), collapse surnames to short last prefixes that
@@ -930,15 +1008,15 @@ class NSOPWEthnicDatabaseBuilder:
         sub_disp = (subcategory or "all").strip() or "all"
 
         # Collapse to short last prefixes (first+last ≥ min_combined) for fewer API calls.
-        # Last prefixes always come from selected surnames; when abbreviated Indian
-        # first-mode is on, further restrict to Indian-likely digraphs only.
+        # Abbreviated mode shortens BOTH first letters (Indian set) AND surname
+        # digraphs (top Indian-likely combos only).
         try:
             mcl = max(3, int(min_combined_len))
         except (TypeError, ValueError):
             mcl = MIN_COMBINED_NAME_LEN
         abbrev = is_abbreviated_first_mode(mode)
         last_allow = last_prefix_whitelist_for(
-            eth_key, surname_pairs, abbreviated=abbrev
+            eth_key, surname_pairs, abbreviated=abbrev, mode=mode
         )
         naive_queries = len(surname_pairs) * len(firsts)
         if use_compact_prefixes:
@@ -949,13 +1027,21 @@ class NSOPWEthnicDatabaseBuilder:
                 allowed_last_prefixes=last_allow,
             )
         else:
-            # One query per full surname × first (no prefix collapse), de-duped
+            # One query per full surname × first (no prefix collapse), de-duped.
+            # Abbreviated mode still drops surnames whose digraph is not allowed.
             plan_map: Dict[Tuple[str, str], Tuple[str, str, str, Set[str]]] = {}
             for sn, eth_lab in surname_pairs:
+                s = (sn or "").strip()
+                if not s:
+                    continue
+                if last_allow is not None:
+                    al = _surname_alnum(s)
+                    dig = al[:2].upper() if len(al) >= 2 else al.upper()
+                    if dig and dig not in last_allow:
+                        continue
                 for fn in firsts:
                     f = (fn or "").strip()
-                    s = (sn or "").strip()
-                    if not f or not s:
+                    if not f:
                         continue
                     if len(f) + len(s) < mcl:
                         continue

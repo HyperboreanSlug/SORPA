@@ -14,6 +14,8 @@ from scraper.nsopw_builder import (
     FIRST_INITIALS,
     FIRST_INITIALS_INDIAN,
     FIRST_INITIALS_INDIAN_WIDE,
+    INDIAN_LAST_DIGRAPHS_ABBREV,
+    INDIAN_LAST_DIGRAPHS_WIDE,
     NSOPWEthnicDatabaseBuilder,
     RateLimiter,
     compact_search_plan,
@@ -24,6 +26,7 @@ from scraper.nsopw_builder import (
     last_matches_target_surnames,
     last_name_search_prefix,
     last_prefix_whitelist_for,
+    top_surname_digraphs,
 )
 from scraper.report_fetcher import ReportFetcher
 
@@ -383,13 +386,8 @@ class CompactPrefixTests(unittest.TestCase):
         self.assertIn("PA", corpus)
         self.assertIn("SI", corpus)
         self.assertNotIn("ZZ", corpus)
-        # Whitelist only when abbreviated Indian mode is on
+        # Default non-abbreviated: no extra filter (None) → all list digraphs
         pairs = [(s, "Indian") for s in ("Patel", "Singh")]
-        wl = last_prefix_whitelist_for("indian", pairs, abbreviated=True)
-        self.assertIsNotNone(wl)
-        self.assertIn("PA", wl)
-        self.assertIn("SI", wl)
-        # Default non-abbreviated: no extra filter (None)
         self.assertIsNone(
             last_prefix_whitelist_for("indian", pairs, abbreviated=False)
         )
@@ -401,6 +399,54 @@ class CompactPrefixTests(unittest.TestCase):
         prefs = {p.upper() for _, p, _, _ in plan}
         self.assertEqual(prefs, {"PA", "SI"})
         self.assertNotIn("SM", prefs)
+
+    def test_abbreviated_mode_cuts_first_and_last_letters(self):
+        """Abbreviated mode shortens both first initials and surname digraphs."""
+        self.assertEqual(len(INDIAN_LAST_DIGRAPHS_ABBREV), 30)
+        self.assertEqual(len(INDIAN_LAST_DIGRAPHS_WIDE), 50)
+        # Top digraphs from a small list
+        tops = top_surname_digraphs(
+            ["Patel", "Patel", "Singh", "Sharma", "Kumar", "Reddy", "Iyer"],
+            limit=3,
+        )
+        self.assertEqual(tops[0], "PA")  # Patel x2
+        self.assertEqual(len(tops), 3)
+
+        # Build a list with many digraphs including rare ones
+        common = ["Patel", "Singh", "Sharma", "Kumar", "Reddy", "Chatterjee",
+                  "Banerjee", "Mukherjee", "Nair", "Rao", "Gupta", "Mehta"]
+        rare = ["Xylophone", "Zwicky", "Quibble"]  # not in Indian abbrev seed
+        pairs = [(s, "Indian") for s in common + rare]
+        wl = last_prefix_whitelist_for(
+            "indian", pairs, abbreviated=True, mode="indian"
+        )
+        self.assertIsNotNone(wl)
+        # Common Indian digraphs kept
+        self.assertIn("PA", wl)
+        self.assertIn("SI", wl)
+        self.assertIn("SH", wl)
+        self.assertIn("CH", wl)  # Chatterjee
+        # Rare / non-Indian digraphs dropped by abbreviated seed
+        self.assertNotIn("XY", wl)
+        self.assertNotIn("ZW", wl)
+        self.assertNotIn("QU", wl)
+        # Full plan (all digraphs) > abbreviated plan
+        full = estimate_compact_query_count(
+            pairs, FIRST_INITIALS_INDIAN, min_combined=3
+        )
+        abbr = estimate_compact_query_count(
+            pairs,
+            FIRST_INITIALS_INDIAN,
+            min_combined=3,
+            allowed_last_prefixes=wl,
+        )
+        self.assertLess(abbr, full)
+        self.assertGreater(abbr, 0)
+        # Wide allows more digraphs than narrow
+        wl_wide = last_prefix_whitelist_for(
+            "indian", pairs, abbreviated=True, mode="indian_wide"
+        )
+        self.assertGreaterEqual(len(wl_wide or set()), len(wl or set()))
 
     def test_last_prefix_min_combined_3(self):
         # Shortest legal last token for max coverage per search

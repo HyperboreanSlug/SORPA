@@ -2911,7 +2911,7 @@ class ArchiverApp(ctk.CTk):
         self.nsopw_first_mode_combo.pack(side="left", padx=(0, 8))
         ctk.CTkLabel(
             r1b,
-            text="default A–Z · indian = abbreviated Indian firsts (A S R P M K V N B D)",
+            text="default A–Z+all digraphs · indian = abbreviate firsts AND surname digraphs",
             font=FONT_SM, text_color=C["dim"],
         ).pack(side="left")
 
@@ -3237,7 +3237,10 @@ class ArchiverApp(ctk.CTk):
                 last_prefix_whitelist_for,
             )
             last_allow = last_prefix_whitelist_for(
-                eth, pairs, abbreviated=is_abbreviated_first_mode(first_mode)
+                eth,
+                pairs,
+                abbreviated=is_abbreviated_first_mode(first_mode),
+                mode=first_mode,
             )
             if use_compact:
                 est = estimate_compact_query_count(
@@ -4150,9 +4153,10 @@ class ArchiverApp(ctk.CTk):
             "NSOPW accepts partial first and last names. Combined length must be at least 3 "
             "letters (e.g. first=M, last=AH matches Mohamed Ahmed). Compact mode collapses "
             "surnames that share a short prefix so one query covers many list names. "
-            "Last prefixes always come from the selected surname list (Indian digraphs for "
-            "Indian lists — never brute-force AA–ZZ). First-letter abbreviation (Indian "
-            "letters A/S/R/P/M/K/V/N/B/D) is optional on the NSOPW tab; default is full A–Z.",
+            "Last prefixes always come from the selected surname list (never brute-force "
+            "AA–ZZ). Optional abbreviated mode (NSOPW tab → indian / indian_wide) shortens "
+            "BOTH first letters (Indian A/S/R/P/M/K/V/N/B/D) AND surname digraphs (top "
+            "Indian-likely combos like RA/CH/KA/PA/SH…). Default is full A–Z + all list digraphs.",
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         self.settings_compact_prefixes = ctk.BooleanVar(

@@ -608,10 +608,10 @@ Examples:
         ],
         default="initials",
         help=(
-            "First-name strategy (default: initials = full A–Z). "
-            "indian = abbreviated Indian first letters ASRPMKVNBD (fewer searches); "
-            "indian_wide adds GJHT; common/common_wide are aliases for indian modes; "
-            "full = full first names; custom with --first-names"
+            "Name strategy (default: initials = full A–Z firsts + all list surname digraphs). "
+            "indian = abbreviated: Indian first letters ASRPMKVNBD AND top ~30 Indian "
+            "surname digraphs (RA/CH/KA/…); indian_wide widens both; "
+            "common/common_wide alias indian modes; full = full first names"
         ),
     )
     p_nsopw.add_argument(
