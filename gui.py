@@ -3107,7 +3107,7 @@ class ArchiverApp(ctk.CTk):
                 text=(
                     f"Analyze ready · {len(stats_results):,} mismatches"
                     + (f" · {n_correct} correct excluded" if n_correct else "")
-                    + " · Build list to review with photos"
+                    + " · Reports → Analyze & build for photo review"
                 )
             )
 
@@ -3146,15 +3146,9 @@ class ArchiverApp(ctk.CTk):
         bar.pack(fill="x", padx=4, pady=(0, 4))
 
         ctk.CTkButton(
-            bar, text="Build list", width=110,
+            bar, text="Analyze & build", width=130,
             command=self._reports_build_list,
             fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            bar, text="Analyze + build", width=130,
-            command=self._reports_analyze_and_build,
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"],
         ).pack(side="left", padx=(0, 12))
 
         self.report_photos_only = ctk.BooleanVar(value=True)
@@ -3196,8 +3190,8 @@ class ArchiverApp(ctk.CTk):
         ).pack(side="left", padx=(0, 12))
 
         ctk.CTkButton(
-            bar, text="Confirm all visible", width=140,
-            command=self._reports_confirm_all_visible,
+            bar, text="Confirm unchecked", width=140,
+            command=self._reports_confirm_unchecked,
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
@@ -3239,8 +3233,8 @@ class ArchiverApp(ctk.CTk):
         self.report_status = ctk.CTkLabel(
             top,
             text=(
-                "Run Analyze on Misclassify (or Analyze + build), then Build list. "
-                "Mark each person Confirmed / Correct for export."
+                "Click Analyze & build (uses Misclassify ethnicity / min conf). "
+                "Mark Confirmed or Correct · Confirm unchecked only fills unreviewed cards."
             ),
             font=FONT_SM, text_color=C["dim"], anchor="w",
         )
@@ -3260,10 +3254,11 @@ class ArchiverApp(ctk.CTk):
             scroll,
             text=(
                 "No report list yet.\n\n"
-                "1. Set ethnicity / min conf on Misclassify\n"
-                "2. Click Build list (or Analyze + build)\n"
-                "3. Review each card — Confirmed misclass or Correct label\n"
-                "4. Export HTML for a presentation-ready gallery"
+                "1. Set ethnicity / min conf (shared with Misclassify)\n"
+                "2. Click Analyze & build\n"
+                "3. Review — Confirmed misclass or Correct label\n"
+                "4. Confirm unchecked for remaining unreviewed cards\n"
+                "5. Export HTML for a presentation-ready gallery"
             ),
             font=FONT_SM, text_color=C["dim"], justify="left",
         )
@@ -3411,15 +3406,6 @@ class ArchiverApp(ctk.CTk):
             )
             self._misclass_records_by_iid[iid] = rec
 
-    def _reports_analyze_and_build(self):
-        """Run shared Analyze, then build the visual report list."""
-        try:
-            self._run_misclassification()
-        except Exception as e:
-            messagebox.showerror("Analyze", str(e))
-            return
-        self._reports_build_list()
-
     def _reports_filtered_source(self) -> list:
         """Apply report filters to current misclassification results."""
         results = list(self._misclass_results or [])
@@ -3524,40 +3510,51 @@ class ArchiverApp(ctk.CTk):
             out = out[:max_n]
         return out
 
-    def _reports_confirm_all_visible(self) -> None:
-        """Mark every currently visible report card as Confirmed misclass."""
+    def _reports_confirm_unchecked(self) -> None:
+        """Mark only unreviewed (unchecked) visible cards as Confirmed misclass."""
         items = list(self._report_items or [])
         if not items:
-            messagebox.showinfo("Reports", "Build a report list first.")
+            messagebox.showinfo("Reports", "Run Analyze & build first.")
             return
-        n_un = sum(1 for mc in items if self._verdict_for_mc(mc) == "unreviewed")
-        n_all = len(items)
+        unchecked = [
+            mc for mc in items if self._verdict_for_mc(mc) == "unreviewed"
+        ]
+        if not unchecked:
+            messagebox.showinfo(
+                "Confirm unchecked",
+                "No unchecked (unreviewed) cards in the current list.\n"
+                "Already confirmed / correct / skip marks are left alone.",
+            )
+            return
         ok = messagebox.askyesno(
-            "Confirm all visible?",
+            "Confirm unchecked?",
             (
-                f"Mark all {n_all:,} visible people as Confirmed misclass?\n"
-                f"({n_un:,} currently unreviewed — others will be overwritten to confirmed.)\n\n"
-                "Correct-label marks are also overwritten. Use only when the whole "
-                "list is ready for presentation export."
+                f"Mark {len(unchecked):,} unchecked (unreviewed) visible card(s) "
+                f"as Confirmed misclass?\n\n"
+                "Already Confirmed, Correct label, and Skip marks are not changed."
             ),
         )
         if not ok:
             return
-        for mc in items:
+        for mc in unchecked:
             self._set_verdict_for_mc(mc, "confirmed", save=False)
         self._save_report_verdicts()
         self._reports_rebuild_cards()
         self._refresh_stats_from_verdicts()
+        if hasattr(self, "report_status"):
+            self.report_status.configure(
+                text=f"Confirmed {len(unchecked):,} previously unchecked cards"
+            )
 
     def _reports_confirm_others(self, keep_mc) -> None:
-        """Confirm every other visible card; leave *keep_mc* unchanged."""
+        """Confirm other visible unreviewed cards; leave *keep_mc* unchanged."""
         keep_key = self._report_item_key(keep_mc)
         n = 0
         for mc in list(self._report_items or []):
             if self._report_item_key(mc) == keep_key:
                 continue
-            if self._verdict_for_mc(mc) == "correct":
-                continue  # don't override Correct labels
+            if self._verdict_for_mc(mc) != "unreviewed":
+                continue  # only unchecked; never overwrite Correct/Confirmed/Skip
             self._set_verdict_for_mc(mc, "confirmed", save=False)
             n += 1
         self._save_report_verdicts()
@@ -3565,17 +3562,25 @@ class ArchiverApp(ctk.CTk):
         self._refresh_stats_from_verdicts()
         if hasattr(self, "report_status"):
             self.report_status.configure(
-                text=f"Marked {n:,} other visible cards as Confirmed misclass"
+                text=f"Confirmed {n:,} other unchecked visible cards"
             )
 
     def _reports_build_list(self):
-        """Filter Analyze results and render photo cards."""
+        """Run Analyze (shared filters), then filter and render photo cards."""
+        try:
+            self._run_misclassification()
+        except Exception as e:
+            messagebox.showerror("Analyze & build", str(e))
+            return
         if not self._misclass_results:
             messagebox.showinfo(
                 "Reports",
-                "No Analyze results yet.\n\n"
-                "Run Analyze on the Misclassify tab, or click Analyze + build.",
+                "Analyze finished with no mismatches for the current filters.\n"
+                "Try lower min conf. or another ethnicity.",
             )
+            self._report_items = []
+            self._reports_rebuild_cards()
+            self._reports_update_metrics()
             return
         self._report_items = self._reports_filtered_source()
         self._reports_rebuild_cards()
