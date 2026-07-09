@@ -61,7 +61,7 @@ pip install -r requirements.txt
 python gui.py
 ```
 
-Dark CustomTkinter UI (scrape, search, misclassify, NSOPW, CSV viewer).
+Dark CustomTkinter UI (Browse: search + integrity + misclassify, NSOPW, scrape + CSV import).
 
 ### Standalone Windows EXE
 
@@ -146,7 +146,10 @@ initials** so each surname needs at most 26 queries.
 | Field | Content |
 |--------|---------|
 | `source_url` | Click-through jurisdiction report link from NSOPW |
-| `report_html_path` | Local HTML snapshot of that report (for offline validation) |
+| `report_html_path` | Local HTML snapshot of that report (images embedded for offline viewing) |
+| `photo_path` | Local offender photo file (NSOPW image and/or report-page download) |
+| `photo_url` | Remote photo URL when known |
+| `crime` | Offense/charge text scraped from the jurisdiction report HTML |
 | demographics | Best-effort race/ethnicity/height/etc. from the report page |
 | `likely_ethnicity` | From the ethnic surname list used in the search |
 

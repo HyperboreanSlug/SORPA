@@ -74,6 +74,7 @@ def main() -> None:
         "scraper",
         "scraper.config",
         "scraper.database",
+        "scraper.app_settings",
         "scraper.searcher",
         "scraper.ethnic_names",
         "scraper.nsopw_client",

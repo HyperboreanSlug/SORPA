@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import tkinter as tk
+
 # ---------------------------------------------------------------------------
 # Bootstrap: path + cwd (double-click often starts in System32 / user home)
 # ---------------------------------------------------------------------------
@@ -123,12 +125,12 @@ C = {
     "tree_head": "#1c1c24",
 }
 
-FONT_UI = ("Segoe UI", 13)
-FONT_SM = ("Segoe UI", 12)
-FONT_BOLD = ("Segoe UI", 13, "bold")
-FONT_TITLE = ("Segoe UI", 20, "bold")
-FONT_SECTION = ("Segoe UI", 14, "bold")
-FONT_MONO = ("Consolas", 12)
+FONT_UI = ("Segoe UI", 12)
+FONT_SM = ("Segoe UI", 11)
+FONT_BOLD = ("Segoe UI", 12, "bold")
+FONT_TITLE = ("Segoe UI", 16, "bold")
+FONT_SECTION = ("Segoe UI", 12, "bold")
+FONT_MONO = ("Consolas", 11)
 
 
 def _style_treeview(root: ctk.CTk) -> None:
@@ -218,7 +220,7 @@ def _muted(parent, text: str) -> ctk.CTkLabel:
 
 
 def _tree_frame(parent) -> tuple[ctk.CTkFrame, ttk.Treeview]:
-    """Dark treeview inside a card with scrollbars."""
+    """Dark treeview inside a card with scrollbars (fills parent; columns stretch)."""
     wrap = ctk.CTkFrame(parent, fg_color=C["tree_bg"], corner_radius=10, border_width=1, border_color=C["border"])
     tree = ttk.Treeview(wrap, style="Dark.Treeview", show="headings")
     vsb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview, style="Dark.Vertical.TScrollbar")
@@ -230,6 +232,278 @@ def _tree_frame(parent) -> tuple[ctk.CTkFrame, ttk.Treeview]:
     wrap._tree_vsb = vsb  # type: ignore[attr-defined]
     wrap._tree_hsb = hsb  # type: ignore[attr-defined]
     return wrap, tree
+
+
+def _vpaned(parent) -> tk.PanedWindow:
+    """Vertical drag-sash splitter for resizable data panes."""
+    return tk.PanedWindow(
+        parent,
+        orient=tk.VERTICAL,
+        sashwidth=6,
+        sashrelief=tk.FLAT,
+        bg=C["border"],
+        bd=0,
+        opaqueresize=True,
+    )
+
+
+def _hpaned(parent) -> tk.PanedWindow:
+    """Horizontal drag-sash splitter for resizable data panes."""
+    return tk.PanedWindow(
+        parent,
+        orient=tk.HORIZONTAL,
+        sashwidth=6,
+        sashrelief=tk.FLAT,
+        bg=C["border"],
+        bd=0,
+        opaqueresize=True,
+    )
+
+
+def _stretch_columns(tree: ttk.Treeview, columns: List[str], widths: Optional[List[int]] = None) -> None:
+    """Make tree columns user-resizable and stretch with the window."""
+    for i, c in enumerate(columns):
+        w = widths[i] if widths and i < len(widths) else 120
+        tree.column(c, width=w, minwidth=40, stretch=True)
+
+
+def _format_race_display(race: Optional[str]) -> str:
+    """Display race in normal case (not ALL CAPS), e.g. WHITE → White."""
+    raw = (race or "").strip()
+    if not raw or raw == "—":
+        return "—"
+    # Keep short codes as-is
+    if len(raw) <= 2:
+        return raw.upper()
+    # Prefer shared formatter when available
+    try:
+        from scraper.searcher import format_race_label
+        return format_race_label(raw)
+    except Exception:
+        return raw.title()
+
+
+_PIE_PALETTE = (
+    "#e8a87c", "#8ab4c9", "#7dcea0", "#c39bd3", "#f5b7b1",
+    "#76d7c4", "#f9e79f", "#aed6f1", "#d7bde2", "#f0b27a",
+    "#85c1e9", "#82e0aa", "#f1948a", "#bb8fce", "#5dade2",
+)
+
+
+def _render_bar_chart(
+    items: List[tuple],
+    *,
+    title: str = "",
+    width: int = 900,
+    height: Optional[int] = None,
+    max_bars: int = 12,
+    accent: str = "#e8a87c",
+    bg: str = "#141418",
+    fg: str = "#ececf1",
+    muted: str = "#9b9ba8",
+    bar_color: Optional[str] = None,
+) -> Any:
+    """Horizontal bar chart (Pillow) — used for integrity multi-state view."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    bar_color = bar_color or accent
+    data = [(str(l), int(v)) for l, v in list(items)[:max_bars]]
+    width = max(640, int(width))
+    n = max(1, len(data))
+    row_h = 26 if n > 12 else 30
+    pad_t = 34 if title else 12
+    pad_b = 14
+    if height is None:
+        height = pad_t + pad_b + n * row_h
+    height = max(height, pad_t + pad_b + max(n, 4) * row_h)
+
+    img = Image.new("RGB", (width, height), bg)
+    draw = ImageDraw.Draw(img)
+    try:
+        font_sm = ImageFont.truetype("segoeui.ttf", 12)
+        font_title = ImageFont.truetype("segoeui.ttf", 14)
+    except Exception:
+        font_sm = ImageFont.load_default()
+        font_title = font_sm
+
+    def _text_w(text: str, font) -> int:
+        try:
+            return int(draw.textlength(text, font=font))
+        except Exception:
+            box = draw.textbbox((0, 0), text, font=font)
+            return int(box[2] - box[0])
+
+    pad_l, pad_r = 14, 14
+    if title:
+        draw.text((pad_l, 8), title, fill=fg, font=font_title)
+
+    if not data:
+        draw.text((pad_l, height // 2 - 6), "No data — run Analyze", fill=muted, font=font_sm)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=(width, height))
+
+    max_v = max(v for _l, v in data) or 1
+    label_w = max(_text_w(lab, font_sm) for lab, _ in data) + 12
+    label_w = min(max(label_w, 100), max(120, width // 3))
+    count_w = max(_text_w(str(max_v), font_sm), 28) + 8
+    chart_x0 = pad_l + label_w
+    chart_x1 = width - pad_r - count_w
+    chart_w = max(60, chart_x1 - chart_x0)
+    bar_h = 16
+
+    for i, (lab, val) in enumerate(data):
+        y = pad_t + i * row_h
+        draw.text((pad_l, y + 2), lab, fill=muted, font=font_sm)
+        bw = int(chart_w * (val / max_v))
+        x1 = chart_x0 + max(3, bw)
+        draw.rounded_rectangle(
+            [chart_x0, y + 2, x1, y + 2 + bar_h],
+            radius=4,
+            fill=bar_color,
+        )
+        draw.text((x1 + 8, y + 2), str(val), fill=fg, font=font_sm)
+
+    return ctk.CTkImage(light_image=img, dark_image=img, size=(width, height))
+
+
+def _render_pie_chart(
+    items: List[tuple],
+    *,
+    title: str = "",
+    width: int = 360,
+    height: int = 320,
+    max_slices: int = 8,
+    bg: str = "#141418",
+    fg: str = "#ececf1",
+    muted: str = "#9b9ba8",
+    accent: str = "#e8a87c",
+    legend_below: bool = True,
+) -> Any:
+    """
+    Circle (pie) chart with full legend labels (Pillow).
+    legend_below=True packs legend under the pie (good for side-by-side charts).
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    raw = [(str(l), max(0, int(v))) for l, v in items if int(v) > 0]
+    raw.sort(key=lambda t: -t[1])
+    if len(raw) > max_slices:
+        head = raw[: max_slices - 1]
+        other = sum(v for _l, v in raw[max_slices - 1 :])
+        raw = head + ([("Other", other)] if other else [])
+
+    width = max(260, int(width))
+    n_leg = max(len(raw), 1)
+    line_h = 18
+    title_h = 28 if title else 8
+    pie_size = min(160, width - 24)
+    if legend_below:
+        height = max(height, title_h + pie_size + 16 + n_leg * line_h + 16)
+    else:
+        height = max(height, title_h + max(pie_size, n_leg * line_h) + 20)
+
+    img = Image.new("RGB", (width, height), bg)
+    draw = ImageDraw.Draw(img)
+    try:
+        font_sm = ImageFont.truetype("segoeui.ttf", 11)
+        font_title = ImageFont.truetype("segoeui.ttf", 13)
+    except Exception:
+        font_sm = ImageFont.load_default()
+        font_title = font_sm
+
+    pad = 10
+    if title:
+        draw.text((pad, 6), title, fill=fg, font=font_title)
+
+    if not raw:
+        draw.text((pad, height // 2 - 6), "No data — run Analyze", fill=muted, font=font_sm)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=(width, height))
+
+    total = sum(v for _l, v in raw) or 1
+    top = title_h
+    if legend_below:
+        cx = width // 2
+        cy = top + pie_size // 2 + 4
+    else:
+        cx = pad + pie_size // 2 + 4
+        cy = top + pie_size // 2 + 4
+    bbox = [cx - pie_size // 2, cy - pie_size // 2, cx + pie_size // 2, cy + pie_size // 2]
+
+    start = -90.0
+    for i, (_lab, val) in enumerate(raw):
+        extent = 360.0 * (val / total)
+        color = _PIE_PALETTE[i % len(_PIE_PALETTE)]
+        if extent >= 360:
+            draw.ellipse(bbox, fill=color)
+        elif extent > 0.15:
+            draw.pieslice(bbox, start=start, end=start + extent, fill=color)
+        start += extent
+    draw.ellipse(bbox, outline="#2e2e38", width=2)
+
+    sw = 11
+    if legend_below:
+        legend_x = pad
+        legend_y = cy + pie_size // 2 + 10
+    else:
+        legend_x = cx + pie_size // 2 + 16
+        legend_y = top + 2
+
+    for i, (lab, val) in enumerate(raw):
+        color = _PIE_PALETTE[i % len(_PIE_PALETTE)]
+        y = legend_y + i * line_h
+        if y + line_h > height - 4:
+            break
+        draw.rounded_rectangle([legend_x, y + 2, legend_x + sw, y + 2 + sw], radius=2, fill=color)
+        pct = 100.0 * val / total
+        text = f"{lab}  ·  {val}  ({pct:.1f}%)"
+        draw.text((legend_x + sw + 6, y), text, fill=fg, font=font_sm)
+
+    return ctk.CTkImage(light_image=img, dark_image=img, size=(width, height))
+
+
+def _wire_wide_scroll(tab, scroll_frame) -> None:
+    """
+    Expand mouse-wheel capture to the whole tab (including margins) and
+    pin the scrollbar to the far right edge of the tab.
+    """
+    try:
+        canvas = scroll_frame._parent_canvas  # type: ignore[attr-defined]
+        parent_frame = scroll_frame._parent_frame  # type: ignore[attr-defined]
+        scrollbar = scroll_frame._scrollbar  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+    def _wheel(event):
+        delta = getattr(event, "delta", 0) or 0
+        if delta:
+            steps = int(-1 * (delta / 120)) if abs(delta) >= 120 else int(-1 * delta)
+            if steps == 0:
+                steps = -1 if delta > 0 else 1
+            canvas.yview_scroll(steps, "units")
+        else:
+            num = getattr(event, "num", 0)
+            if num == 4:
+                canvas.yview_scroll(-3, "units")
+            elif num == 5:
+                canvas.yview_scroll(3, "units")
+        return "break"
+
+    # Capture wheel anywhere on the statistics tab (not only over content)
+    for w in (tab, parent_frame, canvas, scroll_frame):
+        try:
+            w.bind("<MouseWheel>", _wheel, add="+")
+            w.bind("<Button-4>", _wheel, add="+")
+            w.bind("<Button-5>", _wheel, add="+")
+        except Exception:
+            pass
+
+    # Scrollbar flush right — remove CTk corner inset padding
+    try:
+        canvas.grid_configure(padx=(0, 0), pady=0)
+        scrollbar.grid_configure(padx=(2, 0), pady=0, sticky="ns")
+        parent_frame.grid_columnconfigure(0, weight=1)
+        parent_frame.grid_columnconfigure(1, weight=0, minsize=14)
+    except Exception:
+        pass
 
 
 def _bind_tree_scroll_isolation(tree: ttk.Treeview, wrap: ctk.CTkFrame) -> None:
@@ -338,21 +612,27 @@ class ArchiverApp(ctk.CTk):
         self.selected_states: set = set()
         self.log_queue: queue.Queue = queue.Queue()
         self.is_running = False
-        self.db_path = "data/offenders.db"
         self._nsopw_cancel = False
-        self._viewer_data: List[Dict[str, Any]] = []
-        self._viewer_headers: List[str] = []
+        self._misclass_results: list = []
+        self._closing = False
+
+        # Persistent settings (DB path, backups, NSOPW compact search)
+        from scraper.app_settings import load_settings
+
+        self.app_settings = load_settings()
+        self.db_path = str(self.app_settings.get("db_path") or "data/offenders.db")
 
         self._build()
         self._load_sources()
         self._poll_log()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # -----------------------------------------------------------------------
     # Shell
     # -----------------------------------------------------------------------
     def _build(self):
-        # Header
-        header = ctk.CTkFrame(self, fg_color=C["surface"], height=64, corner_radius=0)
+        # Compact header (was 64px + large padding → wasted top space)
+        header = ctk.CTkFrame(self, fg_color=C["surface"], height=44, corner_radius=0)
         header.pack(fill="x")
         header.pack_propagate(False)
 
@@ -361,7 +641,25 @@ class ArchiverApp(ctk.CTk):
             text="SOR Public Archiver",
             font=FONT_TITLE,
             text_color=C["text"],
-        ).pack(side="left", padx=24, pady=16)
+        ).pack(side="left", padx=14, pady=8)
+
+        # DB path indicator (high priority: avoid empty-DB confusion)
+        db_row = ctk.CTkFrame(header, fg_color="transparent")
+        db_row.pack(side="left", padx=(8, 0), fill="y")
+        self.header_db_label = ctk.CTkLabel(
+            db_row,
+            text="",
+            font=FONT_SM,
+            text_color=C["muted"],
+            anchor="w",
+        )
+        self.header_db_label.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            db_row, text="Open data", width=88, height=28,
+            command=self._open_data_folder_header,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left")
 
         self.stats_label = ctk.CTkLabel(
             header,
@@ -369,14 +667,27 @@ class ArchiverApp(ctk.CTk):
             font=FONT_SM,
             text_color=C["accent"],
         )
-        self.stats_label.pack(side="right", padx=24)
+        self.stats_label.pack(side="right", padx=14)
+        self.after(50, self._refresh_header_db_path)
 
-        # Body: tabs + log
+        # Body: tabs always; Activity log only on NSOPW / Scrape
         body = ctk.CTkFrame(self, fg_color=C["bg"])
-        body.pack(fill="both", expand=True, padx=16, pady=(12, 8))
+        body.pack(fill="both", expand=True, padx=8, pady=(4, 6))
+
+        main_split = _vpaned(body)
+        main_split.pack(fill="both", expand=True)
+
+        tabs_host = ctk.CTkFrame(main_split, fg_color=C["bg"], corner_radius=0)
+        log_host = ctk.CTkFrame(main_split, fg_color=C["bg"], corner_radius=0)
+        main_split.add(tabs_host, minsize=280, stretch="always")
+        # Log pane added only when NSOPW/Scrape is active
+        self._main_split = main_split
+        self._tabs_host = tabs_host
+        self._log_host = log_host
+        self._log_visible = False
 
         self.tabs = ctk.CTkTabview(
-            body,
+            tabs_host,
             fg_color=C["surface"],
             segmented_button_fg_color=C["elevated"],
             segmented_button_selected_color=C["accent_dim"],
@@ -388,27 +699,33 @@ class ArchiverApp(ctk.CTk):
             corner_radius=12,
             border_width=1,
             border_color=C["border"],
+            command=self._on_main_tab_change,
         )
         self.tabs.pack(fill="both", expand=True)
 
-        for name in ("Scrape", "Search", "Misclassify", "NSOPW", "Viewer"):
+        # Primary: Browse (search + integrity + misclassify). Settings last.
+        for name in ("Browse", "NSOPW", "Scrape", "Settings"):
             self.tabs.add(name)
 
-        self._build_scrape(self.tabs.tab("Scrape"))
-        self._build_search(self.tabs.tab("Search"))
-        self._build_misclass(self.tabs.tab("Misclassify"))
+        self._build_browse(self.tabs.tab("Browse"))
         self._build_nsopw(self.tabs.tab("NSOPW"))
-        self._build_viewer(self.tabs.tab("Viewer"))
+        self._build_scrape(self.tabs.tab("Scrape"))
+        self._build_settings(self.tabs.tab("Settings"))
+        try:
+            self.tabs.set("Browse")
+        except Exception:
+            pass
 
-        # Log
-        log_card = _card(self)
-        log_card.pack(fill="x", padx=16, pady=(0, 16))
+        # Log (shown only on NSOPW / Scrape via _on_main_tab_change)
+        log_card = _card(log_host)
+        log_card.pack(fill="both", expand=True, padx=0, pady=(4, 0))
         ctk.CTkLabel(
-            log_card, text="Activity", font=FONT_BOLD, text_color=C["muted"], anchor="w"
+            log_card, text="Activity  ·  shown on NSOPW & Scrape · drag sash to resize",
+            font=FONT_BOLD, text_color=C["muted"], anchor="w",
         ).pack(fill="x", padx=14, pady=(10, 4))
         self.log_text = ctk.CTkTextbox(
             log_card,
-            height=120,
+            height=100,
             font=FONT_MONO,
             fg_color=C["bg"],
             text_color=C["muted"],
@@ -417,8 +734,315 @@ class ArchiverApp(ctk.CTk):
             corner_radius=8,
             activate_scrollbars=True,
         )
-        self.log_text.pack(fill="x", padx=12, pady=(0, 12))
+        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.log_text.configure(state="disabled")
+
+        self.after(80, self._on_main_tab_change)
+
+    def _on_main_tab_change(self, _name: Optional[str] = None):
+        """Show Activity log only on NSOPW and Scrape tabs."""
+        try:
+            name = _name or self.tabs.get()
+        except Exception:
+            name = "Browse"
+        want = name in ("NSOPW", "Scrape")
+        # Refresh settings status when opening the tab
+        if name == "Settings" and hasattr(self, "_settings_refresh_status"):
+            try:
+                self._settings_refresh_status()
+            except Exception:
+                pass
+        if want and not self._log_visible:
+            try:
+                self._main_split.add(self._log_host, minsize=100, stretch="never")
+                self._log_visible = True
+                self.after(60, lambda: self._set_sash(self._main_split, 0, 0.78))
+            except Exception:
+                pass
+        elif not want and self._log_visible:
+            try:
+                self._main_split.forget(self._log_host)
+            except Exception:
+                try:
+                    self._main_split.remove(self._log_host)
+                except Exception:
+                    pass
+            self._log_visible = False
+
+    @staticmethod
+    def _set_sash(paned: tk.PanedWindow, index: int, fraction: float) -> None:
+        """Place a sash at a fraction of the paned widget size."""
+        try:
+            paned.update_idletasks()
+            orient = str(paned.cget("orient"))
+            if orient == tk.VERTICAL or orient == "vertical":
+                total = paned.winfo_height()
+            else:
+                total = paned.winfo_width()
+            if total > 40:
+                paned.sash_place(index, 0 if orient in (tk.VERTICAL, "vertical") else int(total * fraction),
+                                 int(total * fraction) if orient in (tk.VERTICAL, "vertical") else 0)
+        except Exception:
+            pass
+
+    # -----------------------------------------------------------------------
+    # Browse (Search + Integrity + Misclassify + Statistics)
+    # -----------------------------------------------------------------------
+    def _build_browse(self, tab):
+        """Primary tab: search, integrity, misclassification, deep stats."""
+        tab.configure(fg_color=C["surface"])
+        sub = ctk.CTkTabview(
+            tab,
+            fg_color=C["surface"],
+            segmented_button_fg_color=C["elevated"],
+            segmented_button_selected_color=C["accent_dim"],
+            segmented_button_selected_hover_color=C["select"],
+            segmented_button_unselected_color=C["elevated"],
+            segmented_button_unselected_hover_color=C["panel"],
+            text_color=C["text"],
+            corner_radius=10,
+            border_width=0,
+        )
+        sub.pack(fill="both", expand=True, padx=6, pady=6)
+        self.browse_tabs = sub
+        for name in ("Search", "Integrity", "Misclassify", "Statistics"):
+            sub.add(name)
+        self._build_search(sub.tab("Search"))
+        self._build_integrity(sub.tab("Integrity"))
+        self._build_misclass(sub.tab("Misclassify"))
+        self._build_misclass_statistics(sub.tab("Statistics"))
+        try:
+            sub.set("Search")
+        except Exception:
+            pass
+
+    # ---- Shared detail drawer (photo + fields + open HTML/URL) ----
+    def _make_detail_drawer(self, parent) -> ctk.CTkFrame:
+        """Right-side detail card used by Search and (optionally) other tables."""
+        card = _card(parent)
+        _section_label(card, "Detail").pack(anchor="w", padx=12, pady=(12, 4))
+        photo = ctk.CTkLabel(
+            card,
+            text="Select a row",
+            font=FONT_SM,
+            text_color=C["dim"],
+            width=180,
+            height=180,
+            fg_color=C["tree_bg"],
+            corner_radius=8,
+        )
+        photo.pack(padx=12, pady=(0, 6))
+        # Stable host: empty label (no scrollbar) OR textbox when a row is selected
+        content = ctk.CTkFrame(card, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        empty = ctk.CTkLabel(
+            content,
+            text="Select a result to view photo, crime, race, and links.",
+            font=FONT_SM,
+            text_color=C["dim"],
+            anchor="nw",
+            justify="left",
+            wraplength=220,
+        )
+        empty.pack(fill="x", anchor="nw")
+        body = ctk.CTkTextbox(
+            content,
+            height=200,
+            font=FONT_SM,
+            fg_color=C["bg"],
+            text_color=C["text"],
+            border_color=C["border"],
+            border_width=1,
+            corner_radius=8,
+            activate_scrollbars=True,
+            wrap="word",
+        )
+        # Not packed until a row is selected (avoids empty scrollbar chrome)
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.pack(fill="x", padx=12, pady=(0, 12))
+        open_html = ctk.CTkButton(
+            btns, text="Open HTML", width=90, state="disabled",
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        )
+        open_html.pack(side="left", padx=(0, 6))
+        open_url = ctk.CTkButton(
+            btns, text="Open URL", width=90, state="disabled",
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        )
+        open_url.pack(side="left", padx=(0, 6))
+        open_photo = ctk.CTkButton(
+            btns, text="Open photo", width=90, state="disabled",
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        )
+        open_photo.pack(side="left")
+        card._detail_photo = photo  # type: ignore[attr-defined]
+        card._detail_content = content  # type: ignore[attr-defined]
+        card._detail_empty = empty  # type: ignore[attr-defined]
+        card._detail_body = body  # type: ignore[attr-defined]
+        card._detail_open_html = open_html  # type: ignore[attr-defined]
+        card._detail_open_url = open_url  # type: ignore[attr-defined]
+        card._detail_open_photo = open_photo  # type: ignore[attr-defined]
+        card._detail_image_ref = None  # type: ignore[attr-defined]
+        card._detail_record = None  # type: ignore[attr-defined]
+        card._detail_body_packed = False  # type: ignore[attr-defined]
+        return card
+
+    @staticmethod
+    def _detail_set_body_visible(drawer: ctk.CTkFrame, show_body: bool) -> None:
+        """Show textbox (with content) or empty label (no scrollbar)."""
+        empty = getattr(drawer, "_detail_empty", None)
+        body = getattr(drawer, "_detail_body", None)
+        if empty is None or body is None:
+            return
+        packed = bool(getattr(drawer, "_detail_body_packed", False))
+        if show_body and not packed:
+            try:
+                empty.pack_forget()
+            except Exception:
+                pass
+            body.pack(fill="both", expand=True)
+            drawer._detail_body_packed = True  # type: ignore[attr-defined]
+        elif not show_body and packed:
+            try:
+                body.pack_forget()
+            except Exception:
+                pass
+            empty.pack(fill="x", anchor="nw")
+            drawer._detail_body_packed = False  # type: ignore[attr-defined]
+        elif not show_body and not packed:
+            try:
+                empty.pack(fill="x", anchor="nw")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _detail_hide_unneeded_scrollbars(body: ctk.CTkTextbox) -> None:
+        """Force-hide CTkTextbox scrollbars when content fully fits."""
+        try:
+            body.update_idletasks()
+            tb = getattr(body, "_textbox", None)
+            if tb is None:
+                return
+            y0, y1 = tb.yview()
+            x0, x1 = tb.xview()
+            hide_y = (y1 - y0) >= 0.999 or (y0, y1) == (0.0, 1.0)
+            hide_x = (x1 - x0) >= 0.999 or (x0, x1) == (0.0, 1.0)
+            body._hide_y_scrollbar = hide_y  # type: ignore[attr-defined]
+            body._hide_x_scrollbar = hide_x  # type: ignore[attr-defined]
+            body._create_grid_for_text_and_scrollbars(  # type: ignore[attr-defined]
+                re_grid_x_scrollbar=True, re_grid_y_scrollbar=True
+            )
+        except Exception:
+            pass
+
+    def _fill_detail_drawer(self, drawer: ctk.CTkFrame, record: Optional[Dict[str, Any]]) -> None:
+        """Populate a detail drawer from an offender record dict."""
+        photo_lbl = drawer._detail_photo  # type: ignore[attr-defined]
+        body = drawer._detail_body  # type: ignore[attr-defined]
+        btn_html = drawer._detail_open_html  # type: ignore[attr-defined]
+        btn_url = drawer._detail_open_url  # type: ignore[attr-defined]
+        btn_photo = drawer._detail_open_photo  # type: ignore[attr-defined]
+        drawer._detail_record = record  # type: ignore[attr-defined]
+
+        def _clear_photo():
+            photo_lbl.configure(image=None, text="No photo")
+            drawer._detail_image_ref = None  # type: ignore[attr-defined]
+
+        if not record:
+            _clear_photo()
+            photo_lbl.configure(text="Select a row")
+            self._detail_set_body_visible(drawer, False)
+            empty = getattr(drawer, "_detail_empty", None)
+            if empty is not None:
+                empty.configure(text="Select a result to view details.")
+            body.configure(state="normal")
+            body.delete("1.0", "end")
+            body.configure(state="disabled")
+            btn_html.configure(state="disabled", command=None)
+            btn_url.configure(state="disabled", command=None)
+            btn_photo.configure(state="disabled", command=None)
+            return
+
+        name = (
+            (record.get("full_name") or "").strip()
+            or f"{record.get('first_name') or ''} {record.get('last_name') or ''}".strip()
+            or "—"
+        )
+        crime = (
+            record.get("crime")
+            or record.get("offense_description")
+            or record.get("offense_type")
+            or "—"
+        )
+        lines = [
+            f"Name: {name}",
+            f"Race: {_format_race_display(record.get('race'))}",
+            f"Ethnicity: {record.get('ethnicity') or '—'}",
+            f"Gender: {record.get('gender') or '—'}",
+            f"Age / DOB: {record.get('age') or '—'} / {record.get('date_of_birth') or '—'}",
+            f"State: {record.get('state') or record.get('source_state') or '—'}",
+            f"County / City: {record.get('county') or '—'} / {record.get('city') or '—'}",
+            f"Address: {record.get('address') or '—'}",
+            f"Crime: {crime}",
+            f"Risk: {record.get('risk_level') or '—'}",
+            f"Likely ethnicity (name): {record.get('likely_ethnicity') or '—'}",
+            f"Photo: {record.get('photo_path') or record.get('photo_url') or '—'}",
+            f"HTML: {record.get('report_html_path') or '—'}",
+            f"URL: {record.get('source_url') or '—'}",
+        ]
+        self._detail_set_body_visible(drawer, True)
+        body.configure(state="normal")
+        body.delete("1.0", "end")
+        body.insert("1.0", "\n".join(lines))
+        body.configure(state="disabled")
+        self.after(30, lambda b=body: self._detail_hide_unneeded_scrollbars(b))
+
+        photo_path = (record.get("photo_path") or "").strip()
+        if photo_path and Path(photo_path).is_file():
+            try:
+                from PIL import Image
+
+                img = Image.open(photo_path)
+                img.thumbnail((200, 240))
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+                drawer._detail_image_ref = ctk_img  # type: ignore[attr-defined]
+                photo_lbl.configure(image=ctk_img, text="")
+            except Exception:
+                _clear_photo()
+                photo_lbl.configure(text="Photo error")
+        else:
+            _clear_photo()
+
+        html_path = (record.get("report_html_path") or "").strip()
+        url = (record.get("source_url") or "").strip()
+
+        def _open_html():
+            if html_path and Path(html_path).exists():
+                self._open_path(Path(html_path))
+
+        def _open_url():
+            if url:
+                try:
+                    webbrowser.open(url)
+                except Exception as e:
+                    messagebox.showerror("Open URL", str(e))
+
+        def _open_photo():
+            if photo_path and Path(photo_path).is_file():
+                self._open_path(Path(photo_path))
+
+        btn_html.configure(
+            state="normal" if html_path and Path(html_path).exists() else "disabled",
+            command=_open_html,
+        )
+        btn_url.configure(state="normal" if url else "disabled", command=_open_url)
+        btn_photo.configure(
+            state="normal" if photo_path and Path(photo_path).is_file() else "disabled",
+            command=_open_photo,
+        )
 
     # -----------------------------------------------------------------------
     # Scrape
@@ -452,11 +1076,16 @@ class ArchiverApp(ctk.CTk):
             border_width=1, border_color=C["border"],
         ).pack(side="left", padx=4)
 
-        mid = ctk.CTkFrame(tab, fg_color="transparent")
-        mid.pack(fill="both", expand=True, padx=12, pady=6)
+        mid_split = _hpaned(tab)
+        mid_split.pack(fill="both", expand=True, padx=12, pady=6)
+        self._scrape_split = mid_split
 
-        left = _card(mid)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        left = _card(mid_split)
+        right = _card(mid_split)
+        mid_split.add(left, minsize=320, stretch="always")
+        mid_split.add(right, minsize=220, stretch="never")
+        self.after(150, lambda: self._set_sash(mid_split, 0, 0.72))
+
         _section_label(left, "Jurisdictions").pack(anchor="w", padx=14, pady=(12, 4))
         _muted(
             left,
@@ -473,16 +1102,14 @@ class ArchiverApp(ctk.CTk):
         self.scrape_tree.heading("abbr", text="Code")
         self.scrape_tree.heading("method", text="Method")
         self.scrape_tree.heading("notes", text="Notes")
-        self.scrape_tree.column("#0", width=220)
-        self.scrape_tree.column("abbr", width=50, anchor="center")
-        self.scrape_tree.column("method", width=90, anchor="center")
-        self.scrape_tree.column("notes", width=280)
+        self.scrape_tree.column("#0", width=220, minwidth=80, stretch=True)
+        self.scrape_tree.column("abbr", width=50, anchor="center", minwidth=40, stretch=False)
+        self.scrape_tree.column("method", width=90, anchor="center", minwidth=60, stretch=False)
+        self.scrape_tree.column("notes", width=280, minwidth=80, stretch=True)
         self.scrape_tree.bind("<<TreeviewSelect>>", self._scrape_on_select)
         self.scrape_tree.tag_configure("direct", background="#1a241c")
+        _bind_tree_scroll_isolation(self.scrape_tree, tree_wrap)
 
-        right = _card(mid, width=300)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
         _section_label(right, "Options").pack(anchor="w", padx=14, pady=(12, 8))
 
         ctk.CTkLabel(right, text="Output folder", font=FONT_SM, text_color=C["muted"]).pack(
@@ -529,10 +1156,40 @@ class ArchiverApp(ctk.CTk):
             command=self._open_output_folder,
         ).pack(fill="x", padx=14, pady=4)
 
+        ctk.CTkLabel(
+            right, text="Import to database", font=FONT_BOLD, text_color=C["muted"],
+        ).pack(anchor="w", padx=14, pady=(12, 4))
+        _muted(
+            right,
+            "Load scrape CSVs (e.g. ga_offenders.csv) into the local SQLite DB for Search / Integrity.",
+        ).pack(anchor="w", padx=14, pady=(0, 6))
+        self.scrape_import_skip = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            right, text="Skip existing source URLs",
+            variable=self.scrape_import_skip, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+        ).pack(anchor="w", padx=14, pady=2)
+        ctk.CTkButton(
+            right, text="Import folder → DB", height=36,
+            command=self._import_downloads_folder,
+            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
+        ).pack(fill="x", padx=14, pady=(8, 4))
+        ctk.CTkButton(
+            right, text="Import CSV file…", height=32,
+            command=self._import_csv_file,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(fill="x", padx=14, pady=4)
+        self.scrape_import_status = ctk.CTkLabel(
+            right, text="", font=FONT_SM, text_color=C["muted"], anchor="w",
+        )
+        self.scrape_import_status.pack(fill="x", padx=14, pady=(4, 8))
+
         self.scrape_progress = ctk.CTkProgressBar(
             right, progress_color=C["accent"], fg_color=C["elevated"], height=8
         )
-        self.scrape_progress.pack(fill="x", padx=14, pady=(16, 16))
+        self.scrape_progress.pack(fill="x", padx=14, pady=(8, 16))
         self.scrape_progress.set(0)
 
     def _scrape_select_all(self):
@@ -636,13 +1293,82 @@ class ArchiverApp(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _import_downloads_folder(self):
+        from scraper.database import Database
+
+        folder = self.scrape_output_var.get() or "data/downloads"
+        if not Path(folder).is_dir():
+            messagebox.showwarning("Missing folder", f"Not a directory: {folder}")
+            return
+        skip = bool(self.scrape_import_skip.get())
+        try:
+            db = Database(self.db_path)
+            try:
+                summary = db.import_csv_directory(folder, skip_existing_urls=skip)
+            finally:
+                db.close()
+        except Exception as e:
+            messagebox.showerror("Import failed", str(e))
+            return
+        msg = (
+            f"Files: {summary['files']} · imported {summary['imported']} · "
+            f"skipped {summary['skipped']} · rows {summary['total_rows']}"
+        )
+        if summary.get("errors"):
+            msg += f" · errors: {len(summary['errors'])}"
+        self.scrape_import_status.configure(text=msg)
+        self.log_queue.put(f"CSV import folder: {msg}")
+        for err in summary.get("errors") or []:
+            self.log_queue.put(f"  import error: {err}")
+        if hasattr(self, "_refresh_integrity"):
+            try:
+                self._refresh_integrity()
+            except Exception:
+                pass
+        self._refresh_header_db_path()
+
+    def _import_csv_file(self):
+        from scraper.database import Database
+
+        path = filedialog.askopenfilename(
+            filetypes=[("CSV", "*.csv"), ("All", "*.*")],
+            initialdir=self.scrape_output_var.get() or "data/downloads",
+        )
+        if not path:
+            return
+        skip = bool(self.scrape_import_skip.get())
+        try:
+            db = Database(self.db_path)
+            try:
+                result = db.import_csv(path, skip_existing_urls=skip)
+            finally:
+                db.close()
+        except Exception as e:
+            messagebox.showerror("Import failed", str(e))
+            return
+        msg = (
+            f"{Path(path).name}: imported {result['imported']} · "
+            f"skipped {result['skipped']} · rows {result['total_rows']}"
+        )
+        self.scrape_import_status.configure(text=msg)
+        self.log_queue.put(f"CSV import: {msg}")
+        if hasattr(self, "_refresh_integrity"):
+            try:
+                self._refresh_integrity()
+            except Exception:
+                pass
+        self._refresh_header_db_path()
+
     # -----------------------------------------------------------------------
     # Search
     # -----------------------------------------------------------------------
     def _build_search(self, tab):
         tab.configure(fg_color=C["surface"])
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
         bar = ctk.CTkFrame(tab, fg_color="transparent")
-        bar.pack(fill="x", padx=12, pady=12)
+        bar.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
 
         self.search_name_var = ctk.StringVar()
         ctk.CTkEntry(
@@ -679,18 +1405,34 @@ class ArchiverApp(ctk.CTk):
             border_width=1, border_color=C["border"],
         ).pack(side="left")
 
-        wrap, self.search_tree = _tree_frame(tab)
-        wrap.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        cols = ("name", "race", "state", "county", "age", "address")
+        mid = _hpaned(tab)
+        mid.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
+        left = ctk.CTkFrame(mid, fg_color="transparent")
+        mid.add(left, minsize=360, stretch="always")
+        self.search_detail = self._make_detail_drawer(mid)
+        mid.add(self.search_detail, minsize=220, stretch="never")
+        self.after(160, lambda: self._set_sash(mid, 0, 0.72))
+
+        wrap, self.search_tree = _tree_frame(left)
+        wrap.pack(fill="both", expand=True)
+        cols = ["name", "race", "state", "county", "age", "crime", "address"]
         self.search_tree.configure(columns=cols, show="headings")
-        for c in cols:
-            self.search_tree.heading(c, text=c.upper())
-            self.search_tree.column(c, width=120)
+        _stretch_columns(self.search_tree, cols, [140, 90, 50, 90, 45, 180, 160])
+        _enable_tree_column_sort(
+            self.search_tree, cols, labels={c: c.upper() for c in cols}
+        )
+        _bind_tree_scroll_isolation(self.search_tree, wrap)
+        self.search_tree.bind("<<TreeviewSelect>>", self._search_on_select)
+        self._search_records_by_iid: Dict[str, Dict[str, Any]] = {}
 
         self.search_status = ctk.CTkLabel(
-            tab, text="Query the local SQLite database", font=FONT_SM, text_color=C["muted"]
+            tab,
+            text="Loading names…",
+            font=FONT_SM, text_color=C["muted"],
         )
-        self.search_status.pack(anchor="w", padx=14, pady=(0, 10))
+        self.search_status.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 10))
+        # Default view: list of names (not race distribution stats)
+        self.after(100, lambda: self._do_search(name="", state="", race=""))
 
     def _do_search(self, name=None, state=None, race=None):
         from scraper.searcher import SexOffenderSearcher
@@ -698,59 +1440,110 @@ class ArchiverApp(ctk.CTk):
         name = self.search_name_var.get() if name is None else name
         state = self.search_state_var.get() if state is None else state
         race = self.search_race_var.get() if race is None else race
+        # Treat blank / ALL as no filter
+        name = (name or "").strip()
+        state_f = state if state and state != "ALL" else None
+        race_f = (race or "").strip() or None
+
         searcher = SexOffenderSearcher(db_path=self.db_path)
         try:
             if name:
                 results = searcher.search_by_name(
                     name=name,
-                    state=state if state and state != "ALL" else None,
-                    race=race or None,
+                    state=state_f,
+                    race=race_f,
                     limit=500,
                 )
                 self._populate_search_tree(results.records)
                 self.search_status.configure(
-                    text=f"{len(results.records)} matches · {results.query_time_ms:.0f} ms"
+                    text=f"{len(results.records)} name matches · {results.query_time_ms:.0f} ms"
                 )
-            elif race:
+            elif race_f:
                 results = searcher.search_by_race(
-                    race=race,
-                    state=state if state and state != "ALL" else None,
+                    race=race_f,
+                    state=state_f,
                     limit=500,
                 )
                 self._populate_search_tree(results.records)
-                self.search_status.configure(text=f"{len(results.records)} with race {race}")
-            elif state and state != "ALL":
-                results = searcher.search_by_state(state=state, limit=500)
-                self._populate_search_tree(results.records)
-                self.search_status.configure(text=f"{len(results.records)} in {state}")
-            else:
-                dist = searcher.get_race_distribution()
-                self._show_race_distribution(dist)
                 self.search_status.configure(
-                    text=f"Race distribution · {searcher.get_total_count()} total"
+                    text=f"{len(results.records)} with race {race_f}"
+                )
+            elif state_f:
+                results = searcher.search_by_state(state=state_f, limit=500)
+                self._populate_search_tree(results.records)
+                self.search_status.configure(
+                    text=f"{len(results.records)} in {state_f}"
+                )
+            else:
+                # Default / Show all: list of offenders by name, not race stats
+                results = searcher.search_by_state(state="ALL", limit=500)
+                self._populate_search_tree(results.records)
+                total = searcher.get_total_count()
+                shown = len(results.records)
+                self.search_status.configure(
+                    text=(
+                        f"{shown} names"
+                        + (f" (of {total:,} total)" if total > shown else f" · {total:,} total")
+                        + " · select a row for detail"
+                    )
                 )
         finally:
             searcher.close()
 
     def _populate_search_tree(self, records):
         self.search_tree.delete(*self.search_tree.get_children())
+        self._search_records_by_iid = {}
+        self._fill_detail_drawer(self.search_detail, None)
         for r in records[:500]:
-            name = f"{r.get('first_name', '') or ''} {r.get('last_name', '') or ''}".strip() or "—"
-            self.search_tree.insert(
+            name = (
+                f"{r.get('first_name', '') or ''} {r.get('last_name', '') or ''}".strip()
+                or (r.get("full_name") or "—")
+            )
+            crime = (
+                (r.get("crime") or r.get("offense_description") or r.get("offense_type") or "")
+                or "—"
+            )
+            iid = self.search_tree.insert(
                 "",
                 "end",
                 values=(
-                    name,
-                    (r.get("race") or "—")[:14],
-                    (r.get("state") or "—")[:6],
-                    (r.get("county") or "—")[:16],
+                    name,  # full name — not truncated
+                    _format_race_display(r.get("race")),
+                    r.get("state") or "—",
+                    r.get("county") or "—",
                     str(r.get("age") or ""),
-                    (r.get("address") or "")[:36],
+                    crime,  # full crime text
+                    r.get("address") or "—",
                 ),
             )
+            self._search_records_by_iid[iid] = dict(r)
+
+    def _search_on_select(self, _event=None):
+        sel = self.search_tree.selection()
+        if not sel:
+            return
+        rec = self._search_records_by_iid.get(sel[0])
+        if rec and rec.get("id") and not rec.get("photo_path"):
+            # Refresh full row from DB for photo/html
+            try:
+                from scraper.database import Database
+
+                db = Database(self.db_path)
+                try:
+                    full = db.get_offender_by_id(int(rec["id"]))
+                    if full:
+                        rec = full
+                        self._search_records_by_iid[sel[0]] = full
+                finally:
+                    db.close()
+            except Exception:
+                pass
+        self._fill_detail_drawer(self.search_detail, rec)
 
     def _show_race_distribution(self, dist):
         self.search_tree.delete(*self.search_tree.get_children())
+        self._search_records_by_iid = {}
+        self._fill_detail_drawer(self.search_detail, None)
         total = sum(d.get("count", 0) for d in dist) or 1
         for d in dist:
             race = d.get("race") or "—"
@@ -758,21 +1551,477 @@ class ArchiverApp(ctk.CTk):
             pct = count / total * 100
             bar = "▮" * max(1, int(pct / 4))
             self.search_tree.insert(
-                "", "end", values=(race, str(count), f"{pct:.1f}%", bar, "", "")
+                "", "end", values=(race, str(count), f"{pct:.1f}%", bar, "", "", "")
             )
+
+    # -----------------------------------------------------------------------
+    # Integrity dashboard + requeue
+    # -----------------------------------------------------------------------
+    def _build_integrity(self, tab):
+        """
+        Integrity layout:
+          - Management / requeue pinned at bottom (always visible)
+          - Middle area scrolls (summary, chart, state table)
+        """
+        tab.configure(fg_color=C["surface"])
+
+        # --- Pinned management panel (pack bottom first so it stays visible) ---
+        right = _card(tab)
+        right.pack(side="bottom", fill="x", padx=12, pady=(4, 8))
+        head = ctk.CTkFrame(right, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(10, 4))
+        _section_label(head, "Integrity management · requeue incomplete reports").pack(
+            side="left"
+        )
+        self.requeue_incomplete_label = ctk.CTkLabel(
+            head, text="", font=FONT_SM, text_color=C["muted"],
+        )
+        self.requeue_incomplete_label.pack(side="right")
+        _muted(
+            right,
+            "Re-downloads report pages for DB rows that have a source URL but are missing "
+            "selected fields (race / crime / photo / HTML). Updates records in place.",
+        ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.requeue_need_race = ctk.BooleanVar(value=True)
+        self.requeue_need_crime = ctk.BooleanVar(value=True)
+        self.requeue_need_photo = ctk.BooleanVar(value=True)
+        self.requeue_need_html = ctk.BooleanVar(value=False)
+        chk_row = ctk.CTkFrame(right, fg_color="transparent")
+        chk_row.pack(fill="x", padx=12, pady=2)
+        for text, var in (
+            ("Missing race", self.requeue_need_race),
+            ("Missing crime", self.requeue_need_crime),
+            ("Missing photo", self.requeue_need_photo),
+            ("Missing HTML", self.requeue_need_html),
+        ):
+            ctk.CTkCheckBox(
+                chk_row, text=text, variable=var, font=FONT_SM, text_color=C["text"],
+                fg_color=C["accent"], hover_color=C["accent_hover"],
+                checkmark_color=C["bg"], border_color=C["border"],
+            ).pack(side="left", padx=(0, 14))
+
+        lim_row = ctk.CTkFrame(right, fg_color="transparent")
+        lim_row.pack(fill="x", padx=12, pady=(6, 12))
+        ctk.CTkLabel(lim_row, text="Max rows", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(0, 6)
+        )
+        self.requeue_limit_var = ctk.IntVar(value=50)
+        ctk.CTkEntry(
+            lim_row, textvariable=self.requeue_limit_var, width=70,
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        ).pack(side="left")
+        ctk.CTkLabel(lim_row, text="Delay (s)", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(12, 6)
+        )
+        self.requeue_delay_var = ctk.DoubleVar(value=0.75)
+        ctk.CTkEntry(
+            lim_row, textvariable=self.requeue_delay_var, width=60,
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        ).pack(side="left")
+        self.requeue_btn = ctk.CTkButton(
+            lim_row, text="Requeue incomplete", height=32, width=150,
+            command=self._start_requeue,
+            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
+        )
+        self.requeue_btn.pack(side="left", padx=(16, 8))
+        self.requeue_cancel_btn = ctk.CTkButton(
+            lim_row, text="Cancel", height=32, width=80, command=self._cancel_requeue,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"], state="disabled",
+        )
+        self.requeue_cancel_btn.pack(side="left", padx=(0, 10))
+        self.requeue_status = ctk.CTkLabel(
+            lim_row, text="Idle", font=FONT_SM, text_color=C["dim"],
+        )
+        self.requeue_status.pack(side="left")
+        self.requeue_progress = ctk.CTkProgressBar(
+            right, progress_color=C["accent"], fg_color=C["elevated"], height=6,
+        )
+        self.requeue_progress.pack(fill="x", padx=12, pady=(0, 10))
+        self.requeue_progress.set(0)
+        self._requeue_cancel = False
+
+        # --- Scrollable body: summary, chart, table ---
+        scroll = ctk.CTkScrollableFrame(tab, fg_color=C["surface"])
+        scroll.pack(side="top", fill="both", expand=True, padx=4, pady=(4, 0))
+        self._integrity_scroll = scroll
+
+        top = ctk.CTkFrame(scroll, fg_color="transparent")
+        top.pack(fill="x", padx=8, pady=(6, 4))
+        ctk.CTkButton(
+            top, text="Refresh", width=100, command=self._refresh_integrity,
+            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            top, text="Export report CSV…", width=140, command=self._export_integrity_csv,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left", padx=4)
+        self.integrity_status = ctk.CTkLabel(
+            top, text="", font=FONT_SM, text_color=C["muted"],
+        )
+        self.integrity_status.pack(side="right", padx=8)
+
+        summary = _card(scroll)
+        summary.pack(fill="x", padx=8, pady=(0, 6))
+        _section_label(summary, "Archive integrity").pack(anchor="w", padx=14, pady=(8, 2))
+        _muted(
+            summary,
+            "TOTAL = records in that state.  RACE/CRIME/PHOTO/HTML % = share with that field filled. "
+            "Management settings are pinned at the bottom of this tab.",
+        ).pack(anchor="w", padx=14, pady=(0, 4))
+        self.integrity_summary = ctk.CTkLabel(
+            summary, text="Click Refresh to load stats.",
+            font=FONT_SM, text_color=C["text"], anchor="w", justify="left",
+        )
+        self.integrity_summary.pack(fill="x", padx=14, pady=(0, 8))
+
+        # Compact completeness pie (no bar graph)
+        chart_card = _card(scroll)
+        chart_card.pack(fill="x", padx=8, pady=(0, 6))
+        head = ctk.CTkFrame(chart_card, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(8, 2))
+        _section_label(head, "Completeness").pack(side="left")
+        self.integrity_complete_caption = ctk.CTkLabel(
+            head, text="", font=FONT_SM, text_color=C["muted"],
+        )
+        self.integrity_complete_caption.pack(side="left", padx=12)
+        pie_row = ctk.CTkFrame(chart_card, fg_color="transparent")
+        pie_row.pack(fill="x", padx=10, pady=(0, 8))
+        self._integrity_chart_host = ctk.CTkFrame(
+            pie_row, fg_color=C["tree_bg"], corner_radius=8,
+            border_width=1, border_color=C["border"], width=280, height=200,
+        )
+        self._integrity_chart_host.pack(side="left", padx=(0, 12))
+        self._integrity_chart_host.pack_propagate(False)
+        self.integrity_chart_label = ctk.CTkLabel(
+            self._integrity_chart_host,
+            text="…",
+            font=FONT_SM, text_color=C["dim"],
+        )
+        self.integrity_chart_label.pack(expand=True, fill="both", padx=4, pady=4)
+        self._integrity_chart_ref = None
+        self.integrity_complete_detail = ctk.CTkLabel(
+            pie_row,
+            text="Complete = race + crime + photo + HTML present.",
+            font=FONT_SM, text_color=C["muted"], anchor="w", justify="left",
+            wraplength=420,
+        )
+        self.integrity_complete_detail.pack(side="left", fill="x", expand=True)
+
+        table_card = _card(scroll)
+        table_card.pack(fill="x", padx=8, pady=(0, 12))
+        _section_label(table_card, "By state").pack(anchor="w", padx=14, pady=(10, 4))
+        wrap, self.integrity_tree = _tree_frame(table_card)
+        wrap.pack(fill="x", padx=10, pady=(0, 12))
+        # Fixed tall viewport so many states show; outer frame still scrolls
+        wrap.configure(height=420)
+        wrap.pack_propagate(False)
+        icols = [
+            "state", "total", "pct_race", "pct_crime", "pct_photo", "pct_html",
+            "with_race", "with_crime", "with_photo", "with_html",
+        ]
+        self.integrity_tree.configure(columns=icols, show="headings", height=16)
+        _stretch_columns(
+            self.integrity_tree,
+            icols,
+            [80, 90, 100, 100, 100, 100, 110, 110, 110, 110],
+        )
+        _enable_tree_column_sort(
+            self.integrity_tree,
+            icols,
+            labels={
+                "state": "STATE",
+                "total": "TOTAL",
+                "pct_race": "RACE %",
+                "pct_crime": "CRIME %",
+                "pct_photo": "PHOTO %",
+                "pct_html": "HTML %",
+                "with_race": "RACE COUNT",
+                "with_crime": "CRIME COUNT",
+                "with_photo": "PHOTO COUNT",
+                "with_html": "HTML COUNT",
+            },
+        )
+        _bind_tree_scroll_isolation(self.integrity_tree, wrap)
+
+        self.after(200, self._refresh_integrity)
+
+    def _refresh_integrity(self):
+        from scraper.database import Database
+
+        try:
+            db = Database(self.db_path)
+            try:
+                report = db.get_integrity_report()
+                incomplete = db.find_incomplete_reports(
+                    need_race=True, need_crime=True, need_photo=True, need_html=False,
+                    limit=5000,
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            self.integrity_summary.configure(text=f"Error: {e}")
+            return
+
+        o = report["overall"]
+        complete = int(o.get("with_everything") or 0)
+        total = int(o.get("total") or 0)
+        incomplete_n = max(0, total - complete)
+        self.integrity_summary.configure(
+            text=(
+                f"Total records: {total:,}  ·  "
+                f"Complete (race+crime+photo+HTML): {complete:,} "
+                f"({o.get('pct_everything', 0)}%)\n"
+                f"Race: {o['with_race']:,} ({o.get('pct_race', 0)}%)  ·  "
+                f"Crime: {o['with_crime']:,} ({o.get('pct_crime', 0)}%)  ·  "
+                f"Photo: {o['with_photo']:,} ({o.get('pct_photo', 0)}%)  ·  "
+                f"HTML: {o['with_html']:,} ({o.get('pct_html', 0)}%)"
+            )
+        )
+        self.requeue_incomplete_label.configure(
+            text=f"Incomplete with URL (race/crime/photo): {len(incomplete):,}"
+        )
+        self.integrity_tree.delete(*self.integrity_tree.get_children())
+        for st in report["by_state"]:
+            self.integrity_tree.insert(
+                "",
+                "end",
+                values=(
+                    st["state"],
+                    st["total"],
+                    f"{st['pct_race']:.0f}%",
+                    f"{st['pct_crime']:.0f}%",
+                    f"{st['pct_photo']:.0f}%",
+                    f"{st['pct_html']:.0f}%",
+                    st["with_race"],
+                    st["with_crime"],
+                    st["with_photo"],
+                    st["with_html"],
+                ),
+            )
+        n_states = max(8, len(report["by_state"]))
+        self.integrity_tree.configure(height=min(24, max(12, n_states + 2)))
+
+        # Small completeness pie (portion with everything vs incomplete)
+        try:
+            img = _render_pie_chart(
+                [
+                    ("Complete", complete),
+                    ("Incomplete", incomplete_n),
+                ],
+                title="Record completeness",
+                width=260,
+                height=190,
+                max_slices=2,
+                bg=C["tree_bg"],
+                fg=C["text"],
+                muted=C["muted"],
+                accent=C["success"],
+                legend_below=True,
+            )
+            self._integrity_chart_ref = img
+            self.integrity_chart_label.configure(image=img, text="")
+            self.integrity_complete_caption.configure(
+                text=f"{complete:,} / {total:,} fully filled"
+            )
+            self.integrity_complete_detail.configure(
+                text=(
+                    f"Complete = race + crime + photo + local HTML.\n"
+                    f"Incomplete: {incomplete_n:,}  ·  "
+                    f"Use Requeue below to fill gaps on rows with a source URL."
+                )
+            )
+        except Exception as e:
+            self.integrity_chart_label.configure(image=None, text=f"Chart error: {e}")
+
+        self.integrity_status.configure(
+            text=f"Updated · {len(report['by_state'])} states/territories in DB"
+        )
+        self._last_integrity_report = report
+
+    def _export_integrity_csv(self):
+        report = getattr(self, "_last_integrity_report", None)
+        if not report:
+            self._refresh_integrity()
+            report = getattr(self, "_last_integrity_report", None)
+        if not report:
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".csv")
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "state", "total", "with_race", "pct_race", "with_crime", "pct_crime",
+                        "with_photo", "pct_photo", "with_html", "pct_html", "with_url",
+                    ],
+                )
+                w.writeheader()
+                for row in report["by_state"]:
+                    w.writerow(row)
+            messagebox.showinfo("Exported", path)
+        except Exception as e:
+            messagebox.showerror("Export failed", str(e))
+
+    def _refresh_header_db_path(self):
+        """Show active SQLite path in the header."""
+        try:
+            p = Path(self.db_path)
+            if not p.is_absolute():
+                p = (Path.cwd() / p).resolve()
+            else:
+                p = p.resolve()
+            # Prefer short relative path when under project
+            try:
+                show = str(p.relative_to(Path.cwd()))
+            except ValueError:
+                show = str(p)
+            if len(show) > 52:
+                show = "…" + show[-50:]
+            n = ""
+            try:
+                from scraper.database import Database
+                db = Database(self.db_path)
+                try:
+                    n = f"  ·  {db.get_total_count():,} records"
+                finally:
+                    db.close()
+            except Exception:
+                pass
+            if hasattr(self, "header_db_label"):
+                self.header_db_label.configure(text=f"DB: {show}{n}")
+        except Exception:
+            if hasattr(self, "header_db_label"):
+                self.header_db_label.configure(text=f"DB: {self.db_path}")
+
+    def _open_data_folder_header(self):
+        path = Path("data")
+        path.mkdir(parents=True, exist_ok=True)
+        # Prefer folder containing the DB
+        try:
+            dbp = Path(self.db_path)
+            if dbp.parent.is_dir():
+                path = dbp.parent
+        except Exception:
+            pass
+        self._open_path(path)
+
+    def _cancel_requeue(self):
+        self._requeue_cancel = True
+        self.requeue_status.configure(text="Cancelling…")
+
+    def _start_requeue(self):
+        if self.is_running:
+            messagebox.showwarning("Busy", "Wait for the current job to finish.")
+            return
+        try:
+            limit = max(1, int(self.requeue_limit_var.get()))
+            delay = max(0.25, float(self.requeue_delay_var.get()))
+        except (TypeError, ValueError):
+            limit, delay = 50, 0.75
+
+        need_race = bool(self.requeue_need_race.get())
+        need_crime = bool(self.requeue_need_crime.get())
+        need_photo = bool(self.requeue_need_photo.get())
+        need_html = bool(self.requeue_need_html.get())
+        if not any((need_race, need_crime, need_photo, need_html)):
+            messagebox.showwarning("Nothing selected", "Enable at least one missing field.")
+            return
+
+        self._requeue_cancel = False
+        self._set_running(True)
+        self.requeue_btn.configure(state="disabled")
+        self.requeue_cancel_btn.configure(state="normal")
+        self.requeue_status.configure(text="Requeue running…")
+        self.requeue_progress.set(0)
+        self.requeue_progress.configure(mode="determinate")
+
+        def log(msg):
+            self.log_queue.put(msg)
+
+        def on_progress(done: int, total: int):
+            frac = (done / total) if total else 0.0
+            self.after(
+                0,
+                lambda d=done, t=total, f=frac: (
+                    self.requeue_progress.set(min(1.0, max(0.0, f))),
+                    self.requeue_status.configure(text=f"Requeue {d}/{t}…"),
+                ),
+            )
+
+        def worker():
+            from scraper.nsopw_builder import NSOPWEthnicDatabaseBuilder
+
+            builder = NSOPWEthnicDatabaseBuilder(
+                db_path=self.db_path,
+                delay=2.0,
+                report_delay=delay,
+                html_dir="data/report_pages",
+                cancel_check=lambda: self._requeue_cancel,
+            )
+            try:
+                summary = builder.requeue_incomplete(
+                    need_race=need_race,
+                    need_crime=need_crime,
+                    need_photo=need_photo,
+                    need_html=need_html,
+                    limit=limit,
+                    save_html=True,
+                    log=log,
+                    on_progress=on_progress,
+                )
+
+                def done():
+                    self._set_running(False)
+                    self.requeue_btn.configure(state="normal")
+                    self.requeue_cancel_btn.configure(state="disabled")
+                    self.requeue_progress.set(1.0)
+                    self.requeue_status.configure(
+                        text=(
+                            f"Done · queued {summary.get('queued', 0)} · "
+                            f"updated {summary.get('updated', 0)} · "
+                            f"errors {summary.get('errors', 0)}"
+                        )
+                    )
+                    self._refresh_integrity()
+                    self._refresh_header_db_path()
+
+                self.after(0, done)
+            except Exception as e:
+                log(f"Requeue ERROR: {e}")
+
+                def fail():
+                    self._set_running(False)
+                    self.requeue_btn.configure(state="normal")
+                    self.requeue_cancel_btn.configure(state="disabled")
+                    self.requeue_progress.set(0)
+                    self.requeue_status.configure(text=f"Error: {e}")
+
+                self.after(0, fail)
+            finally:
+                builder.close()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # -----------------------------------------------------------------------
     # Misclassify
     # -----------------------------------------------------------------------
-    def _build_misclass(self, tab):
-        tab.configure(fg_color=C["surface"])
-        bar = ctk.CTkFrame(tab, fg_color="transparent")
-        bar.pack(fill="x", padx=12, pady=12)
+    def _misclass_controls_bar(self, parent) -> ctk.CTkFrame:
+        """Shared Analyze filters (used by Misclassify + Statistics)."""
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
 
-        self.misclass_ethnicity_var = ctk.StringVar(value="all")
+        if not hasattr(self, "misclass_ethnicity_var"):
+            self.misclass_ethnicity_var = ctk.StringVar(value="all")
+            self.misclass_conf_var = ctk.DoubleVar(value=0.5)
+            self.misclass_limit_var = ctk.IntVar(value=10000)
+
         ctk.CTkComboBox(
             bar, variable=self.misclass_ethnicity_var, width=160,
-            values=["all", "hispanic", "asian", "african_american"],
+            values=["all", "hispanic", "asian", "indian", "african_american"],
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
             text_color=C["text"], dropdown_fg_color=C["panel"],
         ).pack(side="left", padx=(0, 8))
@@ -780,7 +2029,6 @@ class ArchiverApp(ctk.CTk):
         ctk.CTkLabel(bar, text="Min conf.", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(8, 4)
         )
-        self.misclass_conf_var = ctk.DoubleVar(value=0.5)
         ctk.CTkEntry(
             bar, textvariable=self.misclass_conf_var, width=60,
             fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
@@ -789,7 +2037,6 @@ class ArchiverApp(ctk.CTk):
         ctk.CTkLabel(bar, text="Max rows", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(12, 4)
         )
-        self.misclass_limit_var = ctk.IntVar(value=10000)
         ctk.CTkEntry(
             bar, textvariable=self.misclass_limit_var, width=80,
             fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
@@ -804,20 +2051,387 @@ class ArchiverApp(ctk.CTk):
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
         ).pack(side="left")
+        return bar
 
-        wrap, self.misclass_tree = _tree_frame(tab)
-        wrap.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        cols = ("name", "recorded_race", "likely_ethnicity", "confidence", "matching_names")
+    def _build_misclass(self, tab):
+        tab.configure(fg_color=C["surface"])
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        bar = self._misclass_controls_bar(tab)
+        bar.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
+
+        results_card = _card(tab)
+        results_card.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
+        _section_label(results_card, "Potential mismatches").pack(
+            anchor="w", padx=14, pady=(12, 4)
+        )
+        _muted(
+            results_card,
+            "Surname ethnicity does not match recorded race. "
+            "See Browse → Statistics for breakdowns of what they are misclassified as.",
+        ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        wrap, self.misclass_tree = _tree_frame(results_card)
+        wrap.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        cols = ["name", "recorded_race", "likely_ethnicity", "confidence", "matching_names"]
         self.misclass_tree.configure(columns=cols, show="headings")
-        for c in cols:
-            self.misclass_tree.heading(c, text=c.replace("_", " ").upper())
-            self.misclass_tree.column(c, width=140)
+        _stretch_columns(self.misclass_tree, cols, [160, 110, 130, 90, 200])
+        _enable_tree_column_sort(
+            self.misclass_tree,
+            cols,
+            labels={c: c.replace("_", " ").upper() for c in cols},
+        )
+        _bind_tree_scroll_isolation(self.misclass_tree, wrap)
 
         self.misclass_status = ctk.CTkLabel(
-            tab, text="Compare recorded race to surname ethnicity lists",
+            tab,
+            text="Compare recorded race to surname ethnicity lists · click headers to sort",
             font=FONT_SM, text_color=C["muted"],
         )
-        self.misclass_status.pack(anchor="w", padx=14, pady=(0, 10))
+        self.misclass_status.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 10))
+
+    def _build_misclass_statistics(self, tab):
+        """Statistics: fixed toolbar + metrics; scroll only for charts/tables."""
+        tab.configure(fg_color=C["surface"])
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        # Fixed top — always visible, no wasted scroll gap above content
+        top = ctk.CTkFrame(tab, fg_color=C["surface"])
+        top.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+
+        bar = self._misclass_controls_bar(top)
+        bar.pack(fill="x", padx=8, pady=(6, 2))
+
+        # Metrics as a single compact row (no nested "Run summary" card header)
+        sum_row = ctk.CTkFrame(top, fg_color="transparent")
+        sum_row.pack(fill="x", padx=8, pady=(0, 4))
+
+        def _metric_chip(parent, key: str) -> ctk.CTkLabel:
+            chip = ctk.CTkFrame(
+                parent, fg_color=C["elevated"], corner_radius=6,
+                border_width=1, border_color=C["border"],
+            )
+            chip.pack(side="left", padx=3, pady=1, fill="x", expand=True)
+            lb = ctk.CTkLabel(
+                chip, text="—", font=FONT_SM, text_color=C["text"], anchor="center",
+            )
+            lb.pack(padx=8, pady=5)
+            setattr(self, key, lb)
+            return lb
+
+        _metric_chip(sum_row, "mcstat_db")
+        _metric_chip(sum_row, "mcstat_n")
+        _metric_chip(sum_row, "mcstat_rate")
+        _metric_chip(sum_row, "mcstat_conf")
+        self.mcstat_filter = ctk.CTkLabel(
+            top, text="Run Analyze to fill charts and tables.",
+            font=FONT_SM, text_color=C["dim"], anchor="w",
+        )
+        self.mcstat_filter.pack(fill="x", padx=10, pady=(0, 4))
+
+        # Scroll only the heavy content
+        scroll = ctk.CTkScrollableFrame(
+            tab, fg_color=C["surface"], corner_radius=0, border_width=0,
+        )
+        scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+        scroll.grid_columnconfigure(0, weight=1)
+        self._mcstat_scroll = scroll
+        self.after(30, lambda: _wire_wide_scroll(tab, scroll))
+
+        # Three pie charts side by side — first content in the scroll area
+        charts = ctk.CTkFrame(scroll, fg_color="transparent")
+        charts.pack(fill="x", padx=4, pady=(2, 6))
+        self._mcstat_charts_host = charts
+        charts.grid_columnconfigure((0, 1, 2), weight=1, uniform="pies")
+        self._mcstat_chart_refs: List[Any] = []
+        self.mcstat_chart_labels: List[ctk.CTkLabel] = []
+        self._mcstat_chart_cells: List[ctk.CTkFrame] = []
+        for i, placeholder in enumerate(
+            (
+                "By surname ethnicity\n(run Analyze)",
+                "Misclassified as\n(run Analyze)",
+                "Confidence bands\n(run Analyze)",
+            )
+        ):
+            cell = ctk.CTkFrame(
+                charts,
+                fg_color=C["tree_bg"],
+                corner_radius=8,
+                border_width=1,
+                border_color=C["border"],
+                height=300,
+            )
+            cell.grid(row=0, column=i, sticky="nsew", padx=3, pady=0)
+            cell.grid_propagate(False)
+            lab = ctk.CTkLabel(
+                cell, text=placeholder, font=FONT_SM, text_color=C["dim"],
+            )
+            lab.pack(expand=True, fill="both", padx=2, pady=2)
+            self.mcstat_chart_labels.append(lab)
+            self._mcstat_chart_cells.append(cell)
+
+        # Transition table — full width, stretch columns
+        trans = _card(scroll)
+        trans.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkLabel(
+            trans,
+            text="Transitions · surname ethnicity → recorded race",
+            font=FONT_BOLD, text_color=C["muted"], anchor="w",
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+        tw, self.mcstat_transition_tree = _tree_frame(trans)
+        tw.pack(fill="x", padx=8, pady=(0, 8))
+        tw.configure(height=220)
+        tw.pack_propagate(False)
+        tcols = ["surname_ethnicity", "misclassified_as", "count", "pct", "avg_conf", "example"]
+        self.mcstat_transition_tree.configure(columns=tcols, show="headings", height=12)
+        _stretch_columns(
+            self.mcstat_transition_tree, tcols, [200, 180, 80, 70, 90, 260]
+        )
+        _enable_tree_column_sort(
+            self.mcstat_transition_tree,
+            tcols,
+            labels={
+                "surname_ethnicity": "SURNAME ETHNICITY",
+                "misclassified_as": "MISCLASSIFIED AS",
+                "count": "COUNT",
+                "pct": "PERCENT",
+                "avg_conf": "AVG CONF",
+                "example": "EXAMPLE NAME",
+            },
+        )
+        _bind_tree_scroll_isolation(self.mcstat_transition_tree, tw)
+
+        # Breakdown tables side by side under transition table
+        tables = ctk.CTkFrame(scroll, fg_color="transparent")
+        tables.pack(fill="x", padx=4, pady=(0, 8))
+        tables.grid_columnconfigure((0, 1, 2), weight=1, uniform="bkt")
+
+        def _col_table(parent, col: int, title: str, cols: List[str], labels: Dict[str, str], widths: List[int]):
+            cell = _card(parent)
+            cell.grid(row=0, column=col, sticky="nsew", padx=3, pady=0)
+            ctk.CTkLabel(
+                cell, text=title, font=FONT_BOLD, text_color=C["muted"], anchor="w",
+            ).pack(fill="x", padx=8, pady=(6, 2))
+            w, tree = _tree_frame(cell)
+            w.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+            w.configure(height=140)
+            w.pack_propagate(False)
+            tree.configure(columns=cols, show="headings", height=5)
+            _stretch_columns(tree, cols, widths)
+            _enable_tree_column_sort(tree, cols, labels=labels)
+            _bind_tree_scroll_isolation(tree, w)
+            return tree
+
+        self.mcstat_eth_tree = _col_table(
+            tables, 0, "By surname ethnicity",
+            ["ethnicity", "count", "pct"],
+            {"ethnicity": "ETHNICITY", "count": "COUNT", "pct": "%"},
+            [160, 60, 50],
+        )
+        self.mcstat_race_tree = _col_table(
+            tables, 1, "By recorded race",
+            ["race", "count", "pct"],
+            {"race": "RECORDED AS", "count": "COUNT", "pct": "%"},
+            [160, 60, 50],
+        )
+        self.mcstat_conf_tree = _col_table(
+            tables, 2, "Confidence bands",
+            ["band", "count", "pct"],
+            {"band": "BAND", "count": "COUNT", "pct": "%"},
+            [160, 60, 50],
+        )
+
+        self.mcstat_status = ctk.CTkLabel(
+            scroll,
+            text="Statistics update when you run Analyze (from this tab or Misclassify).",
+            font=FONT_SM, text_color=C["muted"],
+        )
+        self.mcstat_status.pack(anchor="w", padx=8, pady=(0, 8))
+
+    def _update_misclass_stats(
+        self,
+        results: list,
+        *,
+        db_total: int,
+        scanned_cap: int,
+        min_conf: float,
+        eth_filter: str,
+    ) -> None:
+        """Refresh Statistics tab from analysis results."""
+        from collections import Counter, defaultdict
+
+        n = len(results)
+        denom = max(1, min(db_total, scanned_cap) if db_total else scanned_cap)
+        rate = (n / denom * 100.0) if denom else 0.0
+
+        if hasattr(self, "mcstat_db"):
+            self.mcstat_db.configure(text=f"DB: {db_total:,}")
+            self.mcstat_n.configure(text=f"Mismatches: {n:,}")
+            self.mcstat_rate.configure(text=f"Rate: {rate:.2f}% of scanned")
+            if results:
+                confs = [float(mc.confidence) for mc in results]
+                self.mcstat_conf.configure(
+                    text=f"Conf avg {sum(confs)/len(confs):.3f}  "
+                    f"({min(confs):.2f}–{max(confs):.2f})"
+                )
+            else:
+                self.mcstat_conf.configure(text="Conf: —")
+            self.mcstat_filter.configure(
+                text=(
+                    f"Filter: {eth_filter or 'all'} · min conf. {min_conf:.2f} · "
+                    f"scanned cap {scanned_cap:,} · "
+                    f"{'no mismatches' if n == 0 else f'{n:,} rows in transition table'}"
+                )
+            )
+
+        # Transitions: surname ethnicity → recorded race
+        pair_counts: Counter = Counter()
+        pair_conf: Dict[tuple, list] = defaultdict(list)
+        pair_example: Dict[tuple, str] = {}
+        for mc in results:
+            eth = (mc.likely_ethnicity or "—").strip() or "—"
+            race = (mc.expected_race or "—").strip() or "—"
+            key = (eth, race)
+            pair_counts[key] += 1
+            pair_conf[key].append(float(mc.confidence))
+            if key not in pair_example:
+                rec = mc.record or {}
+                name = (
+                    f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
+                ).strip() or (rec.get("full_name") or "—")
+                pair_example[key] = name
+
+        if hasattr(self, "mcstat_transition_tree"):
+            self.mcstat_transition_tree.delete(*self.mcstat_transition_tree.get_children())
+            for (eth, race), cnt in pair_counts.most_common():
+                confs = pair_conf[(eth, race)]
+                avg = sum(confs) / len(confs) if confs else 0.0
+                pct = (cnt / n * 100.0) if n else 0.0
+                self.mcstat_transition_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        eth,  # full ethnicity label
+                        race,  # full race label
+                        str(cnt),
+                        f"{pct:.1f}%",
+                        f"{avg:.3f}",
+                        pair_example.get((eth, race), "—"),
+                    ),
+                )
+
+        by_eth = Counter((mc.likely_ethnicity or "—") for mc in results)
+        by_race = Counter((mc.expected_race or "—") for mc in results)
+
+        def _fill(tree, counter: Counter):
+            if tree is None:
+                return
+            tree.delete(*tree.get_children())
+            for label, cnt in counter.most_common():
+                pct = (cnt / n * 100.0) if n else 0.0
+                tree.insert("", "end", values=(str(label), str(cnt), f"{pct:.1f}%"))
+
+        _fill(getattr(self, "mcstat_eth_tree", None), by_eth)
+        _fill(getattr(self, "mcstat_race_tree", None), by_race)
+
+        # Confidence bands (high → low)
+        bands = Counter()
+        for mc in results:
+            c = float(mc.confidence)
+            if c >= 0.9:
+                bands["0.90 – 1.00 (high)"] += 1
+            elif c >= 0.75:
+                bands["0.75 – 0.89"] += 1
+            elif c >= 0.6:
+                bands["0.60 – 0.74"] += 1
+            else:
+                bands["below 0.60"] += 1
+
+        band_order = [
+            "0.90 – 1.00 (high)",
+            "0.75 – 0.89",
+            "0.60 – 0.74",
+            "below 0.60",
+        ]
+        if hasattr(self, "mcstat_conf_tree"):
+            self.mcstat_conf_tree.delete(*self.mcstat_conf_tree.get_children())
+            for band in band_order:
+                cnt = bands.get(band, 0)
+                if cnt == 0 and n > 0:
+                    continue
+                if n == 0 and band != band_order[0]:
+                    continue
+                pct = (cnt / n * 100.0) if n else 0.0
+                self.mcstat_conf_tree.insert(
+                    "", "end", values=(band, str(cnt), f"{pct:.1f}")
+                )
+
+        # Side-by-side pie charts (each ~1/3 width)
+        if getattr(self, "mcstat_chart_labels", None):
+            try:
+                host = getattr(self, "_mcstat_charts_host", None)
+                if host is not None:
+                    host.update_idletasks()
+                    host_w = max(720, host.winfo_width())
+                else:
+                    host_w = 960
+            except Exception:
+                host_w = 960
+            # 3 columns with small gaps
+            pie_w = max(220, (host_w - 24) // 3)
+            pie_h = 300
+            eth_items = by_eth.most_common(8)
+            race_items = by_race.most_common(8)
+            conf_items = [(b, bands[b]) for b in band_order if bands.get(b, 0) > 0]
+            charts_data = [
+                (eth_items, "By surname ethnicity"),
+                (race_items, "Misclassified as (race)"),
+                (conf_items, "Confidence bands"),
+            ]
+            refs: List[Any] = []
+            for i, (items, title) in enumerate(charts_data):
+                try:
+                    img = _render_pie_chart(
+                        items,
+                        title=title,
+                        width=pie_w,
+                        height=pie_h,
+                        max_slices=8,
+                        bg=C["tree_bg"],
+                        fg=C["text"],
+                        muted=C["muted"],
+                        accent=C["accent"],
+                        legend_below=True,
+                    )
+                    refs.append(img)
+                    self.mcstat_chart_labels[i].configure(image=img, text="")
+                    if getattr(self, "_mcstat_chart_cells", None) and i < len(self._mcstat_chart_cells):
+                        self._mcstat_chart_cells[i].configure(height=pie_h + 8)
+                except Exception:
+                    self.mcstat_chart_labels[i].configure(
+                        image=None, text=f"{title} (chart error)"
+                    )
+            self._mcstat_chart_refs = refs
+
+        if hasattr(self, "mcstat_status"):
+            if n:
+                top = pair_counts.most_common(1)
+                if top:
+                    (eth, race), cnt = top[0]
+                    self.mcstat_status.configure(
+                        text=(
+                            f"Top transition: {eth} → recorded as {race}  ({cnt:,} · "
+                            f"{cnt/n*100:.1f}% of mismatches)"
+                        )
+                    )
+                else:
+                    self.mcstat_status.configure(text=f"{n:,} mismatches")
+            else:
+                self.mcstat_status.configure(
+                    text="No mismatches for this filter — try lower min conf. or another ethnicity."
+                )
 
     def _run_misclassification(self):
         from scraper.searcher import SexOffenderSearcher
@@ -827,10 +2441,15 @@ class ArchiverApp(ctk.CTk):
         try:
             min_conf = float(self.misclass_conf_var.get())
             limit = int(self.misclass_limit_var.get())
+            db_total = searcher.get_total_count()
             if eth == "hispanic":
                 results = searcher.find_hispanic_misclassifications(min_confidence=min_conf, limit=limit)
             elif eth == "asian":
                 results = searcher.find_asian_misclassifications(min_confidence=min_conf, limit=limit)
+            elif eth == "indian":
+                results = searcher.analyze_ethnicities(
+                    min_confidence=min_conf, limit=limit, ethnicity_filter="indian"
+                )
             elif eth == "african_american":
                 results = searcher.find_african_american_misclassifications(
                     min_confidence=min_conf, limit=limit
@@ -840,24 +2459,47 @@ class ArchiverApp(ctk.CTk):
         finally:
             searcher.close()
 
-        self.misclass_tree.delete(*self.misclass_tree.get_children())
-        for mc in results[:500]:
-            name = (
-                f"{mc.record.get('first_name', '') or ''} "
-                f"{mc.record.get('last_name', '') or ''}"
-            ).strip() or "—"
-            self.misclass_tree.insert(
-                "",
-                "end",
-                values=(
-                    name,
-                    (mc.expected_race or "—")[:14],
-                    (mc.likely_ethnicity or "")[:18],
-                    f"{mc.confidence:.3f}",
-                    "; ".join(mc.matching_names[:3]),
-                ),
-            )
-        self.misclass_status.configure(text=f"{len(results)} potential mismatches")
+        self._misclass_results = results
+        self._misclass_meta = {
+            "db_total": db_total,
+            "scanned_cap": limit,
+            "min_conf": min_conf,
+            "eth_filter": eth,
+        }
+
+        if hasattr(self, "misclass_tree"):
+            self.misclass_tree.delete(*self.misclass_tree.get_children())
+            for mc in results[:500]:
+                name = (
+                    f"{mc.record.get('first_name', '') or ''} "
+                    f"{mc.record.get('last_name', '') or ''}"
+                ).strip() or "—"
+                self.misclass_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        name,
+                        (mc.expected_race or "—")[:14],
+                        (mc.likely_ethnicity or "")[:18],
+                        f"{mc.confidence:.3f}",
+                        "; ".join(mc.matching_names[:3]),
+                    ),
+                )
+            shown = min(500, len(results))
+            if hasattr(self, "misclass_status"):
+                self.misclass_status.configure(
+                    text=f"{len(results)} potential mismatches"
+                    + (f" · showing first {shown}" if len(results) > shown else "")
+                    + " · see Statistics tab for transitions"
+                )
+
+        self._update_misclass_stats(
+            results,
+            db_total=db_total,
+            scanned_cap=limit,
+            min_conf=min_conf,
+            eth_filter=eth,
+        )
         self.log_queue.put(f"Misclassification: {len(results)} results")
 
     def _export_misclass(self):
@@ -883,147 +2525,28 @@ class ArchiverApp(ctk.CTk):
     # -----------------------------------------------------------------------
     def _build_nsopw(self, tab):
         tab.configure(fg_color=C["surface"])
-        # Controls scroll independently of the Recent inserts table (nested wheel fix).
-        tab.grid_columnconfigure(0, weight=1)
-        tab.grid_rowconfigure(0, weight=1)
-        tab.grid_rowconfigure(1, weight=1)
+        # Top: settings (no scroll) · Bottom: live inserts (expands)
+        split = _vpaned(tab)
+        split.pack(fill="both", expand=True, padx=4, pady=4)
+        self._nsopw_split = split
 
-        scroll = ctk.CTkScrollableFrame(tab, fg_color=C["surface"])
-        scroll.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
+        controls_host = ctk.CTkFrame(split, fg_color=C["surface"], corner_radius=0)
+        inserts_host = ctk.CTkFrame(split, fg_color=C["surface"], corner_radius=0)
+        # Controls keep natural height; inserts take remaining space
+        split.add(controls_host, minsize=200, stretch="never")
+        split.add(inserts_host, minsize=220, stretch="always")
+        self.after(120, lambda: self._set_sash(split, 0, 0.38))
 
-        _section_label(scroll, "NSOPW ethnic name search").pack(anchor="w", padx=8, pady=(4, 2))
-        _muted(
-            scroll,
-            "Searches the selected ethnic surname list with A–Z first-name prefixes and short "
-            "last-name prefixes (API min first+last = 3 letters, e.g. M + AH → Mohamed Ahmed). "
-            "Shared last prefixes collapse many surnames into one query. "
-            "Race comes from each jurisdiction detail sheet. "
-            "Use Resume + New HTML only to continue a long run without redoing work. "
-            "Click column headers in Recent inserts to sort.",
-        ).pack(anchor="w", padx=8, pady=(0, 12))
+        # Plain frame — not CTkScrollableFrame (settings must stay visible)
+        ctrl = ctk.CTkFrame(controls_host, fg_color=C["surface"])
+        ctrl.pack(fill="x", padx=6, pady=(6, 2))
 
         self.nsopw_first_mode = "initials"
         self.nsopw_db_path = self.db_path
         self.nsopw_html_dir = "data/report_pages"
         self._nsopw_insert_count = 0
 
-        # Ethnicity + subcategory + surname scope
-        eth_card = _card(scroll)
-        eth_card.pack(fill="x", padx=4, pady=6)
-        _section_label(eth_card, "Ethnicity & surnames").pack(anchor="w", padx=14, pady=(12, 6))
-
-        eth_row = ctk.CTkFrame(eth_card, fg_color="transparent")
-        eth_row.pack(fill="x", padx=14, pady=(0, 4))
-        ctk.CTkLabel(
-            eth_row, text="Surname list", font=FONT_SM, text_color=C["muted"], width=100, anchor="w"
-        ).pack(side="left")
-        self.nsopw_ethnicity = ctk.StringVar(value="hispanic")
-        self.nsopw_eth_combo = ctk.CTkComboBox(
-            eth_row,
-            variable=self.nsopw_ethnicity,
-            width=200,
-            values=[
-                "hispanic",
-                "asian",
-                "indian",
-                "african_american",
-                "african",
-                "arabic",
-                "jewish",
-                "portuguese",
-                "native_american",
-                "european",
-                "all",
-            ],
-            fg_color=C["bg"],
-            border_color=C["border"],
-            button_color=C["elevated"],
-            text_color=C["text"],
-            dropdown_fg_color=C["panel"],
-            command=self._nsopw_on_ethnicity_change,
-        )
-        self.nsopw_eth_combo.pack(side="left", padx=6)
-
-        sub_row = ctk.CTkFrame(eth_card, fg_color="transparent")
-        sub_row.pack(fill="x", padx=14, pady=(0, 4))
-        ctk.CTkLabel(
-            sub_row, text="Subcategory", font=FONT_SM, text_color=C["muted"], width=100, anchor="w"
-        ).pack(side="left")
-        self.nsopw_subcategory = ctk.StringVar(value="all")
-        self.nsopw_sub_combo = ctk.CTkComboBox(
-            sub_row,
-            variable=self.nsopw_subcategory,
-            width=200,
-            values=["all"],
-            fg_color=C["bg"],
-            border_color=C["border"],
-            button_color=C["elevated"],
-            text_color=C["text"],
-            dropdown_fg_color=C["panel"],
-            command=self._nsopw_on_subcategory_change,
-            state="disabled",
-        )
-        self.nsopw_sub_combo.pack(side="left", padx=6)
-        ctk.CTkLabel(
-            sub_row, text="one group or all", font=FONT_SM, text_color=C["dim"]
-        ).pack(side="left", padx=4)
-
-        ctk.CTkLabel(
-            eth_card,
-            text=(
-                "asian = East/SE Asian · indian = South Asian · african = continental regions · "
-                "Subcategory picks one nested group or all."
-            ),
-            font=FONT_SM, text_color=C["dim"],
-        ).pack(anchor="w", padx=14, pady=(0, 6))
-
-        # Cap toggle: off = search entire selected surname list
-        self.nsopw_limit_surnames = ctk.BooleanVar(value=False)
-        self.nsopw_surnames_limit = ctk.IntVar(value=15)
-        sn_row = ctk.CTkFrame(eth_card, fg_color="transparent")
-        sn_row.pack(fill="x", padx=14, pady=(0, 4))
-        ctk.CTkCheckBox(
-            sn_row, text="Limit max surnames / group",
-            variable=self.nsopw_limit_surnames, font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            checkmark_color=C["bg"], border_color=C["border"],
-            command=self._nsopw_toggle_surname_cap,
-        ).pack(side="left", padx=(0, 12))
-        ctk.CTkLabel(
-            sn_row, text="Max", font=FONT_SM, text_color=C["muted"]
-        ).pack(side="left", padx=(0, 4))
-        self.nsopw_surnames_entry = ctk.CTkEntry(
-            sn_row, textvariable=self.nsopw_surnames_limit, width=64,
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-            state="disabled",
-        )
-        self.nsopw_surnames_entry.pack(side="left")
-        # Refresh count when max value is edited
-        self.nsopw_surnames_entry.bind("<KeyRelease>", lambda _e: self._nsopw_update_surname_count())
-        self.nsopw_surnames_entry.bind("<FocusOut>", lambda _e: self._nsopw_update_surname_count())
-
-        self.nsopw_surname_count_label = ctk.CTkLabel(
-            eth_card,
-            text="Surnames to search: —",
-            font=FONT_SM, text_color=C["text"],
-            anchor="w",
-        )
-        self.nsopw_surname_count_label.pack(anchor="w", padx=14, pady=(4, 12))
-
-        # Populate subcategory + initial count
-        self._nsopw_refresh_subcategories()
-
-        # Limits & rate control (granular: search vs report/HTML)
-        lim = _card(scroll)
-        lim.pack(fill="x", padx=4, pady=6)
-        _section_label(lim, "Limits & rate control").pack(anchor="w", padx=14, pady=(12, 6))
-        _muted(
-            lim,
-            "Search delay = NSOPW API (Cloudflare — keep ≥2s). "
-            "Report delay = state detail sheets + HTML archive (same request; can be much lower).",
-        ).pack(anchor="w", padx=14, pady=(0, 8))
-
-        # StringVars so blank fields are allowed (blank = unlimited)
+        # StringVars (blank max = unlimited)
         self.nsopw_max_searches = ctk.StringVar(value="40")
         self.nsopw_max_reports = ctk.StringVar(value="80")
         self.nsopw_search_delay = ctk.DoubleVar(value=3.0)
@@ -1033,140 +2556,212 @@ class ArchiverApp(ctk.CTk):
         self.nsopw_skip_existing = ctk.BooleanVar(value=True)
         self.nsopw_resume = ctk.BooleanVar(value=True)
         self.nsopw_new_files_only = ctk.BooleanVar(value=True)
+        self.nsopw_limit_surnames = ctk.BooleanVar(value=False)
+        self.nsopw_surnames_limit = ctk.IntVar(value=15)
 
-        row1 = ctk.CTkFrame(lim, fg_color="transparent")
-        row1.pack(fill="x", padx=14, pady=2)
+        panel = _card(ctrl)
+        panel.pack(fill="x", padx=2, pady=2)
+
+        # Row 1: ethnicity · subcategory · surname limit
+        r1 = ctk.CTkFrame(panel, fg_color="transparent")
+        r1.pack(fill="x", padx=12, pady=(10, 4))
+        ctk.CTkLabel(r1, text="Surname list", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(0, 6)
+        )
+        self.nsopw_ethnicity = ctk.StringVar(value="hispanic")
+        self.nsopw_eth_combo = ctk.CTkComboBox(
+            r1,
+            variable=self.nsopw_ethnicity,
+            width=160,
+            values=[
+                "hispanic", "asian", "indian", "african_american", "african",
+                "arabic", "jewish", "portuguese", "native_american", "european", "all",
+            ],
+            fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
+            text_color=C["text"], dropdown_fg_color=C["panel"],
+            command=self._nsopw_on_ethnicity_change,
+        )
+        self.nsopw_eth_combo.pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(r1, text="Subcategory", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(0, 6)
+        )
+        self.nsopw_subcategory = ctk.StringVar(value="all")
+        self.nsopw_sub_combo = ctk.CTkComboBox(
+            r1,
+            variable=self.nsopw_subcategory,
+            width=140,
+            values=["all"],
+            fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
+            text_color=C["text"], dropdown_fg_color=C["panel"],
+            command=self._nsopw_on_subcategory_change,
+            state="disabled",
+        )
+        self.nsopw_sub_combo.pack(side="left", padx=(0, 12))
+        ctk.CTkCheckBox(
+            r1, text="Limit surnames/group",
+            variable=self.nsopw_limit_surnames, font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            checkmark_color=C["bg"], border_color=C["border"],
+            command=self._nsopw_toggle_surname_cap,
+        ).pack(side="left", padx=(0, 6))
+        self.nsopw_surnames_entry = ctk.CTkEntry(
+            r1, textvariable=self.nsopw_surnames_limit, width=56,
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+            state="disabled",
+        )
+        self.nsopw_surnames_entry.pack(side="left")
+        self.nsopw_surnames_entry.bind("<KeyRelease>", lambda _e: self._nsopw_update_surname_count())
+        self.nsopw_surnames_entry.bind("<FocusOut>", lambda _e: self._nsopw_update_surname_count())
+
+        self.nsopw_surname_count_label = ctk.CTkLabel(
+            panel, text="Surnames to search: —", font=FONT_SM, text_color=C["text"], anchor="w",
+        )
+        self.nsopw_surname_count_label.pack(fill="x", padx=14, pady=(0, 4))
+        self._nsopw_refresh_subcategories()
+
+        # Row 2: limits + delays
+        r2 = ctk.CTkFrame(panel, fg_color="transparent")
+        r2.pack(fill="x", padx=12, pady=4)
         for label, var, width in (
-            ("Max new searches", self.nsopw_max_searches, 72),
-            ("Max names", self.nsopw_max_reports, 72),
+            ("Max searches", self.nsopw_max_searches, 64),
+            ("Max names", self.nsopw_max_reports, 64),
         ):
-            ctk.CTkLabel(row1, text=label, font=FONT_SM, text_color=C["muted"]).pack(
+            ctk.CTkLabel(r2, text=label, font=FONT_SM, text_color=C["muted"]).pack(
                 side="left", padx=(0, 4)
             )
             ctk.CTkEntry(
-                row1, textvariable=var, width=width,
+                r2, textvariable=var, width=width,
                 fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-                placeholder_text="blank=∞",
-            ).pack(side="left", padx=(0, 14))
-
-        row2 = ctk.CTkFrame(lim, fg_color="transparent")
-        row2.pack(fill="x", padx=14, pady=6)
+                placeholder_text="∞",
+            ).pack(side="left", padx=(0, 12))
         for label, var in (
-            ("Search delay (s)", self.nsopw_search_delay),
-            ("Report/HTML delay (s)", self.nsopw_report_delay),
+            ("Search delay", self.nsopw_search_delay),
+            ("Report delay", self.nsopw_report_delay),
         ):
-            ctk.CTkLabel(row2, text=label, font=FONT_SM, text_color=C["muted"]).pack(
+            ctk.CTkLabel(r2, text=label, font=FONT_SM, text_color=C["muted"]).pack(
                 side="left", padx=(0, 4)
             )
             ctk.CTkEntry(
-                row2, textvariable=var, width=72,
+                r2, textvariable=var, width=56,
                 fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-            ).pack(side="left", padx=(0, 14))
+            ).pack(side="left", padx=(0, 12))
 
-        tog = ctk.CTkFrame(lim, fg_color="transparent")
-        tog.pack(fill="x", padx=14, pady=(2, 2))
-        ctk.CTkCheckBox(
-            tog, text="Fetch detail sheets (race / demos)",
-            variable=self.nsopw_enrich, font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            checkmark_color=C["bg"], border_color=C["border"],
-        ).pack(side="left", padx=(0, 16))
-        ctk.CTkCheckBox(
-            tog, text="Archive report HTML",
-            variable=self.nsopw_save_html, font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            checkmark_color=C["bg"], border_color=C["border"],
-        ).pack(side="left")
+        # Row 3: option checkboxes in one line (wraps if needed)
+        r3 = ctk.CTkFrame(panel, fg_color="transparent")
+        r3.pack(fill="x", padx=12, pady=4)
+        for text, var in (
+            ("Fetch detail sheets", self.nsopw_enrich),
+            ("Archive HTML", self.nsopw_save_html),
+            ("Resume searches", self.nsopw_resume),
+            ("Skip known URLs", self.nsopw_skip_existing),
+            ("New HTML only", self.nsopw_new_files_only),
+        ):
+            ctk.CTkCheckBox(
+                r3, text=text, variable=var, font=FONT_SM, text_color=C["text"],
+                fg_color=C["accent"], hover_color=C["accent_hover"],
+                checkmark_color=C["bg"], border_color=C["border"],
+            ).pack(side="left", padx=(0, 12))
 
-        # Resume / skip options
-        opt = ctk.CTkFrame(lim, fg_color="transparent")
-        opt.pack(fill="x", padx=14, pady=(8, 2))
-        ctk.CTkCheckBox(
-            opt, text="Resume — skip completed searches",
-            variable=self.nsopw_resume, font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            checkmark_color=C["bg"], border_color=C["border"],
-        ).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(
-            opt, text="Skip known offender URLs already in database",
-            variable=self.nsopw_skip_existing, font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            checkmark_color=C["bg"], border_color=C["border"],
-        ).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(
-            opt, text="New HTML files only — do not re-download existing report pages",
-            variable=self.nsopw_new_files_only, font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            checkmark_color=C["bg"], border_color=C["border"],
-        ).pack(anchor="w", pady=2)
-
-        ctk.CTkLabel(
-            lim,
-            text=(
-                "Max names = unique offenders to process (blank = unlimited). "
-                "Max new searches = NSOPW API queries (blank = unlimited). "
-                "Floors: search ≥2.0s · report ≥0.25s."
-            ),
-            font=FONT_SM, text_color=C["dim"],
-        ).pack(anchor="w", padx=14, pady=(6, 12))
-
-        # Actions
-        act = ctk.CTkFrame(scroll, fg_color="transparent")
-        act.pack(fill="x", padx=4, pady=10)
+        # Row 4: actions
+        act = ctk.CTkFrame(panel, fg_color="transparent")
+        act.pack(fill="x", padx=12, pady=(6, 4))
         self.nsopw_start_btn = ctk.CTkButton(
-            act, text="Start NSOPW search", height=42, font=FONT_BOLD,
+            act, text="Start NSOPW search", height=36, font=FONT_BOLD,
             fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
             command=self._start_nsopw,
         )
-        self.nsopw_start_btn.pack(side="left", padx=(4, 8))
+        self.nsopw_start_btn.pack(side="left", padx=(0, 8))
         self.nsopw_cancel_btn = ctk.CTkButton(
-            act, text="Cancel", height=42, width=100, state="disabled",
+            act, text="Cancel", height=36, width=90, state="disabled",
             fg_color=C["elevated"], hover_color=C["danger"], text_color=C["text"],
             border_width=1, border_color=C["border"],
             command=self._cancel_nsopw,
         )
-        self.nsopw_cancel_btn.pack(side="left", padx=4)
+        self.nsopw_cancel_btn.pack(side="left", padx=(0, 6))
         ctk.CTkButton(
-            act, text="Open data folder", height=42,
+            act, text="Open data folder", height=36,
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
             command=self._nsopw_open_data_folder,
-        ).pack(side="left", padx=4)
+        ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
-            act, text="Clear table", height=42, width=100,
+            act, text="Clear table", height=36, width=90,
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
             command=self._nsopw_clear_tree,
-        ).pack(side="left", padx=4)
+        ).pack(side="left")
 
-        self.nsopw_progress = ctk.CTkProgressBar(
-            scroll, mode="indeterminate", progress_color=C["accent"], fg_color=C["elevated"], height=6
+        # Progress + live stats
+        prog_row = ctk.CTkFrame(panel, fg_color="transparent")
+        prog_row.pack(fill="x", padx=12, pady=(6, 2))
+        self.nsopw_progress_label = ctk.CTkLabel(
+            prog_row, text="0%", font=FONT_SM, text_color=C["accent"], width=44, anchor="e",
         )
-        self.nsopw_progress.pack(fill="x", padx=8, pady=6)
+        self.nsopw_progress_label.pack(side="right", padx=(8, 0))
+        self.nsopw_progress = ctk.CTkProgressBar(
+            prog_row, mode="determinate", progress_color=C["accent"],
+            fg_color=C["elevated"], height=10,
+        )
+        self.nsopw_progress.pack(side="left", fill="x", expand=True)
         self.nsopw_progress.set(0)
 
+        stats_row = ctk.CTkFrame(panel, fg_color=C["elevated"], corner_radius=8)
+        stats_row.pack(fill="x", padx=12, pady=(4, 2))
+        self._nsopw_stat_vars: Dict[str, ctk.CTkLabel] = {}
+        for key, title in (
+            ("plan", "Plan"),
+            ("searches", "Searches"),
+            ("matched", "Matched"),
+            ("other", "Other"),
+            ("hits", "Hits"),
+            ("html", "HTML"),
+            ("photos", "Photos"),
+            ("race", "Race"),
+        ):
+            cell = ctk.CTkFrame(stats_row, fg_color="transparent")
+            cell.pack(side="left", padx=10, pady=6)
+            ctk.CTkLabel(
+                cell, text=title, font=FONT_SM, text_color=C["dim"], anchor="w",
+            ).pack(anchor="w")
+            val = ctk.CTkLabel(
+                cell, text="—", font=FONT_BOLD, text_color=C["text"], anchor="w",
+            )
+            val.pack(anchor="w")
+            self._nsopw_stat_vars[key] = val
+
         self.nsopw_status = ctk.CTkLabel(
-            scroll, text="Ready",
+            panel,
+            text="Ready · A–Z first + short last prefixes (Settings) · blank max = unlimited",
             font=FONT_SM, text_color=C["muted"], anchor="w",
         )
-        self.nsopw_status.pack(fill="x", padx=10, pady=(0, 8))
+        self.nsopw_status.pack(fill="x", padx=12, pady=(2, 10))
+        self._nsopw_reset_progress_ui()
 
-        # Recent inserts live outside the controls scrollable so wheel over the
-        # table never pans the whole NSOPW form (CTkScrollableFrame bind_all).
-        prev = _card(tab)
-        prev.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        # Recent inserts below sash — independent of controls scroll frame.
+        prev = _card(inserts_host)
+        prev.pack(fill="both", expand=True, padx=4, pady=(2, 4))
         _section_label(
             prev,
-            "Recent inserts (live) · ethnicity match vs other · click headers to sort · double-click HTML/URL",
+            "Recent inserts (live) · select row for photo · double-click HTML/photo/URL",
         ).pack(anchor="w", padx=14, pady=(12, 4))
         _muted(
             prev,
             "Primary tab: surnames in the selected ethnicity list. "
-            "Other surnames tab: still saved to DB/HTML, filtered out of the ethnicity view.",
+            "Other surnames tab: still saved to DB/HTML. "
+            "Photos are saved with report HTML (images embedded for offline viewing).",
         ).pack(anchor="w", padx=14, pady=(0, 6))
 
+        # Resizable: tables | detail drawer (photo + crime + links)
+        inserts_split = _hpaned(prev)
+        inserts_split.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        tables_host = ctk.CTkFrame(inserts_split, fg_color="transparent")
+        inserts_split.add(tables_host, minsize=320, stretch="always")
+        self.nsopw_detail = self._make_detail_drawer(inserts_split)
+        inserts_split.add(self.nsopw_detail, minsize=220, stretch="never")
+        self.after(200, lambda: self._set_sash(inserts_split, 0, 0.72))
+
         insert_tabs = ctk.CTkTabview(
-            prev,
+            tables_host,
             fg_color=C["panel"],
             segmented_button_fg_color=C["elevated"],
             segmented_button_selected_color=C["accent_dim"],
@@ -1175,36 +2770,41 @@ class ArchiverApp(ctk.CTk):
             segmented_button_unselected_hover_color=C["border"],
             text_color=C["text"],
         )
-        insert_tabs.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        insert_tabs.pack(fill="both", expand=True, padx=0, pady=0)
         tab_matched = insert_tabs.add("Ethnicity match")
         tab_other = insert_tabs.add("Other surnames")
         self.nsopw_insert_tabs = insert_tabs
 
-        cols = ("name", "state", "race", "url", "html")
+        cols = ["name", "state", "race", "crime", "photo", "url", "html"]
         col_labels = {
             "name": "NAME",
             "state": "STATE",
             "race": "RACE",
+            "crime": "CRIME",
+            "photo": "PHOTO",
             "url": "URL",
             "html": "HTML",
         }
-        col_widths = (150, 50, 110, 280, 180)
+        col_widths = [120, 48, 90, 160, 50, 180, 120]
 
         def _setup_insert_tree(parent) -> ttk.Treeview:
             wrap, tree = _tree_frame(parent)
             wrap.pack(fill="both", expand=True, padx=4, pady=4)
             tree.configure(columns=cols, show="headings")
-            for c, w in zip(cols, col_widths):
-                tree.column(c, width=w)
+            _stretch_columns(tree, cols, col_widths)
             _enable_tree_column_sort(tree, list(cols), labels=col_labels)
             _bind_tree_scroll_isolation(tree, wrap)
             tree.bind("<Double-1>", self._nsopw_open_selected)
+            tree.bind("<<TreeviewSelect>>", self._nsopw_on_tree_select)
             return tree
 
         self.nsopw_tree = _setup_insert_tree(tab_matched)
         self.nsopw_tree_other = _setup_insert_tree(tab_other)
         self._nsopw_insert_count = 0
         self._nsopw_other_count = 0
+        # iid -> full record (for detail drawer) + photo path map
+        self._nsopw_records_by_iid: Dict[str, Dict[str, Any]] = {}
+        self._nsopw_photo_by_iid: Dict[str, str] = {}
 
     def _nsopw_clear_tree(self):
         self.nsopw_tree.delete(*self.nsopw_tree.get_children())
@@ -1212,6 +2812,10 @@ class ArchiverApp(ctk.CTk):
             self.nsopw_tree_other.delete(*self.nsopw_tree_other.get_children())
         self._nsopw_insert_count = 0
         self._nsopw_other_count = 0
+        self._nsopw_photo_by_iid = {}
+        self._nsopw_records_by_iid = {}
+        if getattr(self, "nsopw_detail", None) is not None:
+            self._fill_detail_drawer(self.nsopw_detail, None)
 
     def _nsopw_toggle_surname_cap(self):
         """Enable max-surnames entry only when the limit toggle is on."""
@@ -1281,14 +2885,29 @@ class ArchiverApp(ctk.CTk):
             )
             n = len(pairs)
             naive = n * len(FIRST_INITIALS)
-            est = estimate_compact_query_count(pairs, FIRST_INITIALS)
+            use_compact = bool(self.app_settings.get("nsopw_compact_prefixes", True))
+            if hasattr(self, "settings_compact_prefixes"):
+                use_compact = bool(self.settings_compact_prefixes.get())
+            try:
+                mcl = int(self.app_settings.get("nsopw_min_combined_len", 3))
+                if hasattr(self, "settings_min_combined"):
+                    mcl = int(str(self.settings_min_combined.get()).strip() or "3")
+            except (TypeError, ValueError):
+                mcl = 3
+            mcl = max(3, min(mcl, 10))
+            if use_compact:
+                est = estimate_compact_query_count(
+                    pairs, FIRST_INITIALS, min_combined=mcl
+                )
+                mode_txt = f"Est. NSOPW queries (short {mcl}-letter prefixes): {est:,}"
+                if naive != est:
+                    mode_txt += f"  (was {naive:,} full×A–Z)"
+            else:
+                est = naive
+                mode_txt = f"Est. NSOPW queries (full surnames×A–Z): {est:,}"
             scope = f"{eth}" + (f" / {sub}" if sub and sub != "all" else " / all groups")
             self.nsopw_surname_count_label.configure(
-                text=(
-                    f"Surnames in list: {n:,}  ({scope})  ·  "
-                    f"Est. NSOPW queries (short prefixes): {est:,}"
-                    + (f"  (was {naive:,} full×A–Z)" if naive != est else "")
-                )
+                text=f"Surnames in list: {n:,}  ({scope})  ·  {mode_txt}"
             )
         except Exception as e:
             self.nsopw_surname_count_label.configure(
@@ -1308,12 +2927,23 @@ class ArchiverApp(ctk.CTk):
             race_disp = f"{race} / {eth}" if race else eth
         if not race_disp:
             race_disp = "—"
+        photo_path = (record.get("photo_path") or "").strip()
+        photo_mark = "yes" if photo_path and Path(photo_path).is_file() else (
+            "url" if (record.get("photo_url") or "").strip() else "—"
+        )
+        crime = (
+            (record.get("crime") or record.get("offense_description") or record.get("offense_type") or "")
+            .strip()
+            or "—"
+        )
         vals = (
-            name[:80],
-            (record.get("state") or record.get("source_state") or "")[:8],
-            race_disp[:40],
-            (record.get("source_url") or "")[:90],
-            (record.get("report_html_path") or "")[:70],
+            name,
+            record.get("state") or record.get("source_state") or "",
+            race_disp,
+            crime,
+            photo_mark,
+            record.get("source_url") or "",
+            record.get("report_html_path") or "",
         )
 
         bucket = (record.get("nsopw_result_bucket") or "").strip().lower()
@@ -1333,14 +2963,19 @@ class ArchiverApp(ctk.CTk):
 
         sort_state = getattr(tree, "_sort_state", None) or {}
         if sort_state.get("col"):
-            tree.insert("", "end", values=vals)
+            iid = tree.insert("", "end", values=vals)
         else:
-            tree.insert("", 0, values=vals)
+            iid = tree.insert("", 0, values=vals)
+        self._nsopw_records_by_iid[iid] = dict(record)
+        if photo_path:
+            self._nsopw_photo_by_iid[iid] = photo_path
         # Cap live table size
         kids = tree.get_children()
         if len(kids) > 200:
-            for iid in kids[200:]:
-                tree.delete(iid)
+            for drop in kids[200:]:
+                self._nsopw_photo_by_iid.pop(drop, None)
+                self._nsopw_records_by_iid.pop(drop, None)
+                tree.delete(drop)
         reapply = getattr(tree, "_reapply_sort", None)
         if callable(reapply) and sort_state.get("col"):
             reapply()
@@ -1349,12 +2984,54 @@ class ArchiverApp(ctk.CTk):
             self._nsopw_other_count += 1
         else:
             self._nsopw_insert_count += 1
+        # Keep chip stats in sync with live inserts (progress callback may lag)
+        if hasattr(self, "_nsopw_stat_vars"):
+            try:
+                self._nsopw_stat_vars["matched"].configure(text=str(self._nsopw_insert_count))
+                self._nsopw_stat_vars["other"].configure(text=str(self._nsopw_other_count))
+            except Exception:
+                pass
         self.nsopw_status.configure(
             text=(
                 f"Running… matched {self._nsopw_insert_count} · "
                 f"other surnames {self._nsopw_other_count} (live)"
             )
         )
+
+    def _nsopw_on_tree_select(self, event=None):
+        tree = event.widget if event is not None else self.nsopw_tree
+        sel = tree.selection() if isinstance(tree, ttk.Treeview) else ()
+        if not sel:
+            return
+        iid = sel[0]
+        rec = self._nsopw_records_by_iid.get(iid)
+        if rec is None:
+            rec = {}
+        # Attach photo from map / HTML assets if missing
+        path = self._nsopw_photo_by_iid.get(iid) or (rec.get("photo_path") or "").strip()
+        if not path or not Path(path).is_file():
+            vals = tree.item(iid, "values")
+            html_path = vals[-1] if len(vals) >= 5 else ""
+            if html_path and html_path != "—":
+                hp = Path(str(html_path))
+                assets = hp.parent / f"{hp.stem}_assets"
+                if assets.is_dir():
+                    for cand in sorted(assets.iterdir()):
+                        if cand.suffix.lower() in (
+                            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"
+                        ) and cand.stat().st_size > 80:
+                            path = str(cand)
+                            self._nsopw_photo_by_iid[iid] = path
+                            rec = dict(rec)
+                            rec["photo_path"] = path
+                            self._nsopw_records_by_iid[iid] = rec
+                            break
+        elif path and not rec.get("photo_path"):
+            rec = dict(rec)
+            rec["photo_path"] = path
+            self._nsopw_records_by_iid[iid] = rec
+        if getattr(self, "nsopw_detail", None) is not None:
+            self._fill_detail_drawer(self.nsopw_detail, rec or None)
 
     def _nsopw_open_data_folder(self):
         path = Path("data")
@@ -1369,6 +3046,79 @@ class ArchiverApp(ctk.CTk):
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as e:
             messagebox.showerror("Cannot open", str(e))
+
+    def _nsopw_reset_progress_ui(self) -> None:
+        """Zero the progress bar and statistic chips."""
+        try:
+            self.nsopw_progress.set(0)
+            if hasattr(self, "nsopw_progress_label"):
+                self.nsopw_progress_label.configure(text="0%")
+            for key, lbl in getattr(self, "_nsopw_stat_vars", {}).items():
+                lbl.configure(text="0" if key != "plan" else "—")
+        except Exception:
+            pass
+
+    def _nsopw_update_progress(self, info: Dict[str, Any]) -> None:
+        """UI-thread: update determinate progress bar + stat chips."""
+        try:
+            done = float(info.get("done") or info.get("plan_i") or 0)
+            total = float(info.get("total") or info.get("plan_total") or 0)
+            if total <= 0:
+                frac = 0.0
+            else:
+                frac = min(1.0, max(0.0, done / total))
+            self.nsopw_progress.set(frac)
+            if hasattr(self, "nsopw_progress_label"):
+                self.nsopw_progress_label.configure(text=f"{int(round(frac * 100))}%")
+
+            plan_i = int(info.get("plan_i") or 0)
+            plan_total = int(info.get("plan_total") or 0)
+            searches = int(info.get("searches") or 0)
+            skipped = int(info.get("searches_skipped") or 0)
+            matched = int(info.get("inserted_matched") or self._nsopw_insert_count or 0)
+            other = int(info.get("inserted_other") or self._nsopw_other_count or 0)
+            hits = int(info.get("search_hits") or 0)
+            html = int(info.get("html_saved") or 0)
+            photos = int(info.get("photos_saved") or 0)
+            race = int(info.get("reports_with_race") or 0)
+
+            vars_ = getattr(self, "_nsopw_stat_vars", {})
+            if "plan" in vars_:
+                vars_["plan"].configure(
+                    text=f"{plan_i}/{plan_total}" if plan_total else str(plan_i)
+                )
+            if "searches" in vars_:
+                vars_["searches"].configure(
+                    text=f"{searches}" + (f" (+{skipped} skip)" if skipped else "")
+                )
+            if "matched" in vars_:
+                vars_["matched"].configure(text=str(matched))
+            if "other" in vars_:
+                vars_["other"].configure(text=str(other))
+            if "hits" in vars_:
+                vars_["hits"].configure(text=str(hits))
+            if "html" in vars_:
+                vars_["html"].configure(text=str(html))
+            if "photos" in vars_:
+                vars_["photos"].configure(text=str(photos))
+            if "race" in vars_:
+                vars_["race"].configure(text=str(race))
+
+            phase = (info.get("phase") or "").strip()
+            current = (info.get("current") or "").strip()
+            if phase == "done":
+                pass  # status set by completion handler
+            elif phase == "cancelled":
+                self.nsopw_status.configure(text="Cancelled")
+            elif current:
+                self.nsopw_status.configure(
+                    text=(
+                        f"Running… {current} · matched {matched} · other {other} · "
+                        f"plan {plan_i}/{plan_total or '—'}"
+                    )
+                )
+        except Exception:
+            pass
 
     def _cancel_nsopw(self):
         self._nsopw_cancel = True
@@ -1395,6 +3145,17 @@ class ArchiverApp(ctk.CTk):
         resume = bool(self.nsopw_resume.get())
         skip_existing = bool(self.nsopw_skip_existing.get())
         new_files_only = bool(self.nsopw_new_files_only.get())
+        # Settings tab: compact 3-letter partials (default on)
+        use_compact = bool(self.app_settings.get("nsopw_compact_prefixes", True))
+        if hasattr(self, "settings_compact_prefixes"):
+            use_compact = bool(self.settings_compact_prefixes.get())
+        try:
+            min_combined = int(self.app_settings.get("nsopw_min_combined_len", 3))
+            if hasattr(self, "settings_min_combined"):
+                min_combined = int(str(self.settings_min_combined.get()).strip() or "3")
+        except (TypeError, ValueError):
+            min_combined = 3
+        min_combined = max(3, min(min_combined, 10))
 
         def _parse_optional_limit(raw: str) -> Optional[int]:
             """Blank / 0 / non-numeric → None (unlimited)."""
@@ -1416,11 +3177,15 @@ class ArchiverApp(ctk.CTk):
         self._set_running(True)
         self.nsopw_start_btn.configure(state="disabled")
         self.nsopw_cancel_btn.configure(state="normal")
-        self.nsopw_progress.start()
+        self._nsopw_reset_progress_ui()
         self.nsopw_status.configure(text="Running NSOPW search…")
         self.nsopw_tree.delete(*self.nsopw_tree.get_children())
         if getattr(self, "nsopw_tree_other", None) is not None:
             self.nsopw_tree_other.delete(*self.nsopw_tree_other.get_children())
+        self._nsopw_photo_by_iid = {}
+        self._nsopw_records_by_iid = {}
+        if getattr(self, "nsopw_detail", None) is not None:
+            self._fill_detail_drawer(self.nsopw_detail, None)
 
         def log(msg):
             self.log_queue.put(msg)
@@ -1428,6 +3193,9 @@ class ArchiverApp(ctk.CTk):
         def on_insert(record: Dict[str, Any]) -> None:
             # Marshal to UI thread
             self.after(0, lambda r=dict(record): self._nsopw_append_row(r))
+
+        def on_progress(info: Dict[str, Any]) -> None:
+            self.after(0, lambda d=dict(info): self._nsopw_update_progress(d))
 
         def worker():
             from scraper.nsopw_builder import NSOPWEthnicDatabaseBuilder
@@ -1455,23 +3223,49 @@ class ArchiverApp(ctk.CTk):
                     new_files_only=new_files_only,
                     enrich_reports=enrich,
                     save_html=save_html,
+                    use_compact_prefixes=use_compact,
+                    min_combined_len=min_combined,
                     log=log,
                     on_insert=on_insert,
+                    on_progress=on_progress,
                 )
 
                 def done():
                     self._set_running(False)
                     self.nsopw_start_btn.configure(state="normal")
                     self.nsopw_cancel_btn.configure(state="disabled")
-                    self.nsopw_progress.stop()
-                    self.nsopw_progress.set(0)
+                    # Final bar + chips from completed stats
+                    self._nsopw_update_progress({
+                        "plan_i": getattr(stats, "searches", 0) + getattr(stats, "searches_skipped", 0),
+                        "plan_total": max(
+                            getattr(stats, "searches", 0) + getattr(stats, "searches_skipped", 0),
+                            1,
+                        ),
+                        "done": 1,
+                        "total": 1,
+                        "searches": stats.searches,
+                        "searches_skipped": stats.searches_skipped,
+                        "search_hits": stats.search_hits,
+                        "inserted_matched": getattr(stats, "inserted_matched", stats.inserted),
+                        "inserted_other": getattr(stats, "inserted_other", 0),
+                        "html_saved": stats.html_saved,
+                        "photos_saved": getattr(stats, "photos_saved", 0),
+                        "reports_with_race": stats.reports_with_race,
+                        "current": "complete",
+                        "phase": "done",
+                    })
+                    self.nsopw_progress.set(1.0)
+                    if hasattr(self, "nsopw_progress_label"):
+                        self.nsopw_progress_label.configure(text="100%")
                     matched_n = getattr(stats, "inserted_matched", stats.inserted)
                     other_n = getattr(stats, "inserted_other", 0)
                     self.nsopw_status.configure(
                         text=(
                             f"Done · matched {matched_n} · other {other_n} · "
                             f"{stats.reports_with_race} with race · "
-                            f"{stats.html_saved} HTML · {stats.searches} searches · "
+                            f"{stats.html_saved} HTML · "
+                            f"{getattr(stats, 'photos_saved', 0)} photos · "
+                            f"{stats.searches} searches · "
                             f"{stats.searches_skipped} resumed"
                         )
                     )
@@ -1485,6 +3279,7 @@ class ArchiverApp(ctk.CTk):
                             f"Skipped completed searches: {stats.searches_skipped}\n"
                             f"Reports with race: {stats.reports_with_race}\n"
                             f"HTML saved: {stats.html_saved}\n"
+                            f"Photos saved: {getattr(stats, 'photos_saved', 0)}\n"
                             f"HTML skipped (cached): {stats.reports_skipped_existing_file}\n"
                             f"{db_path}"
                         ),
@@ -1498,7 +3293,6 @@ class ArchiverApp(ctk.CTk):
                     self._set_running(False)
                     self.nsopw_start_btn.configure(state="normal")
                     self.nsopw_cancel_btn.configure(state="disabled")
-                    self.nsopw_progress.stop()
                     self.nsopw_status.configure(text=f"Error: {e}")
                     messagebox.showerror("NSOPW error", str(e))
 
@@ -1522,101 +3316,35 @@ class ArchiverApp(ctk.CTk):
                     break
         if not sel:
             return
-        vals = tree.item(sel[0], "values")
-        # columns: name, state, race, url, html
-        if len(vals) < 5:
-            # backward-compatible if old 4-col rows somehow present
-            if len(vals) >= 4:
-                url, html_path = vals[2], vals[3]
-            else:
-                return
-        else:
+        iid = sel[0]
+        vals = tree.item(iid, "values")
+        # columns: name, state, race, crime, photo, url, html  (legacy layouts supported)
+        if len(vals) >= 7:
+            url, html_path = vals[5], vals[6]
+        elif len(vals) >= 6:
+            url, html_path = vals[4], vals[5]
+        elif len(vals) >= 5:
             url, html_path = vals[3], vals[4]
+        elif len(vals) >= 4:
+            url, html_path = vals[2], vals[3]
+        else:
+            return
+
+        photo_path = self._nsopw_photo_by_iid.get(iid)
+        # Prefer opening HTML (includes embedded photos offline), then photo, then URL
         if html_path and html_path != "—":
             p = Path(html_path)
             if p.exists():
                 self._open_path(p)
                 return
+        if photo_path and Path(photo_path).is_file():
+            self._open_path(Path(photo_path))
+            return
         if url:
             try:
                 webbrowser.open(url)
             except Exception as e:
                 messagebox.showerror("Open link", str(e))
-
-    # -----------------------------------------------------------------------
-    # Viewer
-    # -----------------------------------------------------------------------
-    def _build_viewer(self, tab):
-        tab.configure(fg_color=C["surface"])
-        bar = ctk.CTkFrame(tab, fg_color="transparent")
-        bar.pack(fill="x", padx=12, pady=12)
-        ctk.CTkButton(
-            bar, text="Load CSV…", width=110, command=self._load_csv_to_viewer,
-            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
-        ).pack(side="left", padx=(0, 8))
-        self.viewer_search_var = ctk.StringVar()
-        ctk.CTkEntry(
-            bar, textvariable=self.viewer_search_var, placeholder_text="Filter…", width=220,
-            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left", padx=4)
-        ctk.CTkButton(
-            bar, text="Apply", width=80, command=self._apply_viewer_filter,
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=4)
-
-        wrap, self.viewer_tree = _tree_frame(tab)
-        wrap.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        self.viewer_tree.configure(show="headings")
-
-        self.viewer_status = ctk.CTkLabel(
-            tab, text="Load a CSV to browse", font=FONT_SM, text_color=C["muted"]
-        )
-        self.viewer_status.pack(anchor="w", padx=14, pady=(0, 10))
-
-    def _load_csv_to_viewer(self):
-        filepath = filedialog.askopenfilename(filetypes=[("CSV", "*.csv"), ("All", "*.*")])
-        if not filepath:
-            return
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                reader = csv.DictReader(f)
-                headers = list(reader.fieldnames or [])
-                rows = list(reader)
-            self.viewer_tree.delete(*self.viewer_tree.get_children())
-            self.viewer_tree["columns"] = headers
-            for col in headers:
-                self.viewer_tree.heading(col, text=col)
-                self.viewer_tree.column(col, width=110, minwidth=50)
-            for i, row in enumerate(rows[:400]):
-                self.viewer_tree.insert(
-                    "", "end", iid=str(i),
-                    values=[str(row.get(h, ""))[:80] for h in headers],
-                )
-            self._viewer_data = rows
-            self._viewer_headers = headers
-            self.viewer_status.configure(
-                text=f"{len(rows)} rows · {Path(filepath).name}"
-            )
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-    def _apply_viewer_filter(self):
-        if not self._viewer_data:
-            return
-        term = self.viewer_search_var.get().lower().strip()
-        filtered = (
-            self._viewer_data
-            if not term
-            else [r for r in self._viewer_data if any(term in str(v).lower() for v in r.values())]
-        )
-        self.viewer_tree.delete(*self.viewer_tree.get_children())
-        for i, row in enumerate(filtered[:400]):
-            self.viewer_tree.insert(
-                "", "end", iid=str(i),
-                values=[str(row.get(h, ""))[:80] for h in self._viewer_headers],
-            )
-        self.viewer_status.configure(text=f"{len(filtered)} rows after filter")
 
     # -----------------------------------------------------------------------
     # Shared
@@ -1667,6 +3395,444 @@ class ArchiverApp(ctk.CTk):
         path = Path(self.scrape_output_var.get())
         path.mkdir(parents=True, exist_ok=True)
         self._open_path(path)
+
+    # -----------------------------------------------------------------------
+    # Settings (backups, DB path, NSOPW compact search)
+    # -----------------------------------------------------------------------
+    def _build_settings(self, tab):
+        tab.configure(fg_color=C["surface"])
+        scroll = ctk.CTkScrollableFrame(tab, fg_color=C["surface"])
+        scroll.pack(fill="both", expand=True, padx=8, pady=8)
+        _wire_wide_scroll(tab, scroll)
+
+        # --- Database ---
+        db_card = _card(scroll)
+        db_card.pack(fill="x", padx=4, pady=(4, 8))
+        _section_label(db_card, "Database").pack(anchor="w", padx=14, pady=(12, 4))
+        _muted(
+            db_card,
+            "Primary SQLite file used by Browse, Integrity, and NSOPW inserts.",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        self.settings_db_path = ctk.StringVar(value=str(self.db_path))
+        db_row = ctk.CTkFrame(db_card, fg_color="transparent")
+        db_row.pack(fill="x", padx=14, pady=(0, 10))
+        ctk.CTkEntry(
+            db_row,
+            textvariable=self.settings_db_path,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            text_color=C["text"],
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            db_row,
+            text="Browse…",
+            width=88,
+            height=32,
+            command=self._settings_browse_db,
+            fg_color=C["elevated"],
+            hover_color=C["border"],
+            text_color=C["text"],
+            border_width=1,
+            border_color=C["border"],
+        ).pack(side="left")
+
+        # --- Backups ---
+        bak_card = _card(scroll)
+        bak_card.pack(fill="x", padx=4, pady=(0, 8))
+        _section_label(bak_card, "Database backups").pack(anchor="w", padx=14, pady=(12, 4))
+        _muted(
+            bak_card,
+            "Timestamped copies via SQLite online backup. Auto-backup runs when the app closes.",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        self.settings_backup_on_close = ctk.BooleanVar(
+            value=bool(self.app_settings.get("backup_on_close", True))
+        )
+        self.settings_backup_dir = ctk.StringVar(
+            value=str(self.app_settings.get("backup_dir") or "data/backups")
+        )
+        self.settings_max_backups = ctk.StringVar(
+            value=str(int(self.app_settings.get("max_backups", 10)))
+        )
+
+        ctk.CTkCheckBox(
+            bak_card,
+            text="Backup database automatically when closing the app",
+            variable=self.settings_backup_on_close,
+            font=FONT_SM,
+            text_color=C["text"],
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            checkmark_color=C["bg"],
+            border_color=C["border"],
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        dir_row = ctk.CTkFrame(bak_card, fg_color="transparent")
+        dir_row.pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkLabel(dir_row, text="Backup folder", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(0, 8)
+        )
+        ctk.CTkEntry(
+            dir_row,
+            textvariable=self.settings_backup_dir,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            text_color=C["text"],
+            width=320,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            dir_row,
+            text="Browse…",
+            width=88,
+            height=32,
+            command=self._settings_browse_backup_dir,
+            fg_color=C["elevated"],
+            hover_color=C["border"],
+            text_color=C["text"],
+            border_width=1,
+            border_color=C["border"],
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            dir_row,
+            text="Open folder",
+            width=100,
+            height=32,
+            command=self._settings_open_backup_dir,
+            fg_color=C["elevated"],
+            hover_color=C["border"],
+            text_color=C["text"],
+            border_width=1,
+            border_color=C["border"],
+        ).pack(side="left")
+
+        keep_row = ctk.CTkFrame(bak_card, fg_color="transparent")
+        keep_row.pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkLabel(
+            keep_row, text="Keep last N backups (0 = unlimited)", font=FONT_SM, text_color=C["muted"]
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkEntry(
+            keep_row,
+            textvariable=self.settings_max_backups,
+            width=72,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            text_color=C["text"],
+        ).pack(side="left")
+
+        act = ctk.CTkFrame(bak_card, fg_color="transparent")
+        act.pack(fill="x", padx=14, pady=(4, 12))
+        ctk.CTkButton(
+            act,
+            text="Backup now",
+            height=36,
+            font=FONT_BOLD,
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            text_color=C["bg"],
+            command=self._settings_backup_now,
+        ).pack(side="left", padx=(0, 8))
+        self.settings_backup_status = ctk.CTkLabel(
+            act, text="", font=FONT_SM, text_color=C["muted"], anchor="w"
+        )
+        self.settings_backup_status.pack(side="left", fill="x", expand=True)
+
+        # --- NSOPW search strategy ---
+        ns_card = _card(scroll)
+        ns_card.pack(fill="x", padx=4, pady=(0, 8))
+        _section_label(ns_card, "NSOPW search strategy").pack(anchor="w", padx=14, pady=(12, 4))
+        _muted(
+            ns_card,
+            "NSOPW accepts partial first and last names. Combined length must be at least 3 "
+            "letters (e.g. first=M, last=AH matches Mohamed Ahmed). Compact mode collapses "
+            "surnames that share a short prefix so one query covers many list names.",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        self.settings_compact_prefixes = ctk.BooleanVar(
+            value=bool(self.app_settings.get("nsopw_compact_prefixes", True))
+        )
+        ctk.CTkCheckBox(
+            ns_card,
+            text="Use short 3-letter partial prefixes (recommended — far fewer searches)",
+            variable=self.settings_compact_prefixes,
+            font=FONT_SM,
+            text_color=C["text"],
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            checkmark_color=C["bg"],
+            border_color=C["border"],
+            command=self._settings_on_compact_toggle,
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        mcl_row = ctk.CTkFrame(ns_card, fg_color="transparent")
+        mcl_row.pack(fill="x", padx=14, pady=(0, 12))
+        ctk.CTkLabel(
+            mcl_row, text="Min combined first+last length", font=FONT_SM, text_color=C["muted"]
+        ).pack(side="left", padx=(0, 8))
+        self.settings_min_combined = ctk.StringVar(
+            value=str(int(self.app_settings.get("nsopw_min_combined_len", 3)))
+        )
+        ctk.CTkEntry(
+            mcl_row,
+            textvariable=self.settings_min_combined,
+            width=56,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            text_color=C["text"],
+        ).pack(side="left")
+        ctk.CTkLabel(
+            mcl_row, text="(NSOPW API minimum is 3)", font=FONT_SM, text_color=C["dim"]
+        ).pack(side="left", padx=(8, 0))
+
+        # --- Save ---
+        save_card = _card(scroll)
+        save_card.pack(fill="x", padx=4, pady=(0, 8))
+        save_row = ctk.CTkFrame(save_card, fg_color="transparent")
+        save_row.pack(fill="x", padx=14, pady=12)
+        ctk.CTkButton(
+            save_row,
+            text="Save settings",
+            height=36,
+            font=FONT_BOLD,
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            text_color=C["bg"],
+            command=self._settings_save,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            save_row,
+            text="Reset to defaults",
+            height=36,
+            command=self._settings_reset_defaults,
+            fg_color=C["elevated"],
+            hover_color=C["border"],
+            text_color=C["text"],
+            border_width=1,
+            border_color=C["border"],
+        ).pack(side="left", padx=(0, 8))
+        self.settings_status = ctk.CTkLabel(
+            save_row, text="", font=FONT_SM, text_color=C["muted"], anchor="w"
+        )
+        self.settings_status.pack(side="left", fill="x", expand=True)
+
+        self.after(100, self._settings_refresh_status)
+
+    def _settings_collect(self) -> Dict[str, Any]:
+        try:
+            max_b = int(str(self.settings_max_backups.get()).strip() or "10")
+        except ValueError:
+            max_b = 10
+        try:
+            mcl = int(str(self.settings_min_combined.get()).strip() or "3")
+        except ValueError:
+            mcl = 3
+        return {
+            "db_path": (self.settings_db_path.get() or "data/offenders.db").strip(),
+            "backup_on_close": bool(self.settings_backup_on_close.get()),
+            "backup_dir": (self.settings_backup_dir.get() or "data/backups").strip(),
+            "max_backups": max_b,
+            "nsopw_compact_prefixes": bool(self.settings_compact_prefixes.get()),
+            "nsopw_min_combined_len": mcl,
+        }
+
+    def _settings_apply_to_app(self, settings: Dict[str, Any]) -> None:
+        from scraper.app_settings import normalize_settings
+
+        self.app_settings = normalize_settings(settings)
+        self.db_path = str(self.app_settings["db_path"])
+        self.nsopw_db_path = self.db_path
+        self._refresh_header_db_path()
+        # Refresh NSOPW estimate if built
+        if hasattr(self, "_nsopw_update_surname_count"):
+            try:
+                self._nsopw_update_surname_count()
+            except Exception:
+                pass
+
+    def _settings_save(self) -> None:
+        from scraper.app_settings import save_settings
+
+        raw = self._settings_collect()
+        path = save_settings(raw)
+        self._settings_apply_to_app(raw)
+        # Reflect normalized values back into widgets
+        s = self.app_settings
+        self.settings_db_path.set(str(s["db_path"]))
+        self.settings_backup_dir.set(str(s["backup_dir"]))
+        self.settings_max_backups.set(str(s["max_backups"]))
+        self.settings_min_combined.set(str(s["nsopw_min_combined_len"]))
+        self.settings_backup_on_close.set(bool(s["backup_on_close"]))
+        self.settings_compact_prefixes.set(bool(s["nsopw_compact_prefixes"]))
+        self.settings_status.configure(text=f"Saved → {path}")
+        self._settings_refresh_status()
+
+    def _settings_reset_defaults(self) -> None:
+        from scraper.app_settings import DEFAULTS
+
+        self.settings_db_path.set(str(DEFAULTS["db_path"]))
+        self.settings_backup_on_close.set(bool(DEFAULTS["backup_on_close"]))
+        self.settings_backup_dir.set(str(DEFAULTS["backup_dir"]))
+        self.settings_max_backups.set(str(DEFAULTS["max_backups"]))
+        self.settings_compact_prefixes.set(bool(DEFAULTS["nsopw_compact_prefixes"]))
+        self.settings_min_combined.set(str(DEFAULTS["nsopw_min_combined_len"]))
+        self.settings_status.configure(text="Defaults loaded — click Save settings to keep.")
+
+    def _settings_browse_db(self) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.asksaveasfilename(
+            title="Database file",
+            defaultextension=".db",
+            filetypes=[("SQLite database", "*.db"), ("All files", "*.*")],
+            initialfile=Path(self.settings_db_path.get() or "offenders.db").name,
+        )
+        if path:
+            self.settings_db_path.set(path)
+
+    def _settings_browse_backup_dir(self) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.askdirectory(
+            title="Backup folder",
+            initialdir=self.settings_backup_dir.get() or "data",
+        )
+        if path:
+            self.settings_backup_dir.set(path)
+
+    def _settings_open_backup_dir(self) -> None:
+        path = Path(self.settings_backup_dir.get() or "data/backups")
+        path.mkdir(parents=True, exist_ok=True)
+        self._open_path(path)
+
+    def _settings_on_compact_toggle(self) -> None:
+        if hasattr(self, "_nsopw_update_surname_count"):
+            try:
+                self._nsopw_update_surname_count()
+            except Exception:
+                pass
+
+    def _settings_refresh_status(self) -> None:
+        bdir = Path(self.settings_backup_dir.get() or "data/backups")
+        n = 0
+        latest = "—"
+        if bdir.is_dir():
+            files = sorted(bdir.glob("offenders_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+            n = len(files)
+            if files:
+                latest = files[0].name
+        dbp = Path(self.settings_db_path.get() or self.db_path)
+        db_info = f"{dbp} ({dbp.stat().st_size // 1024} KB)" if dbp.is_file() else f"{dbp} (not created yet)"
+        if hasattr(self, "settings_backup_status"):
+            self.settings_backup_status.configure(
+                text=f"DB: {db_info}  ·  {n} backup(s)  ·  latest: {latest}"
+            )
+
+    def _settings_backup_now(self) -> None:
+        """Manual backup using current Settings fields (does not require Save first)."""
+        try:
+            dest, note = self._run_db_backup(
+                db_path=self.settings_db_path.get() or self.db_path,
+                backup_dir=self.settings_backup_dir.get() or "data/backups",
+                max_backups=self.settings_max_backups.get(),
+            )
+            msg = f"Backed up → {dest}"
+            if note:
+                msg += f" ({note})"
+            self.settings_backup_status.configure(text=msg)
+            self.settings_status.configure(text=msg)
+            self.log_queue.put(msg)
+        except Exception as e:
+            self.settings_backup_status.configure(text=f"Backup failed: {e}")
+            messagebox.showerror("Backup failed", str(e))
+
+    def _run_db_backup(
+        self,
+        db_path: Optional[str] = None,
+        backup_dir: Optional[str] = None,
+        max_backups: Any = None,
+    ):
+        from scraper.database import backup_database_file
+
+        src = Path(db_path or self.db_path)
+        if not src.exists():
+            raise FileNotFoundError(f"Database not found: {src}")
+        bdir = Path(backup_dir or self.app_settings.get("backup_dir") or "data/backups")
+        try:
+            keep = int(
+                max_backups
+                if max_backups is not None
+                else self.app_settings.get("max_backups", 10)
+            )
+        except (TypeError, ValueError):
+            keep = 10
+
+        # backup_database_file opens its own connection + verifies integrity
+        return backup_database_file(
+            src, bdir, keep=keep, prefix="offenders", verify=True
+        )
+
+    def _on_close(self) -> None:
+        """Window close: optional DB backup, then destroy."""
+        if self._closing:
+            return
+
+        # Don't silently abandon a running scrape/NSOPW/requeue
+        if getattr(self, "is_running", False):
+            try:
+                if not messagebox.askyesno(
+                    "Job still running",
+                    "A scrape or NSOPW job is still running.\n\n"
+                    "Close anyway? In-flight work may be incomplete.\n"
+                    "(Prefer Cancel on the job first.)",
+                ):
+                    return
+            except Exception:
+                pass
+
+        self._closing = True
+
+        # Persist latest Settings UI values if the tab was built
+        if hasattr(self, "settings_backup_on_close"):
+            try:
+                from scraper.app_settings import save_settings, normalize_settings
+
+                raw = self._settings_collect()
+                save_settings(raw)
+                self.app_settings = normalize_settings(raw)
+                self.db_path = str(self.app_settings.get("db_path") or self.db_path)
+            except Exception:
+                pass
+
+        do_backup = bool(self.app_settings.get("backup_on_close", True))
+        if do_backup:
+            try:
+                dest, note = self._run_db_backup()
+                try:
+                    extra = f" ({note})" if note else ""
+                    self.stats_label.configure(
+                        text=f"Backed up → {Path(dest).name}{extra}"
+                    )
+                    self.update_idletasks()
+                except Exception:
+                    pass
+            except FileNotFoundError:
+                # No DB yet — fine
+                pass
+            except Exception as e:
+                try:
+                    if not messagebox.askokcancel(
+                        "Backup failed",
+                        f"Could not backup database:\n{e}\n\nClose anyway?",
+                    ):
+                        self._closing = False
+                        return
+                except Exception:
+                    pass
+
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
 
 def main():

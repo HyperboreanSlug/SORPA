@@ -29,18 +29,19 @@ class Misclassification:
 
 # Map likely-ethnicity labels to race strings that are considered a match
 # (i.e. not a misclassification when the recorded race is one of these).
+# Keys are *canonical* race codes from _canonical_race_key().
 _ETHNICITY_COMPATIBLE_RACES = {
     "hispanic": {"HISPANIC", "LATINO", "LATINA", "LATINX", "H", "WHITE HISPANIC"},
     "asian": {
         "ASIAN", "ASIAN / PACIFIC ISLANDER", "ASIAN/PACIFIC ISLANDER",
         "PACIFIC ISLANDER", "A", "API", "CHINESE", "KOREAN", "JAPANESE",
-        "VIETNAMESE", "FILIPINO",
+        "VIETNAMESE", "FILIPINO", "OTHER ASIAN",
     },
-    # South Asian / Indian subcontinent — often coded Asian or Other on registries
+    # South Asian / Indian — registries often use Asian, Other, or Other Asian
     "indian": {
         "ASIAN", "ASIAN / PACIFIC ISLANDER", "ASIAN/PACIFIC ISLANDER",
         "ASIAN INDIAN", "EAST INDIAN", "INDIAN", "SOUTH ASIAN",
-        "A", "API", "OTHER", "UNKNOWN",
+        "A", "API", "OTHER", "OTHER ASIAN", "UNKNOWN", "U",
     },
     "african_american": {
         "BLACK", "AFRICAN AMERICAN", "AFRICAN-AMERICAN", "B", "BLACK OR AFRICAN AMERICAN",
@@ -57,6 +58,90 @@ _ETHNICITY_COMPATIBLE_RACES = {
         "BLACK", "AFRICAN AMERICAN", "AFRICAN-AMERICAN", "B", "BLACK OR AFRICAN AMERICAN",
     },
 }
+
+# Collapse case/spelling variants so stats and comparisons share one bucket.
+_RACE_ALIASES = {
+    "W": "WHITE",
+    "CAUCASIAN": "WHITE",
+    "CAUCASION": "WHITE",  # common misspelling
+    "WHITE": "WHITE",
+    "B": "BLACK",
+    "BLACK": "BLACK",
+    "AFRICAN AMERICAN": "BLACK",
+    "AFRICAN-AMERICAN": "BLACK",
+    "BLACK OR AFRICAN AMERICAN": "BLACK",
+    "H": "HISPANIC",
+    "LATINO": "HISPANIC",
+    "LATINA": "HISPANIC",
+    "LATINX": "HISPANIC",
+    "HISPANIC": "HISPANIC",
+    "A": "ASIAN",
+    "API": "ASIAN",
+    "ASIAN": "ASIAN",
+    "U": "UNKNOWN",
+    "UNK": "UNKNOWN",
+    "UNKNOWN": "UNKNOWN",
+    "N/A": "UNKNOWN",
+    "NA": "UNKNOWN",
+    "NONE": "UNKNOWN",
+    "NULL": "UNKNOWN",
+    "": "UNKNOWN",
+}
+
+
+def _canonical_race_key(recorded_race: str) -> str:
+    """
+    Normalize recorded race for comparison and grouping.
+
+    Merges case variants (White / WHITE → WHITE) and common aliases.
+    """
+    raw = (recorded_race or "").strip()
+    if not raw or raw.upper() in ("N/A", "NA"):
+        return "UNKNOWN"
+    # collapse whitespace and punctuation noise for matching
+    r = " ".join(raw.upper().replace("_", " ").replace("-", " ").split())
+    r = r.replace(" / ", "/").replace("/ ", "/").replace(" /", "/")
+    # "OTHER-ASIAN", "OTHER / ASIAN" → form used below
+    r_spaced = r.replace("/", " ")
+    r_spaced = " ".join(r_spaced.split())
+
+    if r_spaced in _RACE_ALIASES:
+        return _RACE_ALIASES[r_spaced]
+
+    # Other Asian variants (Indian-friendly bucket)
+    if r_spaced in ("OTHER ASIAN", "ASIAN OTHER", "OTHER ASIAN PACIFIC ISLANDER"):
+        return "OTHER ASIAN"
+    if "OTHER" in r_spaced and "ASIAN" in r_spaced:
+        return "OTHER ASIAN"
+
+    # White Hispanic kept distinct from White
+    if "HISPANIC" in r_spaced and "WHITE" in r_spaced:
+        return "WHITE HISPANIC"
+    if r_spaced.startswith("WHITE") or r_spaced.endswith(" WHITE"):
+        return "WHITE"
+
+    if r_spaced in ("OTHER", "OTHER RACE", "OTHER RACES", "OT"):
+        return "OTHER"
+
+    # Asian Pacific Islander phrasing
+    if "ASIAN" in r_spaced and "PACIFIC" in r_spaced:
+        return "ASIAN / PACIFIC ISLANDER"
+    if r_spaced in ("PACIFIC ISLANDER", "NATIVE HAWAIIAN", "NATIVE HAWAIIAN OR OTHER PACIFIC ISLANDER"):
+        return "PACIFIC ISLANDER"
+
+    return r_spaced
+
+
+def format_race_label(recorded_race: str) -> str:
+    """Human-readable race label (White not WHITE; Other Asian not OTHER ASIAN)."""
+    key = _canonical_race_key(recorded_race)
+    if key == "UNKNOWN":
+        raw = (recorded_race or "").strip()
+        return raw if raw else "—"
+    # Title-case words; keep short codes upper
+    if len(key) <= 2:
+        return key
+    return key.title().replace("Or", "or").replace("/ ", "/")
 
 
 def _ethnicity_family(likely_ethnicity: str) -> str:
@@ -85,17 +170,36 @@ def _ethnicity_family(likely_ethnicity: str) -> str:
     return eth.replace(" ", "_")
 
 
+def _is_other_or_other_asian(race_key: str) -> bool:
+    """True for generic Other / Other Asian codes (not mismatches for Indian names)."""
+    r = (race_key or "").strip().upper()
+    if r in ("OTHER", "OTHER ASIAN", "UNKNOWN"):
+        return True
+    if "OTHER" in r and "ASIAN" in r:
+        return True
+    return False
+
+
 def _is_compatible(likely_ethnicity: str, recorded_race: str) -> bool:
     """Return True if recorded race is consistent with the name-based ethnicity."""
     if not recorded_race or not likely_ethnicity or likely_ethnicity == "Unknown":
         return True
     family = _ethnicity_family(likely_ethnicity)
-    race = recorded_race.strip().upper()
+    race = _canonical_race_key(recorded_race)
+
+    # Indian surnames: Other / Other Asian are common registry codes — not mismatches
+    if family == "indian" and _is_other_or_other_asian(race):
+        return True
+
     compatible = _ETHNICITY_COMPATIBLE_RACES.get(family)
     if not compatible:
         # Unknown family: treat exact string equality (case-insensitive) as match
         return race == likely_ethnicity.strip().upper()
-    return race in compatible
+    if race in compatible:
+        return True
+    # Also accept un-canonicalized membership for odd registry strings already uppercased
+    raw_u = " ".join((recorded_race or "").strip().upper().split())
+    return raw_u in compatible
 
 
 def _last_name_from_record(record: Dict[str, Any]) -> str:
@@ -196,11 +300,13 @@ class SexOffenderSearcher:
         ethnicity_filter: optional family key such as 'hispanic', 'asian',
         'african_american'. When set, only that family is considered.
         """
-        records = self.search_all(limit=limit)
+        # Stream rows instead of materializing the whole table as a list first
+        # (faster, lower memory; same misclassification rules).
         misclassifications: List[Misclassification] = []
         filter_key = (ethnicity_filter or "").strip().lower() or None
+        scan_limit = None if limit is None or int(limit) <= 0 else int(limit)
 
-        for record in records:
+        for record in self.db.iter_offenders(limit=scan_limit):
             last_name = _last_name_from_record(record)
             recorded_race = (record.get("race") or "").strip()
 
@@ -221,7 +327,8 @@ class SexOffenderSearcher:
 
             misclassifications.append(Misclassification(
                 record=record,
-                expected_race=recorded_race or "N/A",
+                # Canonical display (White/WHITE → White) for stats + table
+                expected_race=format_race_label(recorded_race) if recorded_race else "—",
                 likely_ethnicity=likely_eth,
                 confidence=confidence,
                 matching_names=matching_names,

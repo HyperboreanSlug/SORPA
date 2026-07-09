@@ -69,6 +69,7 @@ class ReportFetcherTests(unittest.TestCase):
           <tr><th>Race</th><td>White</td></tr>
           <tr><th>Height</th><td>5'10\"</td></tr>
           <tr><th>Hair Color</th><td>Brown</td></tr>
+          <tr><th>Offense</th><td>Sexual Assault of a Child</td></tr>
         </table>
         <p>Ethnicity: Hispanic</p>
         </body></html>
@@ -78,6 +79,27 @@ class ReportFetcherTests(unittest.TestCase):
         self.assertEqual(data.get("race"), "White")
         self.assertEqual(data.get("height"), "5'10\"")
         self.assertIn(data.get("ethnicity"), ("Hispanic", "Hispanic"))
+        self.assertIn("Sexual Assault", data.get("crime") or "")
+        fetcher.close()
+
+    def test_crime_from_offense_table(self):
+        html = """
+        <html><body>
+        <table>
+          <tr><th>Offense</th><th>Statute</th></tr>
+          <tr><td>Lewd Act with Child</td><td>PC 288(a)</td></tr>
+          <tr><td>Failure to Register</td><td>PC 290</td></tr>
+        </table>
+        <table>
+          <tr><th>Race</th><td>White</td></tr>
+        </table>
+        </body></html>
+        """
+        fetcher = ReportFetcher(delay=0)
+        data = fetcher._from_html(html)
+        crime = data.get("crime") or ""
+        self.assertIn("Lewd Act", crime)
+        self.assertIn("288", crime)
         fetcher.close()
 
     def test_fl_border_panel_cells(self):
@@ -342,19 +364,120 @@ class BuilderSurnameTests(unittest.TestCase):
         try:
             cols = {row[1] for row in db._conn.execute("PRAGMA table_info(offenders)")}
             self.assertIn("report_html_path", cols)
+            self.assertIn("photo_path", cols)
+            self.assertIn("photo_url", cols)
+            self.assertIn("crime", cols)
             rid = db.insert_offender({
                 "first_name": "Test",
                 "last_name": "User",
                 "source_url": "https://example.gov/r/1",
                 "report_html_path": "data/report_pages/TX/abc.html",
+                "photo_path": "data/report_pages/TX/photos/x.jpg",
+                "photo_url": "https://example.gov/photo/1",
             })
             self.assertEqual(rid, 1)
             row = db._conn.execute(
-                "SELECT report_html_path FROM offenders WHERE id=1"
+                "SELECT report_html_path, photo_path, photo_url FROM offenders WHERE id=1"
             ).fetchone()
             self.assertEqual(row["report_html_path"], "data/report_pages/TX/abc.html")
+            self.assertEqual(row["photo_path"], "data/report_pages/TX/photos/x.jpg")
+            self.assertEqual(row["photo_url"], "https://example.gov/photo/1")
         finally:
             db.close()
+
+    def test_download_photo_retries_ssl_verify_false(self):
+        """TLS failures must retry with verify=False (TN/VA hosts on Windows)."""
+        from scraper.report_fetcher import ReportFetcher
+        import tempfile
+
+        jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 3000 + b"\xff\xd9"
+
+        class FakeResp:
+            status_code = 200
+            headers = {"Content-Type": "image/jpeg"}
+            content = jpeg
+
+        calls = {"n": 0, "verify": []}
+
+        def fake_get(url, **kwargs):
+            calls["n"] += 1
+            calls["verify"].append(kwargs.get("verify", True))
+            if kwargs.get("verify", True) is True:
+                raise Exception("curl: (60) SSL certificate problem: unable to get local issuer certificate")
+            return FakeResp()
+
+        f = ReportFetcher(delay=0)
+        f.session.get = fake_get  # type: ignore
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                path = f.download_photo(
+                    "https://sor.tbi.tn.gov/api/sorimage/X",
+                    Path(td),
+                    referer="https://www.nsopw.gov/",
+                    stem="ssltest",
+                )
+                self.assertIsNotNone(path)
+                self.assertTrue(Path(path).is_file())
+                self.assertIn(False, calls["verify"])
+        finally:
+            f.close()
+
+    def test_embed_images_rewrites_img_src(self):
+        """Archived HTML should point at local assets when images download."""
+        from scraper.report_fetcher import ReportFetcher
+        import tempfile
+
+        # Tiny valid JPEG (1x1)
+        jpeg = (
+            b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+            b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t"
+            b"\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a"
+            b"\x1f\x1e\x1d\x1a\x1c\x1c $.\' \",#\x1c\x1c(7),01444\x1f\'9=82<.342"
+            b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+            b"\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b"
+            b"\xff\xc4\x00\xb5\x10\x00\x02\x01\x03\x03\x02\x04\x03\x05\x05\x04\x04"
+            b"\x00\x00\x01}\x01\x02\x03\x00\x04\x11\x05\x12!1A\x06\x13Qa\x07\"q"
+            b"\x142\x81\x91\xa1\x08#B\xb1\xc1\x15R\xd1\xf0$3br\x82"
+            b"\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xaa\x00\xff\xd9"
+        )
+        # Pad past MIN_PRIMARY_PHOTO_BYTES so this is treated as a real mugshot
+        jpeg = jpeg + b"\x00" * 2500
+
+        class FakeResp:
+            status_code = 200
+            headers = {"Content-Type": "image/jpeg"}
+            content = jpeg
+
+            def __init__(self, *a, **k):
+                pass
+
+        f = ReportFetcher(delay=0)
+
+        def _fake_get(*a, **k):
+            return FakeResp()
+
+        f.session.get = _fake_get  # type: ignore
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                html = (
+                    '<html><body><img src="https://example.gov/offender/photo.jpg" '
+                    'alt="photo"/><p>Race: White</p></body></html>'
+                )
+                assets = Path(td) / "assets"
+                out, primary = f._embed_images_in_html(
+                    html,
+                    base_url="https://example.gov/report/1",
+                    assets_dir=assets,
+                    assets_rel_name="assets",
+                    referer="https://example.gov/report/1",
+                )
+                self.assertIn('src="assets/', out)
+                self.assertNotIn("https://example.gov/offender/photo.jpg", out)
+                self.assertIsNotNone(primary)
+                self.assertTrue(Path(primary).is_file())
+        finally:
+            f.close()
 
 
 if __name__ == "__main__":

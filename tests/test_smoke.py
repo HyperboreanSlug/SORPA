@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scraper.database import Database
+from scraper.database import Database, backup_database_file
+from scraper.app_settings import load_settings, save_settings, DEFAULTS
 from scraper.searcher import SexOffenderSearcher
 from scraper.ethnic_names import EthnicNameDatabase
 from scraper.scrapers.base import ScraperFactory
@@ -58,6 +59,24 @@ class DatabaseTests(unittest.TestCase):
             count2 = self.db.export_to_csv(str(path), filters={"state": "CA"})
             self.assertEqual(count2, 1)
 
+    def test_file_backup_and_prune(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dbp = Path(tmp) / "offenders.db"
+            bdir = Path(tmp) / "backups"
+            db = Database(str(dbp))
+            db.insert_offender({
+                "first_name": "A", "last_name": "Backup", "race": "WHITE", "state": "TX",
+            })
+            db.close()
+            for _ in range(4):
+                dest, _note = backup_database_file(dbp, bdir, keep=2, prefix="offenders")
+                self.assertTrue(dest.is_file())
+            kept = list(bdir.glob("offenders_*.db"))
+            self.assertEqual(len(kept), 2)
+            restored = Database(str(kept[0]))
+            self.assertEqual(restored.get_total_count(), 1)
+            restored.close()
+
     def test_import_csv_normalizes_and_infers_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ga_offenders.csv"
@@ -66,10 +85,147 @@ class DatabaseTests(unittest.TestCase):
                 w.writeheader()
                 w.writerow({"First Name": "Ana", "Last Name": "Lopez", "Race": "Hispanic"})
             n = self.db.import_csv(str(path))
-            self.assertEqual(n, 1)
+            imported = n["imported"] if isinstance(n, dict) else n
+            self.assertEqual(imported, 1)
             rows = self.db.search_by_name("Lopez")
             self.assertEqual(rows[0]["first_name"], "Ana")
             self.assertEqual(rows[0]["state"], "GA")
+
+    def test_integrity_and_incomplete_and_update(self):
+        self.db.insert_offender({
+            "first_name": "A", "last_name": "One", "state": "FL",
+            "race": "White", "crime": "X", "source_url": "https://ex/1",
+            "report_html_path": "data/x.html", "photo_path": "data/p.jpg",
+        })
+        self.db.insert_offender({
+            "first_name": "B", "last_name": "Two", "state": "FL",
+            "source_url": "https://ex/2",
+        })
+        self.db.insert_offender({
+            "first_name": "C", "last_name": "Three", "state": "GA",
+            "race": "Black",
+        })
+        rep = self.db.get_integrity_report()
+        self.assertEqual(rep["overall"]["total"], 3)
+        self.assertEqual(rep["overall"]["with_race"], 2)
+        self.assertEqual(rep["overall"]["with_crime"], 1)
+        self.assertEqual(rep["overall"]["with_url"], 2)
+        states = {s["state"]: s for s in rep["by_state"]}
+        self.assertIn("FL", states)
+        self.assertEqual(states["FL"]["total"], 2)
+        incomplete = self.db.find_incomplete_reports(
+            need_race=True, need_crime=True, need_photo=True, limit=50
+        )
+        # B Two has URL but missing race/crime/photo
+        urls = {r["source_url"] for r in incomplete}
+        self.assertIn("https://ex/2", urls)
+        self.assertNotIn("https://ex/1", urls)
+        ok = self.db.update_offender(2, {"race": "White", "crime": "Offense Z"})
+        self.assertTrue(ok)
+        row = self.db.get_offender_by_id(2)
+        self.assertEqual(row["race"], "White")
+        self.assertEqual(row["crime"], "Offense Z")
+
+    def test_import_csv_skips_existing_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "az_offenders.csv"
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(
+                    f, fieldnames=["First Name", "Last Name", "Source URL"]
+                )
+                w.writeheader()
+                w.writerow({
+                    "First Name": "X", "Last Name": "Y",
+                    "Source URL": "https://example.gov/r/1",
+                })
+            r1 = self.db.import_csv(str(path), skip_existing_urls=True)
+            self.assertEqual(r1["imported"], 1)
+            r2 = self.db.import_csv(str(path), skip_existing_urls=True)
+            self.assertEqual(r2["imported"], 0)
+            self.assertEqual(r2["skipped"], 1)
+
+
+class AppSettingsTests(unittest.TestCase):
+    def test_load_save_normalize(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app_settings.json"
+            s = load_settings(path)
+            self.assertTrue(s["backup_on_close"])
+            self.assertTrue(s["nsopw_compact_prefixes"])
+            self.assertEqual(s["nsopw_min_combined_len"], 3)
+            s["backup_on_close"] = False
+            s["max_backups"] = 5
+            s["nsopw_min_combined_len"] = 2  # clamp to >= 3
+            save_settings(s, path)
+            s2 = load_settings(path)
+            self.assertFalse(s2["backup_on_close"])
+            self.assertEqual(s2["max_backups"], 5)
+            self.assertEqual(s2["nsopw_min_combined_len"], 3)
+            self.assertIn("db_path", DEFAULTS)
+
+
+class BackupIntegrityTests(unittest.TestCase):
+    def test_backup_verifies_and_is_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dbp = Path(tmp) / "offenders.db"
+            bdir = Path(tmp) / "backups"
+            db = Database(str(dbp))
+            db.insert_offender({
+                "first_name": "Safe",
+                "last_name": "Child",
+                "race": "WHITE",
+                "state": "CA",
+                "source_url": "https://example.gov/r/unique-1",
+            })
+            # literal underscore must not act as LIKE wildcard
+            db.insert_offender({
+                "first_name": "X",
+                "last_name": "A_B",
+                "race": "WHITE",
+                "state": "CA",
+            })
+            db.close()
+
+            dest, note = backup_database_file(dbp, bdir, keep=5, prefix="offenders", verify=True)
+            self.assertTrue(dest.is_file())
+            self.assertGreater(dest.stat().st_size, 0)
+
+            restored = Database(str(dest))
+            self.assertEqual(restored.get_total_count(), 2)
+            # LIKE escape: searching "A_B" should find the literal underscore name
+            rows = restored.search_by_name("A_B")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["last_name"], "A_B")
+            # Searching "A%B" as literal should not expand % as wildcard to match A_B only by chance
+            # (A_B does not contain a percent sign)
+            rows2 = restored.search_by_name("A%B")
+            self.assertEqual(len(rows2), 0)
+            restored.close()
+
+    def test_import_csv_dedupes_batch_and_existing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(str(Path(tmp) / "t.db"))
+            path = Path(tmp) / "in.csv"
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(
+                    f, fieldnames=["First Name", "Last Name", "Source URL"]
+                )
+                w.writeheader()
+                w.writerow({
+                    "First Name": "A", "Last Name": "One",
+                    "Source URL": "https://ex/1",
+                })
+                w.writerow({
+                    "First Name": "B", "Last Name": "Two",
+                    "Source URL": "https://ex/1",  # same URL twice in file
+                })
+            r = db.import_csv(str(path), skip_existing_urls=True)
+            self.assertEqual(r["imported"], 1)
+            self.assertEqual(r["skipped"], 1)
+            r2 = db.import_csv(str(path), skip_existing_urls=True)
+            self.assertEqual(r2["imported"], 0)
+            self.assertEqual(r2["skipped"], 2)
+            db.close()
 
 
 class EthnicAndSearchTests(unittest.TestCase):
@@ -100,6 +256,8 @@ class EthnicAndSearchTests(unittest.TestCase):
             h = s.find_hispanic_misclassifications()
             self.assertEqual(len(h), 1)
             self.assertEqual(h[0].record["last_name"], "Garcia")
+            # White/WHITE collapsed to one display label
+            self.assertEqual(h[0].expected_race, "White")
             a = s.find_asian_misclassifications()
             self.assertEqual(len(a), 1)
             self.assertEqual(a[0].record["last_name"], "Chen")
@@ -110,6 +268,28 @@ class EthnicAndSearchTests(unittest.TestCase):
             self.assertEqual(names, {"Garcia", "Rodriguez"})
         finally:
             s.close()
+
+    def test_indian_other_and_other_asian_not_mismatch(self):
+        from scraper.searcher import (
+            _is_compatible,
+            _canonical_race_key,
+            format_race_label,
+        )
+
+        # Other / Other Asian must not flag Indian surnames
+        self.assertTrue(_is_compatible("Indian", "Other"))
+        self.assertTrue(_is_compatible("Indian", "OTHER"))
+        self.assertTrue(_is_compatible("Indian", "Other Asian"))
+        self.assertTrue(_is_compatible("Indian (india)", "OTHER ASIAN"))
+        self.assertTrue(_is_compatible("Indian", "Asian"))
+        # Still a mismatch when coded White
+        self.assertFalse(_is_compatible("Indian", "White"))
+        self.assertFalse(_is_compatible("Indian", "WHITE"))
+        # White case merge
+        self.assertEqual(_canonical_race_key("White"), "WHITE")
+        self.assertEqual(_canonical_race_key("WHITE"), "WHITE")
+        self.assertEqual(format_race_label("White"), "White")
+        self.assertEqual(format_race_label("WHITE"), "White")
 
 
 class ScraperFactoryTests(unittest.TestCase):

@@ -96,6 +96,7 @@ class NSOPWOffender:
             "source_state": self.jurisdiction_id or "US",
             "source_url": self.offender_uri or None,
             "external_id": self.offender_uri or None,
+            "photo_url": self.image_uri or None,
             "raw_data_json": json.dumps(self.raw, ensure_ascii=False)[:50000],
             "flags": "nsopw",
         }

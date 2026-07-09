@@ -436,16 +436,29 @@ def cmd_import(args: argparse.Namespace) -> None:
         return
 
     total_imported = 0
+    total_skipped = 0
     try:
         for csv_file in csv_files:
             print(f"\nImporting {csv_file.name}...")
-            count = db.import_csv(str(csv_file), state=args.state)
-            print(f"  Imported {count} records.")
-            total_imported += count
+            result = db.import_csv(str(csv_file), state=args.state)
+            if isinstance(result, dict):
+                print(
+                    f"  Imported {result.get('imported', 0)} "
+                    f"(skipped {result.get('skipped', 0)} existing URLs, "
+                    f"{result.get('total_rows', 0)} rows)."
+                )
+                total_imported += int(result.get("imported") or 0)
+                total_skipped += int(result.get("skipped") or 0)
+            else:
+                print(f"  Imported {result} records.")
+                total_imported += int(result or 0)
     finally:
         db.close()
 
-    print(f"\nTotal imported: {total_imported} records to {db_path}")
+    print(
+        f"\nTotal imported: {total_imported} records to {db_path}"
+        + (f" ({total_skipped} skipped)" if total_skipped else "")
+    )
 
 
 def _add_database_arg(parser: argparse.ArgumentParser) -> None:

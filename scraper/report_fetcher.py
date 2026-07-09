@@ -1,17 +1,21 @@
 """
 Fetch jurisdiction offender report pages linked from NSOPW, extract demographics,
 and optionally archive the raw HTML next to the database for offline validation.
+
+When archiving HTML, remote <img> assets are downloaded beside the page and src
+attributes rewritten so the offline HTML still shows offender photos.
 """
 
 from __future__ import annotations
 
 import base64
 import html as html_lib
+import mimetypes
 import re
 import time
 from hashlib import sha1
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
@@ -50,10 +54,40 @@ _LABEL_MAP = {
     "city": "city",
     "address": "address",
     "risk level": "risk_level",
-    "offense": "offense_type",
-    "offense description": "offense_description",
+    # Crime / offense (primary display field is "crime")
+    "crime": "crime",
+    "crimes": "crime",
+    "offense": "crime",
+    "offenses": "crime",
+    "offense type": "offense_type",
+    "offense description": "crime",
+    "offense details": "crime",
+    "offense title": "crime",
+    "charge": "crime",
+    "charges": "crime",
+    "conviction offense": "crime",
+    "convicting offense": "crime",
+    "qualifying offense": "crime",
+    "registerable offense": "crime",
+    "registrable offense": "crime",
+    "registration offense": "crime",
+    "sex offense": "crime",
+    "sexual offense": "crime",
+    "primary offense": "crime",
+    "statute": "crime",
+    "statute description": "crime",
+    "violation": "crime",
+    "violations": "crime",
+    "crime description": "crime",
+    "description of offense": "crime",
+    "description of crime": "crime",
     "conviction": "conviction_date",
+    "conviction date": "conviction_date",
 }
+
+# Labels that may have long multi-line values (allow longer text)
+_LONG_VALUE_KEYS = frozenset({"crime", "offense_type", "offense_description", "address"})
+_MAX_CRIME_LEN = 800
 
 _CAPTCHA_MARKERS = (
     "recaptcha",
@@ -177,12 +211,19 @@ class ReportFetcher:
                 if save_html and html_dir is not None:
                     try:
                         resp = self._get(report_url)
-                        path = self._save_html(
-                            resp.content, report_url, html_dir, jurisdiction, resp.url
+                        path, photo_path = self._save_html(
+                            resp.content,
+                            report_url,
+                            html_dir,
+                            jurisdiction,
+                            resp.url,
+                            download_images=True,
                         )
                         if path:
                             result["report_html_path"] = path
                             result["report_final_url"] = resp.url
+                        if photo_path:
+                            result["photo_path"] = photo_path
                     except Exception:
                         pass
                 result.update(tx_json)
@@ -229,15 +270,18 @@ class ReportFetcher:
             raw_bytes = resp.content
 
             if save_html and html_dir is not None:
-                path = self._save_html(
+                path, photo_path = self._save_html(
                     raw_bytes,
                     report_url,
                     html_dir,
                     jurisdiction,
                     result["report_final_url"],
+                    download_images=True,
                 )
                 if path:
                     result["report_html_path"] = path
+                if photo_path:
+                    result["photo_path"] = photo_path
 
             if "json" in content_type:
                 try:
@@ -663,6 +707,142 @@ class ReportFetcher:
             if "cap_office_disclaimer" in low:
                 return "disclaimer_gate"
         return None
+    # Bytes: reject clear stubs; mugshot selection uses a higher bar separately.
+    MIN_PHOTO_BYTES = 80
+    MIN_PRIMARY_PHOTO_BYTES = 2000
+
+    def download_photo(
+        self,
+        photo_url: str,
+        photo_dir: Path,
+        *,
+        referer: str = "",
+        stem: str = "",
+        min_bytes: Optional[int] = None,
+    ) -> Optional[str]:
+        """
+        Download a single photo URL into photo_dir.
+        Returns path relative to cwd when possible.
+
+        Retries with verify=False on TLS/certificate failures (common on some
+        state SOR hosts with curl_cffi / incomplete CA stores on Windows).
+        """
+        url = _normalize_url((photo_url or "").strip())
+        if not url.lower().startswith(("http://", "https://")):
+            return None
+        min_sz = self.MIN_PHOTO_BYTES if min_bytes is None else int(min_bytes)
+        try:
+            photo_dir = Path(photo_dir)
+            photo_dir.mkdir(parents=True, exist_ok=True)
+            key = stem or sha1(url.encode("utf-8", errors="replace")).hexdigest()[:16]
+            # Extension from URL path or Content-Type later
+            ext = Path(urlparse(url).path).suffix.lower()
+            if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                ext = ""
+            # Skip if already have any matching stem
+            for existing in photo_dir.glob(f"{key}.*"):
+                if existing.is_file() and existing.stat().st_size >= min_sz:
+                    try:
+                        return str(existing.relative_to(Path.cwd()))
+                    except ValueError:
+                        return str(existing)
+
+            headers: Dict[str, str] = {
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            }
+            if referer:
+                headers["Referer"] = referer
+                parsed = urlparse(referer)
+                if parsed.scheme and parsed.netloc:
+                    headers.setdefault("Origin", f"{parsed.scheme}://{parsed.netloc}")
+
+            resp = self._get_photo_response(url, headers=headers)
+            if resp is None:
+                return None
+            if getattr(resp, "status_code", 0) >= 400:
+                return None
+            body = resp.content or b""
+            if len(body) < min_sz:
+                return None
+            # Reject HTML error pages saved as images
+            head = body[:200].lstrip().lower()
+            if head.startswith(b"<!doctype") or head.startswith(b"<html") or head.startswith(b"<?xml"):
+                return None
+            # Reject obvious non-image content types
+            ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ct and not (
+                ct.startswith("image/")
+                or ct in ("application/octet-stream", "binary/octet-stream", "")
+            ):
+                # Some SORs return image/* without a proper type; allow empty/octet-stream
+                if "json" in ct or "text/" in ct or "html" in ct:
+                    return None
+            if not ext:
+                guess = mimetypes.guess_extension(ct) or ""
+                if guess == ".jpe":
+                    guess = ".jpg"
+                ext = guess if guess in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp") else ".jpg"
+            # Sniff magic if still ambiguous
+            if body[:3] == b"\xff\xd8\xff":
+                ext = ".jpg"
+            elif body[:8] == b"\x89PNG\r\n\x1a\n":
+                ext = ".png"
+            elif body[:6] in (b"GIF87a", b"GIF89a"):
+                ext = ".gif"
+            elif body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+                ext = ".webp"
+            dest = photo_dir / f"{key}{ext}"
+            dest.write_bytes(body)
+            try:
+                return str(dest.relative_to(Path.cwd()))
+            except ValueError:
+                return str(dest)
+        except Exception:
+            return None
+
+    def _get_photo_response(self, url: str, *, headers: Dict[str, str]) -> Any:
+        """GET image bytes; fall back to verify=False on TLS failures."""
+        last_err: Optional[Exception] = None
+        for verify in (True, False):
+            try:
+                return self.session.get(
+                    url,
+                    timeout=self.timeout,
+                    headers=headers or None,
+                    allow_redirects=True,
+                    verify=verify,
+                )
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                # Only retry without verify on SSL/cert problems
+                if verify and (
+                    "ssl" in msg
+                    or "certificate" in msg
+                    or "cert" in msg
+                    or "curl: (60)" in msg
+                    or "certificate_verify" in msg
+                ):
+                    continue
+                if verify:
+                    # Other errors: still try once without verify (some stacks
+                    # wrap TLS failures poorly).
+                    continue
+                break
+        # Last-ditch: stock requests (different CA store than curl_cffi)
+        try:
+            return requests.get(
+                url,
+                timeout=self.timeout,
+                headers={**dict(getattr(self.session, "headers", {}) or {}), **headers},
+                allow_redirects=True,
+                verify=False,
+            )
+        except Exception:
+            if last_err:
+                raise last_err
+            return None
+
     def _save_html(
         self,
         content: bytes,
@@ -670,30 +850,185 @@ class ReportFetcher:
         html_dir: Path,
         jurisdiction: str,
         final_url: str = "",
-    ) -> Optional[str]:
-        """Write report HTML to disk; return path relative to cwd if possible."""
+        download_images: bool = True,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Write report HTML to disk; rewrite <img> src to local copies when possible.
+
+        Returns (html_path, primary_photo_path) — either may be None.
+        """
         try:
             jur = re.sub(r"[^A-Za-z0-9_-]", "", (jurisdiction or "UNK").upper())[:12] or "UNK"
             digest = sha1((final_url or report_url).encode("utf-8", errors="replace")).hexdigest()[:16]
             folder = Path(html_dir) / jur
             folder.mkdir(parents=True, exist_ok=True)
             dest = folder / f"{digest}.html"
+            assets = folder / f"{digest}_assets"
+            base = final_url or report_url
 
             header = (
                 f"<!-- archived_from: {html_lib.escape(final_url or report_url)} -->\n"
                 f"<!-- archived_at_utc: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} -->\n"
+                f"<!-- photos_embedded: {str(bool(download_images)).lower()} -->\n"
             ).encode("utf-8")
-            if dest.exists() and dest.stat().st_size > 100:
-                pass
-            else:
-                dest.write_bytes(header + content)
+
+            text = content.decode("utf-8", errors="replace")
+            primary_photo: Optional[str] = None
+
+            if download_images:
+                text, primary_photo = self._embed_images_in_html(
+                    text,
+                    base_url=base,
+                    assets_dir=assets,
+                    assets_rel_name=f"{digest}_assets",
+                    referer=base,
+                )
+
+            body_bytes = text.encode("utf-8", errors="replace")
+            if not (dest.exists() and dest.stat().st_size > 100):
+                dest.write_bytes(header + body_bytes)
+            elif download_images:
+                # Refresh archive so images are embedded even if HTML existed without them
+                dest.write_bytes(header + body_bytes)
 
             try:
-                return str(dest.relative_to(Path.cwd()))
+                html_path = str(dest.relative_to(Path.cwd()))
             except ValueError:
-                return str(dest)
+                html_path = str(dest)
+
+            # Prefer photo already under assets next to HTML
+            if not primary_photo and assets.is_dir():
+                for p in sorted(assets.iterdir()):
+                    if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                        if p.stat().st_size > 80:
+                            try:
+                                primary_photo = str(p.relative_to(Path.cwd()))
+                            except ValueError:
+                                primary_photo = str(p)
+                            break
+
+            return html_path, primary_photo
         except OSError:
-            return None
+            return None, None
+
+    def _embed_images_in_html(
+        self,
+        html: str,
+        *,
+        base_url: str,
+        assets_dir: Path,
+        assets_rel_name: str,
+        referer: str = "",
+    ) -> Tuple[str, Optional[str]]:
+        """
+        Download remote images referenced by the report and rewrite HTML to local paths.
+        Returns (modified_html, best_photo_path).
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+        except Exception:
+            return html, None
+
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        url_to_local: Dict[str, str] = {}
+        primary: Optional[str] = None
+        candidates: List[Tuple[int, str, str]] = []  # score, abs_url, local_path
+
+        def _abs(src: str) -> str:
+            s = (src or "").strip()
+            if not s or s.startswith("data:") or s.startswith("javascript:"):
+                return ""
+            return urljoin(base_url, s)
+
+        def _score_url(u: str, el_tag: str = "img") -> int:
+            low = u.lower()
+            score = 10
+            for bad in ("logo", "icon", "sprite", "pixel", "tracking", "1x1", "spacer", "banner", "button"):
+                if bad in low:
+                    score -= 8
+            for good in ("photo", "offender", "mug", "portrait", "image", "pic", "face", "sor", "reg"):
+                if good in low:
+                    score += 6
+            if el_tag == "img":
+                score += 2
+            if any(low.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                score += 3
+            return score
+
+        # Collect img src (+ srcset first url) and meta og:image
+        img_srcs: List[Tuple[Any, str]] = []
+        for img in soup.find_all("img"):
+            src = img.get("src") or img.get("data-src") or img.get("data-original") or ""
+            if not src and img.get("srcset"):
+                src = (img.get("srcset") or "").split(",")[0].strip().split(" ")[0]
+            if src:
+                img_srcs.append((img, src))
+
+        for meta in soup.find_all("meta"):
+            prop = (meta.get("property") or meta.get("name") or "").lower()
+            if prop in ("og:image", "twitter:image", "twitter:image:src"):
+                content = meta.get("content") or ""
+                if content:
+                    img_srcs.append((meta, content))
+
+        for el, src in img_srcs:
+            abs_u = _abs(src)
+            if not abs_u:
+                continue
+            if abs_u in url_to_local:
+                local = url_to_local[abs_u]
+            else:
+                stem = sha1(abs_u.encode("utf-8", errors="replace")).hexdigest()[:14]
+                local = self.download_photo(
+                    abs_u, assets_dir, referer=referer or base_url, stem=stem
+                )
+                if not local:
+                    continue
+                url_to_local[abs_u] = local
+                score = _score_url(abs_u, getattr(el, "name", "img") or "img")
+                try:
+                    fsz = Path(local).stat().st_size
+                except OSError:
+                    fsz = 0
+                # Size boost: real mugshots are usually multi-KB; shared site
+                # chrome (icons/badges) is often 1–2KB and repeats across records.
+                if fsz >= self.MIN_PRIMARY_PHOTO_BYTES:
+                    score += 12
+                elif fsz >= 800:
+                    score += 3
+                else:
+                    score -= 10
+                score += min(fsz // 5000, 8)  # mild preference for larger files
+                candidates.append((score, fsz, abs_u, local))
+
+            # Rewrite to relative path next to the HTML file
+            local_name = Path(local).name
+            rel = f"{assets_rel_name}/{local_name}"
+            if getattr(el, "name", "") == "img":
+                el["src"] = rel
+                if el.get("data-src"):
+                    el["data-src"] = rel
+                if el.get("srcset"):
+                    el["srcset"] = rel
+            elif getattr(el, "name", "") == "meta":
+                el["content"] = rel
+
+        if candidates:
+            # Prefer high score, then larger file
+            candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            best = candidates[0]
+            # Only treat as primary mugshot if large enough; otherwise leave
+            # photo_path for _ensure_photo to fill from NSOPW imageUri.
+            if best[1] >= self.MIN_PRIMARY_PHOTO_BYTES or best[0] >= 20:
+                primary = best[3]
+            elif best[1] >= 500:
+                primary = best[3]
+
+        try:
+            out = str(soup)
+        except Exception:
+            out = html
+        return out, primary
 
     def _from_html(self, html: str, base_url: str = "") -> Dict[str, Any]:
         soup = BeautifulSoup(html, "html.parser")
@@ -723,11 +1058,23 @@ class ReportFetcher:
                 if not tds:
                     continue
                 values = [_clean_value(td.get_text(" ", strip=True)) for td in tds]
+                crime_parts = []
                 for h, v in zip(headers, values):
                     key = _LABEL_MAP.get(h)
-                    if key and v and _normalize_label(v) not in _LABEL_MAP:
+                    if not key or not v or _normalize_label(v) in _LABEL_MAP:
+                        continue
+                    if key == "crime":
+                        crime_parts.append(v)
+                    else:
                         found.setdefault(key, v)
-                if any(k in found for k in ("race", "gender", "height")):
+                if crime_parts:
+                    joined = " — ".join(crime_parts)[:_MAX_CRIME_LEN]
+                    prev = found.get("crime") or ""
+                    if not prev:
+                        found["crime"] = joined
+                    elif joined not in prev:
+                        found["crime"] = f"{prev}; {joined}"[:_MAX_CRIME_LEN]
+                if any(k in found for k in ("race", "gender", "height", "crime")):
                     break
 
         # PrimeFaces / FL style: alternating label/value cells
@@ -801,11 +1148,29 @@ class ReportFetcher:
             while i < len(cells) - 1:
                 label = _normalize_label(cells[i].get_text(" ", strip=True))
                 value = _clean_value(cells[i + 1].get_text(" ", strip=True))
-                if label in _LABEL_MAP and value and _normalize_label(value) not in _LABEL_MAP:
-                    found.setdefault(_LABEL_MAP[label], value)
+                key = _LABEL_MAP.get(label)
+                max_len = _MAX_CRIME_LEN if key in _LONG_VALUE_KEYS else 200
+                if (
+                    key
+                    and value
+                    and len(value) <= max_len
+                    and _normalize_label(value) not in _LABEL_MAP
+                ):
+                    found.setdefault(key, value[:max_len])
                     i += 2
                 else:
                     i += 1
+
+        # Offense / crime tables (column headers like Offense, Charge, Statute)
+        crime_bits = self._extract_crime_from_tables(soup)
+        if crime_bits:
+            prev = (found.get("crime") or "").strip()
+            if not prev:
+                found["crime"] = crime_bits
+            elif len(crime_bits) > len(prev):
+                found["crime"] = crime_bits
+            elif crime_bits not in prev:
+                found["crime"] = f"{prev}; {crime_bits}"[:_MAX_CRIME_LEN]
 
         # Label-only node → next sibling element holds value (common grid layouts)
         for lab_el in soup.find_all(["span", "div", "label", "strong", "b", "th", "td", "p"]):
@@ -873,21 +1238,29 @@ class ReportFetcher:
         body_text = soup.get_text("\n", strip=True)
         for line in body_text.splitlines():
             m = re.match(
-                r"^(Race|Ethnicity|Sex|Gender|Height|Weight|Eye Color|Hair Color|Age|Date of Birth|DOB)\s*[:\-]\s*(.+)$",
+                r"^(Race|Ethnicity|Sex|Gender|Height|Weight|Eye Color|Hair Color|Age|"
+                r"Date of Birth|DOB|Offense|Offense Description|Charge|Charges|Crime|"
+                r"Qualifying Offense|Registerable Offense|Statute)\s*[:\-]\s*(.+)$",
                 line.strip(),
                 flags=re.I,
             )
             if m:
-                key = _LABEL_MAP.get(m.group(1).lower())
+                key = _LABEL_MAP.get(_normalize_label(m.group(1)))
                 if key:
-                    found.setdefault(key, m.group(2).strip()[:120])
+                    lim = _MAX_CRIME_LEN if key in _LONG_VALUE_KEYS else 120
+                    found.setdefault(key, m.group(2).strip()[:lim])
 
         # Re-parse scripts from original HTML for embedded JSON
         for script in BeautifulSoup(html, "html.parser").find_all("script"):
             content = script.string or ""
-            if "race" in content.lower() and len(content) < 500_000:
+            if len(content) >= 500_000:
+                continue
+            low = content.lower()
+            if "race" in low or "offense" in low or "charge" in low:
                 for m in re.finditer(
-                    r'"(race|ethnicity|gender|sex|height|weight|eyeColor|hairColor)"\s*:\s*"([^"]{1,80})"',
+                    r'"(race|ethnicity|gender|sex|height|weight|eyeColor|hairColor|'
+                    r'offense|offenseDescription|offenseType|charge|charges|crime|'
+                    r'statute|qualifyingOffense)"\s*:\s*"([^"]{1,400})"',
                     content,
                     flags=re.I,
                 ):
@@ -901,9 +1274,17 @@ class ReportFetcher:
                         "weight": "weight",
                         "eyecolor": "eye_color",
                         "haircolor": "hair_color",
+                        "offense": "crime",
+                        "offensedescription": "crime",
+                        "offensetype": "offense_type",
+                        "charge": "crime",
+                        "charges": "crime",
+                        "crime": "crime",
+                        "statute": "crime",
+                        "qualifyingoffense": "crime",
                     }.get(raw_key)
                     if key:
-                        found.setdefault(key, m.group(2))
+                        found.setdefault(key, m.group(2)[:_MAX_CRIME_LEN])
 
         if "age" in found:
             try:
@@ -927,9 +1308,86 @@ class ReportFetcher:
             if eth and eth.lower() not in ("unknown", "undetermined", "n/a", "none"):
                 found["race"] = eth
 
+        # Synthesize primary crime field from any offense pieces
+        self._finalize_crime_fields(found)
+
         if base_url:
             found["report_final_url"] = base_url
         return found
+
+    @staticmethod
+    def _extract_crime_from_tables(soup: BeautifulSoup) -> str:
+        """Pull offense/charge text from multi-row offense tables."""
+        crime_header_keys = {
+            "offense", "offenses", "offense description", "offense type",
+            "charge", "charges", "crime", "crimes", "statute",
+            "qualifying offense", "registerable offense", "registrable offense",
+            "description", "violation",
+        }
+        collected: List[str] = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+            headers = [
+                _normalize_label(c.get_text(" ", strip=True))
+                for c in rows[0].find_all(["th", "td"])
+            ]
+            # Find offense-like columns
+            idxs = [i for i, h in enumerate(headers) if h in crime_header_keys]
+            if not idxs:
+                # Header might be a caption / first cell "Offense Information"
+                head_blob = " ".join(headers).lower()
+                if not any(k in head_blob for k in ("offense", "charge", "crime", "statute")):
+                    continue
+                # Use all non-empty data cells as crime text
+                for data_row in rows[1:]:
+                    tds = data_row.find_all("td")
+                    for td in tds:
+                        t = _clean_value(td.get_text(" ", strip=True))
+                        if t and len(t) > 3 and _normalize_label(t) not in _LABEL_MAP:
+                            collected.append(t)
+                continue
+            for data_row in rows[1:]:
+                tds = data_row.find_all(["td", "th"])
+                parts = []
+                for i in idxs:
+                    if i < len(tds):
+                        t = _clean_value(tds[i].get_text(" ", strip=True))
+                        if t and _normalize_label(t) not in crime_header_keys:
+                            parts.append(t)
+                if parts:
+                    collected.append(" — ".join(parts))
+        # Deduplicate preserving order
+        seen = set()
+        uniq: List[str] = []
+        for c in collected:
+            key = c.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(c)
+            if len(uniq) >= 8:
+                break
+        return "; ".join(uniq)[:_MAX_CRIME_LEN]
+
+    @staticmethod
+    def _finalize_crime_fields(found: Dict[str, Any]) -> None:
+        """Ensure `crime` is set for display; keep offense_* in sync when possible."""
+        crime = (found.get("crime") or "").strip()
+        otype = (found.get("offense_type") or "").strip()
+        odesc = (found.get("offense_description") or "").strip()
+        if not crime:
+            if odesc and otype and odesc.lower() != otype.lower():
+                crime = f"{otype}: {odesc}"
+            else:
+                crime = odesc or otype
+        if crime:
+            found["crime"] = crime[:_MAX_CRIME_LEN]
+            if not odesc:
+                found["offense_description"] = crime[:_MAX_CRIME_LEN]
+            if not otype and len(crime) < 120:
+                found["offense_type"] = crime
 
     def _from_json_blob(self, data: Any, prefix: str = "") -> Dict[str, Any]:
         found: Dict[str, Any] = {}
@@ -943,6 +1401,14 @@ class ReportFetcher:
                     "sex": "gender",
                     "height": "height",
                     "weight": "weight",
+                    "offense": "crime",
+                    "offensedescription": "crime",
+                    "offensetype": "offense_type",
+                    "charge": "crime",
+                    "charges": "crime",
+                    "crime": "crime",
+                    "statute": "crime",
+                    "qualifyingoffense": "crime",
                     "eyecolor": "eye_color",
                     "haircolor": "hair_color",
                     "skintone": "skin_tone",
