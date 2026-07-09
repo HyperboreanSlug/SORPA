@@ -5,6 +5,7 @@ Uses SQLite with indexes on name and race columns for fast searching.
 Supports both direct CSV import and record-by-record insertion.
 """
 
+import json
 import re
 import shutil
 import sqlite3
@@ -21,8 +22,39 @@ DUPLICATE_STRATEGIES = (
     "source_url",       # same report URL (strongest)
     "external_id",      # same external_id within state
     "name_state_dob",   # same first+last+state+DOB
+    "name_dob",         # same first+last+DOB across states (multi-state registration)
     "name_state",       # same first+last+state (weaker — different people can share names)
 )
+
+# Default Integrity / CLI "all" order (strongest → multi-state name+DOB)
+DEFAULT_DEDUPE_STRATEGIES = (
+    "source_url",
+    "external_id",
+    "name_state_dob",
+    "name_dob",
+)
+
+# When merging duplicates, union distinct values with this separator
+_MERGE_SEP = " | "
+
+# Fields where distinct non-empty values from all rows are unioned (not just fill blanks)
+_MERGE_UNION_FIELDS = frozenset({
+    "state",
+    "source_state",
+    "county",
+    "city",
+    "address",
+    "zip_code",
+    "crime",
+    "offense_type",
+    "offense_description",
+    "source_url",
+    "external_id",
+    "risk_level",
+    "photo_url",
+    "conviction_date",
+    "registration_date",
+})
 
 # Default database path (relative to project root)
 DEFAULT_DB_PATH = "data/offenders.db"
@@ -387,11 +419,7 @@ class Database:
         params.extend([search_term, search_term, search_term])
 
         if state and state.upper() != "ALL":
-            query += (
-                " AND (UPPER(COALESCE(state, '')) = UPPER(?) "
-                "OR UPPER(COALESCE(source_state, '')) = UPPER(?))"
-            )
-            params.extend([state, state])
+            query = self._append_state_filter(query, params, state)
 
         if race:
             query += " AND UPPER(COALESCE(race, '')) = UPPER(?)"
@@ -436,11 +464,7 @@ class Database:
             params = [race]
 
         if state and state.upper() != "ALL":
-            query += (
-                " AND (UPPER(COALESCE(state, '')) = UPPER(?) "
-                "OR UPPER(COALESCE(source_state, '')) = UPPER(?))"
-            )
-            params.extend([state, state])
+            query = self._append_state_filter(query, params, state)
 
         query += " ORDER BY last_name ASC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -474,11 +498,7 @@ class Database:
         """
         params: List[Any] = list(lowers) + list(lowers)
         if state and state.upper() != "ALL":
-            query += (
-                " AND (UPPER(COALESCE(state, '')) = UPPER(?) "
-                "OR UPPER(COALESCE(source_state, '')) = UPPER(?))"
-            )
-            params.extend([state, state])
+            query = self._append_state_filter(query, params, state)
         query += " ORDER BY last_name ASC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = self._conn.execute(query, params).fetchall()
@@ -493,7 +513,8 @@ class Database:
         """Search offenders by state. Use state='ALL' (or empty) to return any state.
 
         Matches either ``state`` or ``source_state`` so imports/scrapes that only
-        set one column still appear in filters.
+        set one column still appear in filters. Also matches multi-state merged
+        values (e.g. ``FL | TX`` when filtering for FL).
         """
         limit = max(0, int(limit))
         offset = max(0, int(offset))
@@ -501,14 +522,12 @@ class Database:
             query = "SELECT * FROM offenders ORDER BY last_name ASC LIMIT ? OFFSET ?"
             rows = self._conn.execute(query, (limit, offset)).fetchall()
         else:
-            st = state.strip()
-            query = (
-                "SELECT * FROM offenders WHERE "
-                "UPPER(COALESCE(state, '')) = UPPER(?) "
-                "OR UPPER(COALESCE(source_state, '')) = UPPER(?) "
-                "ORDER BY last_name ASC LIMIT ? OFFSET ?"
-            )
-            rows = self._conn.execute(query, (st, st, limit, offset)).fetchall()
+            params: List[Any] = []
+            query = "SELECT * FROM offenders WHERE 1=1"
+            query = self._append_state_filter(query, params, state)
+            query += " ORDER BY last_name ASC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            rows = self._conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
     def get_race_distribution(self) -> List[Dict[str, Any]]:
@@ -692,13 +711,10 @@ class Database:
             missing.append("(report_html_path IS NULL OR TRIM(report_html_path) = '')")
         if missing:
             clauses.append("(" + " OR ".join(missing) + ")")
+        sql = f"SELECT * FROM offenders WHERE {' AND '.join(clauses)}"
         if state and state.upper() != "ALL":
-            clauses.append("UPPER(COALESCE(state, source_state, '')) = UPPER(?)")
-            params.append(state)
-        sql = (
-            f"SELECT * FROM offenders WHERE {' AND '.join(clauses)} "
-            f"ORDER BY id DESC LIMIT ?"
-        )
+            sql = self._append_state_filter(sql, params, state)
+        sql += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
@@ -762,6 +778,7 @@ class Database:
             ("race", 3),
             ("crime", 2),
             ("offense_description", 2),
+            ("offense_type", 1),
             ("photo_path", 3),
             ("report_html_path", 2),
             ("source_url", 2),
@@ -773,15 +790,241 @@ class Database:
             ("city", 1),
             ("gender", 1),
             ("risk_level", 1),
+            ("state", 1),
         ):
             val = row.get(col)
             if val is not None and str(val).strip():
                 score += weight
+                # Slight boost for already-merged multi-value fields
+                if _MERGE_SEP in str(val):
+                    score += 1
         return score
 
     @staticmethod
     def _normalize_dup_key_part(value: Any) -> str:
         return " ".join(str(value or "").strip().lower().split())
+
+    @staticmethod
+    def _split_merged_values(value: Any) -> List[str]:
+        """Split a field that may already contain ' | ' unions into distinct parts."""
+        raw = str(value or "").strip()
+        if not raw:
+            return []
+        parts: List[str] = []
+        seen: set = set()
+        for chunk in raw.split(_MERGE_SEP):
+            # Also accept semicolon / newline lists from older scrapes
+            for piece in re.split(r"[;\n]+", chunk):
+                p = " ".join(piece.strip().split())
+                if not p:
+                    continue
+                key = p.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                parts.append(p)
+        return parts
+
+    @classmethod
+    def _union_field_values(cls, *values: Any) -> str:
+        """Union distinct non-empty values, preserving first-seen order."""
+        parts: List[str] = []
+        seen: set = set()
+        for v in values:
+            for p in cls._split_merged_values(v):
+                key = p.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                parts.append(p)
+        return _MERGE_SEP.join(parts)
+
+    @classmethod
+    def merge_duplicate_members(
+        cls,
+        keep: Dict[str, Any],
+        losers: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Build field updates that merge *losers* into *keep*.
+
+        - Union multi-listing fields (states, crimes, addresses, URLs, …)
+        - Fill blanks on identity/physical fields from any loser
+        - Annotate flags with merged source row ids when useful
+
+        Returns only columns that should change on the keeper.
+        """
+        if not losers:
+            return {}
+
+        updates: Dict[str, Any] = {}
+        all_rows = [keep] + list(losers)
+
+        # 1) Union multi-value / multi-listing fields
+        for col in _MERGE_UNION_FIELDS:
+            merged = cls._union_field_values(*(r.get(col) for r in all_rows))
+            cur = str(keep.get(col) or "").strip()
+            if merged and merged != cur:
+                updates[col] = merged
+
+        # 2) Fill blanks (prefer non-empty) for remaining insert columns
+        for col in _OFFENDER_INSERT_COLUMNS:
+            if col in _MERGE_UNION_FIELDS:
+                continue
+            if col == "flags":
+                continue  # handled below
+            if col == "raw_data_json":
+                # Prefer non-empty JSON; do not concatenate
+                cur = keep.get(col)
+                if cur is not None and str(cur).strip():
+                    continue
+                for r in losers:
+                    alt = r.get(col)
+                    if alt is not None and str(alt).strip():
+                        updates[col] = alt
+                        break
+                continue
+            if col in ("photo_path", "report_html_path"):
+                # Keep existing file path; only fill if blank
+                cur = keep.get(col)
+                if cur is not None and str(cur).strip():
+                    continue
+                for r in losers:
+                    alt = r.get(col)
+                    if alt is not None and str(alt).strip():
+                        updates[col] = alt
+                        break
+                continue
+            # Scalar: fill blank only
+            cur = keep.get(col)
+            if cur is not None and str(cur).strip():
+                continue
+            for r in losers:
+                alt = r.get(col)
+                if alt is not None and str(alt).strip():
+                    updates[col] = alt
+                    break
+
+        # 3) flags: merge JSON lists/dicts + record merged ids
+        flag_objs: List[Any] = []
+        for r in all_rows:
+            raw = r.get("flags")
+            if raw is None or str(raw).strip() == "":
+                continue
+            if isinstance(raw, (list, dict)):
+                flag_objs.append(raw)
+                continue
+            try:
+                flag_objs.append(json.loads(str(raw)))
+            except Exception:
+                flag_objs.append(str(raw).strip())
+
+        merged_ids = []
+        for r in losers:
+            try:
+                merged_ids.append(int(r["id"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        flag_out: Any = None
+        if flag_objs:
+            # Prefer a dict payload so we can attach metadata
+            base: Dict[str, Any] = {}
+            list_flags: List[str] = []
+            for fo in flag_objs:
+                if isinstance(fo, dict):
+                    for k, v in fo.items():
+                        if k in ("merged_from_ids", "merged_listings"):
+                            continue
+                        if k not in base:
+                            base[k] = v
+                        elif isinstance(base[k], list) and isinstance(v, list):
+                            for item in v:
+                                if item not in base[k]:
+                                    base[k].append(item)
+                elif isinstance(fo, list):
+                    for item in fo:
+                        s = str(item)
+                        if s not in list_flags:
+                            list_flags.append(s)
+                else:
+                    s = str(fo)
+                    if s not in list_flags:
+                        list_flags.append(s)
+            if list_flags:
+                base.setdefault("tags", list_flags)
+            flag_out = base
+        else:
+            flag_out = {}
+
+        if merged_ids:
+            prev = flag_out.get("merged_from_ids") if isinstance(flag_out, dict) else None
+            ids: List[int] = []
+            if isinstance(prev, list):
+                for x in prev:
+                    try:
+                        ids.append(int(x))
+                    except (TypeError, ValueError):
+                        pass
+            for i in merged_ids:
+                if i not in ids:
+                    ids.append(i)
+            flag_out["merged_from_ids"] = ids
+            # Compact multi-state / multi-listing summary for UI
+            states = cls._split_merged_values(
+                updates.get("state", keep.get("state"))
+            )
+            crimes = cls._split_merged_values(
+                updates.get("crime", keep.get("crime"))
+            )
+            urls = cls._split_merged_values(
+                updates.get("source_url", keep.get("source_url"))
+            )
+            flag_out["merged_listings"] = {
+                "states": states,
+                "crimes": crimes[:20],
+                "source_urls": urls[:20],
+                "count": 1 + len(merged_ids),
+            }
+
+        if flag_out:
+            try:
+                new_flags = json.dumps(flag_out, ensure_ascii=False, sort_keys=True)
+            except Exception:
+                new_flags = str(flag_out)
+            cur_flags = str(keep.get("flags") or "").strip()
+            if new_flags != cur_flags:
+                updates["flags"] = new_flags
+
+        return updates
+
+    @staticmethod
+    def _state_match_sql(column_expr: str = "state") -> str:
+        """
+        SQL fragment: column matches a state code even when multi-state
+        merged values use ' | ' separators (e.g. 'FL | TX').
+        """
+        # Normalize spaces around | then test token membership
+        return (
+            f"("
+            f"UPPER(TRIM(COALESCE({column_expr}, ''))) = UPPER(?) "
+            f"OR ('|' || REPLACE(REPLACE(UPPER(COALESCE({column_expr}, '')), ' ', ''), "
+            f"'{_MERGE_SEP.strip()}', '|') || '|') "
+            f"LIKE '%|' || UPPER(?) || '|%'"
+            f")"
+        )
+
+    def _append_state_filter(self, query: str, params: List[Any], state: str) -> str:
+        """Append OR of state / source_state match (supports merged multi-state)."""
+        st = (state or "").strip()
+        if not st or st.upper() == "ALL":
+            return query
+        frag_state = self._state_match_sql("state")
+        frag_src = self._state_match_sql("source_state")
+        query += f" AND ({frag_state} OR {frag_src})"
+        # each fragment uses ? twice
+        params.extend([st, st, st, st])
+        return query
 
     def _duplicate_group_sql(self, strategy: str) -> Tuple[str, str]:
         """
@@ -840,6 +1083,25 @@ class Database:
                 ORDER BY cnt DESC
             """
             return sql, "name+state+dob"
+        if s == "name_dob":
+            # Cross-state: same person registered in multiple states
+            sql = """
+                SELECT LOWER(TRIM(COALESCE(first_name, ''))) || '|' ||
+                       LOWER(TRIM(COALESCE(last_name, ''))) || '|' ||
+                       LOWER(TRIM(date_of_birth)) AS dup_key,
+                       COUNT(*) AS cnt,
+                       GROUP_CONCAT(id) AS id_list
+                FROM offenders
+                WHERE first_name IS NOT NULL AND TRIM(first_name) != ''
+                  AND last_name IS NOT NULL AND TRIM(last_name) != ''
+                  AND date_of_birth IS NOT NULL AND TRIM(date_of_birth) != ''
+                GROUP BY LOWER(TRIM(COALESCE(first_name, ''))),
+                         LOWER(TRIM(COALESCE(last_name, ''))),
+                         LOWER(TRIM(date_of_birth))
+                HAVING COUNT(*) > 1
+                ORDER BY cnt DESC
+            """
+            return sql, "name+dob (multi-state)"
         if s == "name_state":
             sql = """
                 SELECT LOWER(TRIM(COALESCE(first_name, ''))) || '|' ||
@@ -943,7 +1205,7 @@ class Database:
           total_extra_rows, total_safe_extra_rows
         }
         """
-        strats = strategies or ["source_url", "external_id", "name_state_dob"]
+        strats = list(strategies) if strategies else list(DEFAULT_DEDUPE_STRATEGIES)
         total = self.get_total_count()
         by: Dict[str, Dict[str, int]] = {}
         total_extra = 0
@@ -1021,19 +1283,18 @@ class Database:
             acted_groups += 1
 
             if merge_fields:
-                updates: Dict[str, Any] = {}
+                losers = []
                 for rid in remove_ids:
                     loser = self.get_offender_by_id(rid)
-                    if not loser:
-                        continue
-                    for col in _OFFENDER_INSERT_COLUMNS:
-                        cur = keep_row.get(col)
-                        alt = loser.get(col)
-                        if (cur is None or str(cur).strip() == "") and alt is not None and str(alt).strip():
-                            updates[col] = alt
-                            keep_row[col] = alt
+                    if loser:
+                        losers.append(loser)
+                updates = self.merge_duplicate_members(keep_row, losers)
                 if updates and not dry_run:
                     self.update_offender(keep_id, updates)
+                    # Keep in-memory row current if later strategies re-read it
+                    keep_row.update(updates)
+                    merged_n += len(updates)
+                elif updates and dry_run:
                     merged_n += len(updates)
 
             if not dry_run and remove_ids:
@@ -1069,13 +1330,15 @@ class Database:
         """
         Run remove_duplicates for each strategy in order (strongest first).
 
-        Default order: source_url → external_id → name_state_dob
-        (name_state is weaker and not included unless requested).
+        Default order: source_url → external_id → name_state_dob → name_dob
+        (name_dob merges multi-state registrations; name_state is weaker and
+        not included unless requested).
         """
-        strats = strategies or ["source_url", "external_id", "name_state_dob"]
+        strats = list(strategies) if strategies else list(DEFAULT_DEDUPE_STRATEGIES)
         results = []
         total_deleted = 0
         total_skipped_unsafe = 0
+        total_merged_fields = 0
         for s in strats:
             r = self.remove_duplicates(
                 s,
@@ -1086,11 +1349,13 @@ class Database:
             results.append(r)
             total_deleted += int(r.get("deleted") or 0)
             total_skipped_unsafe += int(r.get("skipped_unsafe") or 0)
+            total_merged_fields += int(r.get("merged_fields") or 0)
         return {
             "dry_run": dry_run,
             "strategies": results,
             "total_deleted": total_deleted,
             "total_skipped_unsafe": total_skipped_unsafe,
+            "total_merged_fields": total_merged_fields,
             "total_offenders": self.get_total_count(),
         }
 

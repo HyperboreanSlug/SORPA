@@ -1468,14 +1468,13 @@ class ArchiverApp(ctk.CTk):
 
     def _check_duplicates(self) -> None:
         """Scan DB for duplicate groups and show a summary dialog."""
-        from scraper.database import Database
+        from scraper.database import DEFAULT_DEDUPE_STRATEGIES, Database
 
+        strats = list(DEFAULT_DEDUPE_STRATEGIES)
         try:
             db = Database(self.db_path)
             try:
-                summary = db.count_duplicates(
-                    ["source_url", "external_id", "name_state_dob"]
-                )
+                summary = db.count_duplicates(strats)
                 samples = db.find_duplicate_groups("source_url", limit_groups=8)
             finally:
                 db.close()
@@ -1510,7 +1509,10 @@ class ArchiverApp(ctk.CTk):
             for g in unsafe_samples:
                 lines.append(f"  · ×{g['count']}  {str(g.get('key') or '')[:60]}")
         lines.append("")
-        lines.append("Use Remove duplicates… to delete safe extras (merges sparse fields first).")
+        lines.append(
+            "Use Remove duplicates… to delete safe extras. "
+            "Details are merged onto the keeper (states, charges, listings/URLs)."
+        )
         msg = "\n".join(lines)
         self.log_queue.put("Duplicate check:\n" + msg)
         if hasattr(self, "integrity_status"):
@@ -1525,14 +1527,15 @@ class ArchiverApp(ctk.CTk):
             pass
 
     def _remove_duplicates(self) -> None:
-        """Confirm and remove duplicates (safe strategies, merge fields)."""
-        from scraper.database import Database
+        """Confirm and remove duplicates (merge multi-state/charges, then delete)."""
+        from scraper.database import DEFAULT_DEDUPE_STRATEGIES, Database
 
+        strats = list(DEFAULT_DEDUPE_STRATEGIES)
         try:
             db = Database(self.db_path)
             try:
                 preview = db.remove_duplicates_all(
-                    ["source_url", "external_id", "name_state_dob"],
+                    strats,
                     dry_run=True,
                     merge_fields=True,
                     safe_only=True,
@@ -1545,10 +1548,12 @@ class ArchiverApp(ctk.CTk):
 
         would = int(preview.get("total_deleted") or 0)
         skipped_u = int(preview.get("total_skipped_unsafe") or 0)
+        merged_preview = int(preview.get("total_merged_fields") or 0)
         if would <= 0:
             messagebox.showinfo(
                 "Remove duplicates",
-                "No safe duplicates found for source_url / external_id / name+DOB.\n"
+                "No safe duplicates found for URL / external id / name+DOB "
+                "(same-state or multi-state).\n"
                 f"(Skipped {skipped_u} portal/CAPTCHA URL clusters.)",
             )
             return
@@ -1558,6 +1563,7 @@ class ArchiverApp(ctk.CTk):
             if r.get("deleted"):
                 detail_lines.append(
                     f"  · {r['strategy']}: {r['deleted']:,} rows in {r['groups']:,} groups"
+                    + (f" · ~{r.get('merged_fields', 0)} field merges" if r.get("merged_fields") else "")
                 )
         detail = "\n".join(detail_lines) if detail_lines else ""
         ok = messagebox.askyesno(
@@ -1565,9 +1571,11 @@ class ArchiverApp(ctk.CTk):
             (
                 f"About to permanently delete {would:,} safe duplicate row(s).\n\n"
                 f"{detail}\n\n"
-                f"Portal/CAPTCHA URL clusters skipped: {skipped_u}\n\n"
-                "Keeps the richest record per group and copies missing fields "
-                "from deleted rows onto the keeper.\n\n"
+                f"Portal/CAPTCHA URL clusters skipped: {skipped_u}\n"
+                f"Field merges onto keepers (preview): {merged_preview:,}\n\n"
+                "Keeps the richest record per group and merges details from the "
+                "others — multiple states, charges/listings, and source URLs are "
+                "combined (e.g. FL | TX · Assault | Burglary) before extras are deleted.\n\n"
                 "Continue?"
             ),
         )
@@ -1578,7 +1586,7 @@ class ArchiverApp(ctk.CTk):
             db = Database(self.db_path)
             try:
                 result = db.remove_duplicates_all(
-                    ["source_url", "external_id", "name_state_dob"],
+                    strats,
                     dry_run=False,
                     merge_fields=True,
                     safe_only=True,
@@ -1592,8 +1600,10 @@ class ArchiverApp(ctk.CTk):
         deleted = int(result.get("total_deleted") or 0)
         left = int(result.get("total_offenders") or 0)
         skipped_u = int(result.get("total_skipped_unsafe") or 0)
+        merged_n = int(result.get("total_merged_fields") or 0)
         msg = (
             f"Deleted {deleted:,} duplicates · {left:,} remain"
+            + (f" · merged {merged_n:,} fields" if merged_n else "")
             + (f" · skipped {skipped_u} unsafe URL clusters" if skipped_u else "")
         )
         self.log_queue.put(f"Dedupe: {msg}")
@@ -2157,9 +2167,9 @@ class ArchiverApp(ctk.CTk):
                     limit=5000,
                 )
                 try:
-                    dup_summary = db.count_duplicates(
-                        ["source_url", "external_id", "name_state_dob"]
-                    )
+                    from scraper.database import DEFAULT_DEDUPE_STRATEGIES
+
+                    dup_summary = db.count_duplicates(list(DEFAULT_DEDUPE_STRATEGIES))
                 except Exception:
                     dup_summary = None
             finally:
@@ -2185,7 +2195,7 @@ class ArchiverApp(ctk.CTk):
             if parts:
                 dup_line = "\nDuplicates: " + " · ".join(parts)
             else:
-                dup_line = "\nDuplicates: none found (source_url / external_id / name+DOB)"
+                dup_line = "\nDuplicates: none found (URL / external id / name+DOB / multi-state)"
         self.integrity_summary.configure(
             text=(
                 f"Total records: {total:,}  ·  "

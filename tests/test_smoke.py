@@ -204,12 +204,13 @@ class DatabaseTests(unittest.TestCase):
             "source_url": "https://ex/unique/2",
             "state": "GA",
         })
-        # Name+state+dob duplicates
+        # Name+state+dob duplicates with *different* charges — both crimes kept
         self.db.insert_offender({
             "first_name": "C", "last_name": "Three",
             "state": "TX",
             "date_of_birth": "1990-01-01",
             "source_url": "https://ex/n1",
+            "crime": "Assault",
         })
         self.db.insert_offender({
             "first_name": "C", "last_name": "Three",
@@ -217,6 +218,24 @@ class DatabaseTests(unittest.TestCase):
             "date_of_birth": "1990-01-01",
             "race": "Black",
             "source_url": "https://ex/n2",
+            "crime": "Burglary",
+        })
+        # Multi-state same person (name+DOB only) — states and listings merge
+        self.db.insert_offender({
+            "first_name": "D", "last_name": "Multi",
+            "state": "FL",
+            "date_of_birth": "1985-05-05",
+            "source_url": "https://ex/fl/d",
+            "crime": "Failure to register",
+            "photo_path": "data/d.jpg",
+        })
+        self.db.insert_offender({
+            "first_name": "D", "last_name": "Multi",
+            "state": "GA",
+            "date_of_birth": "1985-05-05",
+            "source_url": "https://ex/ga/d",
+            "crime": "Lewd act",
+            "race": "White",
         })
         # Shared CAPTCHA URL for many people — must NOT be safe-removed
         for i in range(10):
@@ -227,10 +246,13 @@ class DatabaseTests(unittest.TestCase):
                 "state": "WI",
             })
 
-        summary = self.db.count_duplicates(["source_url", "name_state_dob"])
+        summary = self.db.count_duplicates(
+            ["source_url", "name_state_dob", "name_dob"]
+        )
         self.assertGreaterEqual(summary["by_strategy"]["source_url"]["groups"], 1)
         self.assertGreaterEqual(summary["by_strategy"]["source_url"]["extra_rows"], 1)
         self.assertGreaterEqual(summary["by_strategy"]["name_state_dob"]["groups"], 1)
+        self.assertGreaterEqual(summary["by_strategy"]["name_dob"]["groups"], 1)
         # CAPTCHA cluster counted but not safe
         self.assertGreaterEqual(
             summary["by_strategy"]["source_url"].get("unsafe_groups", 0), 1
@@ -240,13 +262,13 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(dry["deleted"], 1)  # only the real URL dup
         self.assertGreaterEqual(dry.get("skipped_unsafe", 0), 1)
         before = self.db.get_total_count()
-        self.assertEqual(before, 15)
+        self.assertEqual(before, 17)
 
         live = self.db.remove_duplicates(
             "source_url", dry_run=False, merge_fields=True, safe_only=True
         )
         self.assertEqual(live["deleted"], 1)
-        self.assertEqual(self.db.get_total_count(), 14)
+        self.assertEqual(self.db.get_total_count(), 16)
         # CAPTCHA people still present
         captcha_left = sum(
             1
@@ -265,10 +287,47 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(kept.get("photo_path"), "data/p.jpg")
         self.assertEqual(kept.get("crime"), "X")
 
-        # Second pass: name_state_dob
-        r2 = self.db.remove_duplicates("name_state_dob", dry_run=False)
+        # Second pass: name_state_dob — merge distinct crimes
+        r2 = self.db.remove_duplicates("name_state_dob", dry_run=False, merge_fields=True)
         self.assertEqual(r2["deleted"], 1)
-        self.assertEqual(self.db.get_total_count(), 13)
+        self.assertEqual(self.db.get_total_count(), 15)
+        c_row = None
+        for row in self.db.iter_offenders():
+            if (row.get("last_name") or "") == "Three":
+                c_row = row
+                break
+        self.assertIsNotNone(c_row)
+        crimes = (c_row.get("crime") or "")
+        self.assertIn("Assault", crimes)
+        self.assertIn("Burglary", crimes)
+        self.assertEqual(c_row.get("race"), "Black")
+        urls = (c_row.get("source_url") or "")
+        self.assertIn("https://ex/n1", urls)
+        self.assertIn("https://ex/n2", urls)
+
+        # Third pass: multi-state name_dob
+        r3 = self.db.remove_duplicates("name_dob", dry_run=False, merge_fields=True)
+        self.assertEqual(r3["deleted"], 1)
+        self.assertEqual(self.db.get_total_count(), 14)
+        d_row = None
+        for row in self.db.iter_offenders():
+            if (row.get("last_name") or "") == "Multi":
+                d_row = row
+                break
+        self.assertIsNotNone(d_row)
+        states = (d_row.get("state") or "")
+        self.assertIn("FL", states)
+        self.assertIn("GA", states)
+        d_crimes = (d_row.get("crime") or "")
+        self.assertIn("Failure to register", d_crimes)
+        self.assertIn("Lewd act", d_crimes)
+        self.assertEqual(d_row.get("photo_path"), "data/d.jpg")
+        self.assertEqual(d_row.get("race"), "White")
+        # Search by either state still finds the merged row
+        fl_hits = self.db.search_by_state("FL", limit=50)
+        self.assertTrue(any((r.get("last_name") or "") == "Multi" for r in fl_hits))
+        ga_hits = self.db.search_by_state("GA", limit=50)
+        self.assertTrue(any((r.get("last_name") or "") == "Multi" for r in ga_hits))
         # No more safe URL dups
         self.assertEqual(
             self.db.count_duplicates(["source_url"])["by_strategy"]["source_url"][

@@ -513,7 +513,9 @@ def cmd_dedupe(args: argparse.Namespace) -> None:
         print(f"  Total offenders: {db.get_total_count():,}")
 
         if strategy == "all":
-            strats = ["source_url", "external_id", "name_state_dob"]
+            from .database import DEFAULT_DEDUPE_STRATEGIES
+
+            strats = list(DEFAULT_DEDUPE_STRATEGIES)
             if args.include_name_state:
                 strats.append("name_state")
             summary = db.count_duplicates(strats)
@@ -719,11 +721,13 @@ Examples:
     )
     p_dedupe.add_argument(
         "--strategy",
-        choices=["all", "source_url", "external_id", "name_state_dob", "name_state"],
+        choices=[
+            "all", "source_url", "external_id", "name_state_dob", "name_dob", "name_state",
+        ],
         default="all",
         help=(
             "Match key: source_url (strongest), external_id, name_state_dob, "
-            "name_state (weaker), or all safe strategies (default)"
+            "name_dob (multi-state), name_state (weaker), or all safe strategies (default)"
         ),
     )
     p_dedupe.add_argument(
