@@ -1774,6 +1774,310 @@ class NSOPWEthnicDatabaseBuilder:
         )
         return summary
 
+    def enrich_misclassified(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        limit: int = 50,
+        prefer_missing_photo: bool = True,
+        enrich_reports: bool = True,
+        save_html: bool = True,
+        log: Optional[Callable[[str], None]] = None,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_update: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        NSOPW / report refresh for misclassification candidates.
+
+        For each person:
+          1. If they already have a source_url → re-fetch report (photo/race/crime).
+          2. Else search NSOPW by first+last, pick best matching hit, attach URL
+             and optional report/photo enrichment, update the existing DB row.
+
+        Does not insert new rows (avoids duplicates).
+        """
+        def _log(msg: str) -> None:
+            if log:
+                log(msg)
+            else:
+                print(msg)
+
+        # Deduplicate by id; prefer rows that still need photo when requested
+        by_id: Dict[int, Dict[str, Any]] = {}
+        for rec in records or []:
+            try:
+                rid = int(rec.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if rid in by_id:
+                continue
+            by_id[rid] = dict(rec)
+
+        queue: List[Dict[str, Any]] = list(by_id.values())
+        if prefer_missing_photo:
+            queue.sort(
+                key=lambda r: (
+                    0 if not (r.get("photo_path") or "").strip() else 1,
+                    0 if not (r.get("source_url") or "").strip() else 1,
+                    str(r.get("last_name") or ""),
+                )
+            )
+        if limit and int(limit) > 0:
+            queue = queue[: int(limit)]
+
+        summary: Dict[str, Any] = {
+            "queued": len(queue),
+            "attempted": 0,
+            "updated": 0,
+            "nsopw_searched": 0,
+            "nsopw_matched": 0,
+            "reports_fetched": 0,
+            "with_photo": 0,
+            "with_race": 0,
+            "errors": 0,
+            "skipped_no_name": 0,
+        }
+        total_q = len(queue)
+        _log(
+            f"NSOPW enrich misclassified: {total_q} people "
+            f"(prefer_missing_photo={prefer_missing_photo}, reports={enrich_reports})"
+        )
+        if on_progress:
+            try:
+                on_progress(0, total_q or 1)
+            except Exception:
+                pass
+
+        for rec in queue:
+            if self.cancel_check():
+                _log("Enrich cancelled.")
+                break
+            rid = rec.get("id")
+            first = (rec.get("first_name") or "").strip().split()[0] if rec.get("first_name") else ""
+            last = (rec.get("last_name") or "").strip()
+            if not last:
+                full = (rec.get("full_name") or "").strip()
+                parts = full.replace(",", " ").split()
+                if len(parts) >= 2:
+                    first = first or parts[0]
+                    last = parts[-1]
+            name = (
+                f"{first} {last}".strip()
+                or (rec.get("full_name") or "").strip()
+                or f"id={rid}"
+            )
+            st = (rec.get("state") or rec.get("source_state") or "UNK").upper()
+            url = (rec.get("source_url") or "").strip()
+            summary["attempted"] += 1
+            _log(f"  [{summary['attempted']}/{total_q}] Enrich [{st}] {name[:55]}")
+
+            patch: Dict[str, Any] = {}
+            working = dict(rec)
+
+            # --- Path A: already have URL → report re-fetch ---
+            if url and enrich_reports:
+                if self.report_limiter.wait(self.cancel_check):
+                    _log("Enrich cancelled (during delay).")
+                    break
+                if self.cancel_check():
+                    break
+                try:
+                    demo = self.reports.fetch_demographics(
+                        url,
+                        save_html=save_html,
+                        html_dir=self.html_dir,
+                        jurisdiction=st if st != "UNK" else None,
+                    )
+                    summary["reports_fetched"] += 1
+                    self._merge_demographics(working, demo)
+                    class _Hit:
+                        image_uri = working.get("photo_url") or rec.get("photo_url") or ""
+
+                    self._ensure_photo(working, _Hit(), st)
+                except Exception as e:
+                    summary["errors"] += 1
+                    _log(f"    ↳ report error: {e}")
+
+            # --- Path B: no URL → NSOPW name search ---
+            elif first and last:
+                if self.search_limiter.wait(self.cancel_check):
+                    _log("Enrich cancelled (during delay).")
+                    break
+                if self.cancel_check():
+                    break
+                summary["nsopw_searched"] += 1
+                try:
+                    hits = self.client.search_by_name(first, last)
+                except Exception as e:
+                    summary["errors"] += 1
+                    _log(f"    ↳ NSOPW search error: {e}")
+                    hits = []
+
+                best = self._pick_nsopw_hit_for_person(rec, hits)
+                if best is None:
+                    _log(f"    ↳ no NSOPW match among {len(hits)} hit(s)")
+                else:
+                    summary["nsopw_matched"] += 1
+                    hit_rec = best.to_record()
+                    for key in (
+                        "source_url", "external_id", "photo_url", "state",
+                        "source_state", "city", "address", "zip_code",
+                        "latitude", "longitude", "gender", "date_of_birth", "age",
+                    ):
+                        val = hit_rec.get(key)
+                        if val and not working.get(key):
+                            working[key] = val
+                            patch[key] = val
+                    # Prefer NSOPW URL even if we had a weak one
+                    if hit_rec.get("source_url"):
+                        working["source_url"] = hit_rec["source_url"]
+                        patch["source_url"] = hit_rec["source_url"]
+                    if hit_rec.get("photo_url"):
+                        working["photo_url"] = hit_rec["photo_url"]
+                        patch["photo_url"] = hit_rec["photo_url"]
+                    url = (working.get("source_url") or "").strip()
+                    hit_st = (
+                        (hit_rec.get("state") or hit_rec.get("source_state") or st) or "UNK"
+                    ).upper()
+                    _log(f"    ↳ matched NSOPW url={url[:80]}")
+
+                    if enrich_reports and url:
+                        if self.report_limiter.wait(self.cancel_check):
+                            _log("Enrich cancelled (during delay).")
+                            break
+                        if self.cancel_check():
+                            break
+                        try:
+                            demo = self.reports.fetch_demographics(
+                                url,
+                                save_html=save_html,
+                                html_dir=self.html_dir,
+                                jurisdiction=hit_st if hit_st != "UNK" else None,
+                            )
+                            summary["reports_fetched"] += 1
+                            self._merge_demographics(working, demo)
+                            self._ensure_photo(working, best, hit_st)
+                        except Exception as e:
+                            summary["errors"] += 1
+                            _log(f"    ↳ report error: {e}")
+                    else:
+                        try:
+                            self._ensure_photo(working, best, hit_st)
+                        except Exception:
+                            pass
+            else:
+                summary["skipped_no_name"] += 1
+                _log("    ↳ skip (need first+last or existing URL)")
+
+            # Build DB patch from filled fields
+            for key in (
+                "source_url", "external_id", "photo_url", "photo_path",
+                "report_html_path", "race", "ethnicity", "gender", "height",
+                "weight", "eye_color", "hair_color", "crime", "offense_type",
+                "offense_description", "county", "city", "address", "risk_level",
+                "state", "source_state", "date_of_birth", "age", "zip_code",
+                "latitude", "longitude", "flags", "raw_data_json",
+            ):
+                new_v = working.get(key)
+                old_v = rec.get(key)
+                if not new_v:
+                    continue
+                if not old_v or (
+                    key in (
+                        "race", "ethnicity", "crime", "photo_path",
+                        "report_html_path", "source_url", "photo_url",
+                    )
+                    and str(new_v) != str(old_v or "")
+                ):
+                    patch[key] = new_v
+
+            if patch and rid is not None:
+                try:
+                    ok = self.db.update_offender(int(rid), patch)
+                except Exception as e:
+                    summary["errors"] += 1
+                    _log(f"    ↳ DB update error: {e}")
+                    ok = False
+                if ok:
+                    summary["updated"] += 1
+                    merged = dict(rec)
+                    merged.update(patch)
+                    if merged.get("photo_path"):
+                        summary["with_photo"] += 1
+                    if merged.get("race"):
+                        summary["with_race"] += 1
+                    _log(
+                        f"    ↳ updated id={rid} "
+                        f"race={patch.get('race') or '—'} "
+                        f"{'photo ' if patch.get('photo_path') else ''}"
+                        f"{'url ' if patch.get('source_url') else ''}"
+                        f"{'html' if patch.get('report_html_path') else ''}"
+                    )
+                    if on_update:
+                        try:
+                            on_update(merged)
+                        except Exception:
+                            pass
+                else:
+                    _log(f"    ↳ no DB change for id={rid}")
+            else:
+                _log("    ↳ nothing new to write")
+
+            if on_progress:
+                try:
+                    on_progress(summary["attempted"], total_q or 1)
+                except Exception:
+                    pass
+
+        _log(
+            f"Enrich done: attempted={summary['attempted']} updated={summary['updated']} "
+            f"nsopw_matched={summary['nsopw_matched']} reports={summary['reports_fetched']} "
+            f"errors={summary['errors']}"
+        )
+        return summary
+
+    @staticmethod
+    def _pick_nsopw_hit_for_person(
+        rec: Dict[str, Any],
+        hits: List[Any],
+    ) -> Optional[Any]:
+        """Choose the best NSOPW hit for an existing DB person."""
+        if not hits:
+            return None
+        want_first = (rec.get("first_name") or "").strip().lower().split()[0:1]
+        want_first_s = want_first[0] if want_first else ""
+        want_last = (rec.get("last_name") or "").strip().lower()
+        want_state = (
+            rec.get("state") or rec.get("source_state") or ""
+        ).strip().upper()
+
+        def score(hit: Any) -> tuple:
+            hf = (getattr(hit, "first_name", None) or "").strip().lower()
+            hl = (getattr(hit, "last_name", None) or "").strip().lower()
+            full = (getattr(hit, "full_name", None) or "").strip().lower()
+            st = (
+                getattr(hit, "state", None)
+                or getattr(hit, "jurisdiction_id", None)
+                or ""
+            ).strip().upper()
+            s = 0
+            if want_last and (hl == want_last or want_last in full):
+                s += 5
+            if want_first_s and (hf.startswith(want_first_s) or want_first_s in full):
+                s += 3
+            if want_state and st and (st == want_state or want_state in st):
+                s += 2
+            if getattr(hit, "image_uri", None) or getattr(hit, "offender_uri", None):
+                s += 1
+            return (s, 1 if getattr(hit, "image_uri", None) else 0)
+
+        ranked = sorted(hits, key=score, reverse=True)
+        best = ranked[0]
+        if score(best)[0] < 5:
+            # Require at least last-name match
+            return None
+        return best
+
     def _url_exists(self, url: str) -> bool:
         u = (url or "").strip()
         if not u:

@@ -2456,11 +2456,166 @@ class ArchiverApp(ctk.CTk):
 
     def _cancel_requeue(self):
         self._requeue_cancel = True
+        self._enrich_cancel = True
         try:
             self.requeue_status.configure(text="Cancelling…")
         except Exception:
             pass
-        self.requeue_status.configure(text="Cancelling…")
+
+    def _start_enrich_misclassified(self):
+        """NSOPW search + report fetch for current misclassification candidates."""
+        if self.is_running:
+            messagebox.showwarning("Busy", "Wait for the current job to finish.")
+            return
+
+        results = list(self._misclass_results or [])
+        items = list(self._report_items or [])
+        if items:
+            records = []
+            for mc in items:
+                if self._verdict_for_mc(mc) == "correct":
+                    continue
+                rec = dict(mc.record or {})
+                if rec.get("id") is not None:
+                    records.append(rec)
+            source_label = "Reports list (excl. Correct)"
+        else:
+            records = []
+            for mc in results:
+                rec = dict(mc.record or {})
+                if rec.get("id") is not None:
+                    records.append(rec)
+            source_label = "last Analyze results"
+
+        if not records:
+            messagebox.showinfo(
+                "NSOPW enrich",
+                "No misclassified people to enrich.\n\n"
+                "Run Analyze (or Reports → Analyze & build) first.",
+            )
+            return
+
+        try:
+            default_lim = int(self.report_max_var.get()) if hasattr(self, "report_max_var") else 50
+        except (TypeError, ValueError):
+            default_lim = 50
+        default_lim = max(1, min(default_lim or 50, 200))
+
+        ok = messagebox.askyesno(
+            "NSOPW enrich misclassified?",
+            (
+                f"Source: {source_label}\n"
+                f"People available: {len(records):,}\n"
+                f"Will process up to {default_lim} (prefer missing photos).\n\n"
+                "For each person:\n"
+                "  • If they have a report URL → re-fetch photo/race/crime\n"
+                "  • Else → NSOPW first+last search, attach best match, fetch report\n\n"
+                "Existing DB rows are updated (no new duplicates).\n"
+                "Rate-limited — watch the Activity log on NSOPW/Scrape.\n\n"
+                "Continue?"
+            ),
+        )
+        if not ok:
+            return
+
+        self._enrich_cancel = False
+        self._requeue_cancel = False
+        self._set_running(True)
+        if hasattr(self, "requeue_btn"):
+            self.requeue_btn.configure(state="disabled")
+        if hasattr(self, "requeue_cancel_btn"):
+            self.requeue_cancel_btn.configure(state="normal")
+        if hasattr(self, "requeue_status"):
+            self.requeue_status.configure(text="NSOPW enrich running…")
+        if hasattr(self, "requeue_progress"):
+            self.requeue_progress.set(0)
+        if hasattr(self, "report_status"):
+            self.report_status.configure(text="NSOPW enrich running… see Activity log")
+
+        def log(msg):
+            self.log_queue.put(msg)
+
+        def on_progress(done: int, total: int):
+            frac = (done / total) if total else 0.0
+
+            def _ui(d=done, t=total, f=frac):
+                if hasattr(self, "requeue_progress"):
+                    self.requeue_progress.set(min(1.0, max(0.0, f)))
+                if hasattr(self, "requeue_status"):
+                    self.requeue_status.configure(text=f"NSOPW enrich {d}/{t}…")
+
+            self.after(0, _ui)
+
+        def worker():
+            from scraper.nsopw_builder import NSOPWEthnicDatabaseBuilder
+
+            builder = NSOPWEthnicDatabaseBuilder(
+                db_path=self.db_path,
+                delay=2.0,
+                report_delay=0.75,
+                html_dir="data/report_pages",
+                cancel_check=lambda: getattr(self, "_enrich_cancel", False)
+                or getattr(self, "_requeue_cancel", False),
+            )
+            try:
+                summary = builder.enrich_misclassified(
+                    records,
+                    limit=default_lim,
+                    prefer_missing_photo=True,
+                    enrich_reports=True,
+                    save_html=True,
+                    log=log,
+                    on_progress=on_progress,
+                )
+
+                def done():
+                    self._set_running(False)
+                    if hasattr(self, "requeue_btn"):
+                        self.requeue_btn.configure(state="normal")
+                    if hasattr(self, "requeue_cancel_btn"):
+                        self.requeue_cancel_btn.configure(state="disabled")
+                    msg = (
+                        f"NSOPW enrich: updated {summary.get('updated', 0)}/"
+                        f"{summary.get('attempted', 0)} "
+                        f"· matched {summary.get('nsopw_matched', 0)} "
+                        f"· photos {summary.get('with_photo', 0)} "
+                        f"· errors {summary.get('errors', 0)}"
+                    )
+                    if hasattr(self, "requeue_status"):
+                        self.requeue_status.configure(text=msg)
+                    if hasattr(self, "report_status"):
+                        self.report_status.configure(
+                            text=msg + " · re-run Analyze & build"
+                        )
+                    if hasattr(self, "requeue_progress"):
+                        self.requeue_progress.set(1.0)
+                    self.log_queue.put(msg)
+                    try:
+                        self._after_db_data_changed()
+                    except Exception:
+                        pass
+                    messagebox.showinfo("NSOPW enrich", msg)
+
+                self.after(0, done)
+            except Exception as e:
+                err = str(e)
+
+                def fail():
+                    self._set_running(False)
+                    if hasattr(self, "requeue_btn"):
+                        self.requeue_btn.configure(state="normal")
+                    if hasattr(self, "requeue_cancel_btn"):
+                        self.requeue_cancel_btn.configure(state="disabled")
+                    messagebox.showerror("NSOPW enrich failed", err)
+
+                self.after(0, fail)
+            finally:
+                try:
+                    builder.close()
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _start_requeue(self):
         if self.is_running:
@@ -2600,6 +2755,11 @@ class ArchiverApp(ctk.CTk):
         ).pack(side="left", padx=12)
         ctk.CTkButton(
             bar, text="Export CSV", width=100, command=self._export_misclass,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            bar, text="NSOPW enrich", width=120, command=self._start_enrich_misclassified,
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
         ).pack(side="left")
@@ -3183,6 +3343,12 @@ class ArchiverApp(ctk.CTk):
             bar, text="Analyze & build", width=130,
             command=self._reports_build_list,
             fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            bar, text="NSOPW enrich", width=120,
+            command=self._start_enrich_misclassified,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
         ).pack(side="left", padx=(0, 12))
 
         self.report_photos_only = ctk.BooleanVar(value=True)

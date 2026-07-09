@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -195,13 +196,15 @@ class EthnicNameDatabase:
             }
             for group, names in (self.indian_surnames_by_group or {}).items()
         }
-        self._indian_first_lc = {n.lower() for n in (self.indian_first_names or set())}
-        self._hispanic_first_lc = {
-            n.lower() for n in (self.hispanic_first_names or set())
-        }
-        self._anglo_first_lc = {
-            n.lower() for n in (self.anglo_western_first_names or set())
-        }
+        def _fold_set(names) -> set:
+            out = set()
+            for n in names or set():
+                out.add(self._fold_accents(str(n)).lower())
+            return out
+
+        self._indian_first_lc = _fold_set(self.indian_first_names)
+        self._hispanic_first_lc = _fold_set(self.hispanic_first_names)
+        self._anglo_first_lc = _fold_set(self.anglo_western_first_names)
         self._asian_lc = {
             group: {n.lower() for n in names}
             for group, names in self.asian_surnames.items()
@@ -217,7 +220,15 @@ class EthnicNameDatabase:
         self._lookups_ready = True
 
     @staticmethod
-    def _normalize_given_name(first_name: Optional[str]) -> str:
+    def _fold_accents(text: str) -> str:
+        """CRISTÓBAL → cristobal for list matching."""
+        if not text:
+            return ""
+        nfkd = unicodedata.normalize("NFKD", text)
+        return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+    @classmethod
+    def _normalize_given_name(cls, first_name: Optional[str]) -> str:
         """First token of given name, letters only (handles 'MARY-ANN', 'J.')."""
         if not first_name:
             return ""
@@ -226,9 +237,9 @@ class EthnicNameDatabase:
             return ""
         # Take first whitespace token; strip punctuation
         token = raw.replace(",", " ").split()[0]
-        token = re.sub(r"[^A-Za-z\-']", "", token)
+        token = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ\-']", "", token)
         token = token.strip("-'")
-        return token.lower()
+        return cls._fold_accents(token).lower()
 
     def _first_name_signal(self, first_name: Optional[str]) -> str:
         """

@@ -662,6 +662,16 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertLessEqual(conf4, 0.7)
         self.assertGreaterEqual(conf4, 0.5)
 
+        # Cristobal More — English surname + Hispanic given name, not HC Indian
+        self.assertFalse(db.is_indian_surname("More"))
+        eth5, conf5, _ = db.classify_by_name("More", first_name="Cristobal")
+        self.assertFalse(
+            eth5.startswith("Indian"),
+            f"Cristobal More must not be Indian @ high conf, got {eth5} conf={conf5}",
+        )
+        eth6, conf6, _ = db.classify_by_name("More", first_name="CRISTÓBAL")
+        self.assertFalse(eth6.startswith("Indian"))
+
     def test_classify_common_names(self):
         eth = EthnicNameDatabase()
         self.assertEqual(eth.classify_by_name("Garcia")[0], "Hispanic")
