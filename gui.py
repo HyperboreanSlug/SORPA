@@ -1176,9 +1176,16 @@ class ArchiverApp(ctk.CTk):
                 pass
             return
 
+        mid = (record.get("middle_name") or "").strip()
         name = (
-            (record.get("full_name") or "").strip()
-            or f"{record.get('first_name') or ''} {record.get('last_name') or ''}".strip()
+            " ".join(
+                p for p in (
+                    record.get("first_name") or "",
+                    mid,
+                    record.get("last_name") or "",
+                ) if str(p).strip()
+            ).strip()
+            or (record.get("full_name") or "").strip()
             or "—"
         )
         crime = (
@@ -1187,7 +1194,6 @@ class ArchiverApp(ctk.CTk):
             or record.get("offense_type")
             or "—"
         )
-        mid = (record.get("middle_name") or "").strip()
         lines = [
             f"Name: {name}",
             f"Middle: {mid or '—'}",
@@ -2084,7 +2090,13 @@ class ArchiverApp(ctk.CTk):
         # Insert rows first so a detail-drawer photo glitch cannot blank results
         for r in records[:500] if records else []:
             name = (
-                f"{r.get('first_name', '') or ''} {r.get('last_name', '') or ''}".strip()
+                " ".join(
+                    p for p in (
+                        r.get("first_name") or "",
+                        r.get("middle_name") or "",
+                        r.get("last_name") or "",
+                    ) if str(p).strip()
+                ).strip()
                 or (r.get("full_name") or "—")
             )
             crime = (
@@ -2338,6 +2350,16 @@ class ArchiverApp(ctk.CTk):
                     if fixed_yy:
                         self.log_queue.put(
                             f"Repaired {fixed_yy:,} rows with bogus state codes (YY/XX/…)"
+                        )
+                except Exception:
+                    pass
+                # Pull middle names from full_name / multi-token first / raw JSON
+                try:
+                    mid = db.backfill_middle_names()
+                    if mid.get("updated"):
+                        self.log_queue.put(
+                            f"Backfilled middle_name on {mid['updated']:,} rows "
+                            f"(scanned {mid['scanned']:,})"
                         )
                 except Exception:
                     pass
@@ -3150,8 +3172,15 @@ class ArchiverApp(ctk.CTk):
             if key not in pair_example:
                 rec = mc.record or {}
                 name = (
-                    f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
-                ).strip() or (rec.get("full_name") or "—")
+                    " ".join(
+                        p for p in (
+                            rec.get("first_name") or "",
+                            rec.get("middle_name") or "",
+                            rec.get("last_name") or "",
+                        ) if str(p).strip()
+                    )
+                    or (rec.get("full_name") or "—")
+                )
                 pair_example[key] = name
 
         if hasattr(self, "mcstat_transition_tree"):
@@ -3662,9 +3691,15 @@ class ArchiverApp(ctk.CTk):
         for mc in results[:500]:
             rec = dict(mc.record or {})
             name = (
-                f"{rec.get('first_name', '') or ''} "
-                f"{rec.get('last_name', '') or ''}"
-            ).strip() or (rec.get("full_name") or "—")
+                " ".join(
+                    p for p in (
+                        rec.get("first_name") or "",
+                        rec.get("middle_name") or "",
+                        rec.get("last_name") or "",
+                    ) if str(p).strip()
+                )
+                or (rec.get("full_name") or "—")
+            )
             rec["_misclass_expected_race"] = mc.expected_race
             rec["_misclass_likely"] = mc.likely_ethnicity
             rec["_misclass_conf"] = mc.confidence
@@ -3910,9 +3945,13 @@ class ArchiverApp(ctk.CTk):
         key = self._report_item_key(mc)
         verdict = self._report_verdicts.get(key, "unreviewed")
 
+        first = (rec.get("first_name") or "").strip()
+        middle = (rec.get("middle_name") or "").strip()
+        last = (rec.get("last_name") or "").strip()
         name = (
-            f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
-        ).strip() or (rec.get("full_name") or "—")
+            " ".join(p for p in (first, middle, last) if p)
+            or (rec.get("full_name") or "—")
+        )
         state = _format_state_display(rec)
         race = (mc.expected_race or rec.get("race") or "—")
         eth = mc.likely_ethnicity or "—"
@@ -3999,6 +4038,8 @@ class ArchiverApp(ctk.CTk):
         _pill(chips, "Surname", str(eth))
 
         meta_parts = [f"Confidence {conf:.3f}", f"State {state}"]
+        if middle:
+            meta_parts.append(f"Middle {middle}")
         if rec.get("gender"):
             meta_parts.append(str(rec.get("gender")))
         if rec.get("date_of_birth"):
@@ -4200,20 +4241,28 @@ class ArchiverApp(ctk.CTk):
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow([
-                "verdict", "name", "recorded_race", "likely_ethnicity", "confidence",
+                "verdict", "first_name", "middle_name", "last_name", "name",
+                "recorded_race", "likely_ethnicity", "confidence",
                 "state", "matching_names", "photo_path", "source_url", "id",
             ])
             for mc, verdict, rec in self._reports_iter_export_rows():
+                first = (rec.get("first_name") or "").strip()
+                middle = (rec.get("middle_name") or "").strip()
+                last = (rec.get("last_name") or "").strip()
                 name = (
-                    f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
-                ).strip() or (rec.get("full_name") or "")
+                    " ".join(p for p in (first, middle, last) if p)
+                    or (rec.get("full_name") or "")
+                )
                 w.writerow([
                     verdict,
+                    first,
+                    middle,
+                    last,
                     name,
                     mc.expected_race,
                     mc.likely_ethnicity,
                     f"{mc.confidence:.4f}",
-                    rec.get("state") or rec.get("source_state") or "",
+                    _format_state_display(rec),
                     "; ".join(mc.matching_names or []),
                     rec.get("photo_path") or "",
                     rec.get("source_url") or "",
@@ -4286,9 +4335,13 @@ class ArchiverApp(ctk.CTk):
 
         cards_html: List[str] = []
         for i, (mc, verdict, rec) in enumerate(rows, 1):
+            first = (rec.get("first_name") or "").strip()
+            middle = (rec.get("middle_name") or "").strip()
+            last = (rec.get("last_name") or "").strip()
             name = (
-                f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
-            ).strip() or (rec.get("full_name") or "—")
+                " ".join(p for p in (first, middle, last) if p)
+                or (rec.get("full_name") or "—")
+            )
             state = _format_state_display(rec)
             photo = (rec.get("photo_path") or "").strip()
             has_photo = photo and Path(photo).is_file()
@@ -4339,7 +4392,7 @@ class ArchiverApp(ctk.CTk):
       <span class="arrow">→</span>
       <span class="pill eth">{eth}</span>
     </div>
-    <p class="meta">Confidence {conf} · State {_esc(state)}</p>
+    <p class="meta">Confidence {conf} · State {_esc(state)}{(' · Middle: ' + _esc(middle)) if middle else ''}</p>
     <p class="names">Matched: {_esc('; '.join(mc.matching_names[:5]) if mc.matching_names else '—')}</p>
     {link}
   </div>

@@ -568,9 +568,9 @@ class SexOffenderSearcher:
             return 0
 
         headers = [
-            "first_name", "last_name", "full_name", "race", "likely_ethnicity",
-            "confidence", "matching_names", "state", "county", "address",
-            "age", "gender", "offense_type"
+            "first_name", "middle_name", "last_name", "full_name", "race",
+            "likely_ethnicity", "confidence", "matching_names", "state", "county",
+            "address", "age", "gender", "offense_type",
         ]
 
         with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -580,6 +580,7 @@ class SexOffenderSearcher:
             for mc in misclassifications:
                 row = {
                     "first_name": mc.record.get("first_name"),
+                    "middle_name": mc.record.get("middle_name") or _middle_name_from_record(mc.record or {}),
                     "last_name": mc.record.get("last_name"),
                     "full_name": mc.record.get("full_name"),
                     "race": mc.expected_race,
