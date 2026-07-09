@@ -268,6 +268,28 @@ def _stretch_columns(tree: ttk.Treeview, columns: List[str], widths: Optional[Li
         tree.column(c, width=w, minwidth=40, stretch=True)
 
 
+def _format_state_display(record: Optional[Dict[str, Any]]) -> str:
+    """Prefer a real US/territory code; ignore NSOPW junk like 'YY'."""
+    if not record:
+        return "—"
+    try:
+        from scraper.nsopw_client import normalize_jurisdiction_code
+
+        code = normalize_jurisdiction_code(
+            record.get("state"),
+            record.get("source_state"),
+        )
+        if code:
+            return code
+    except Exception:
+        pass
+    for key in ("state", "source_state"):
+        raw = (record.get(key) or "").strip().upper()
+        if raw and raw not in ("YY", "XX", "ZZ", "NA", "N/A", "UN", "UK", "US"):
+            return raw
+    return "—"
+
+
 def _format_race_display(race: Optional[str]) -> str:
     """Display race in normal case (not ALL CAPS), e.g. WHITE → White."""
     raw = (race or "").strip()
@@ -1171,7 +1193,7 @@ class ArchiverApp(ctk.CTk):
             f"Ethnicity: {record.get('ethnicity') or '—'}",
             f"Gender: {record.get('gender') or '—'}",
             f"Age / DOB: {record.get('age') or '—'} / {record.get('date_of_birth') or '—'}",
-            f"State: {record.get('state') or record.get('source_state') or '—'}",
+            f"State: {_format_state_display(record)}",
             f"County / City: {record.get('county') or '—'} / {record.get('city') or '—'}",
             f"Address: {record.get('address') or '—'}",
             f"Crime: {crime}",
@@ -2067,8 +2089,7 @@ class ArchiverApp(ctk.CTk):
                 (r.get("crime") or r.get("offense_description") or r.get("offense_type") or "")
                 or "—"
             )
-            # Prefer state column, fall back to source_state for display
-            st = (r.get("state") or r.get("source_state") or "—")
+            st = _format_state_display(r)
             iid = self.search_tree.insert(
                 "",
                 "end",
@@ -2309,6 +2330,15 @@ class ArchiverApp(ctk.CTk):
         try:
             db = Database(self.db_path)
             try:
+                # One-shot fix for NSOPW junk location.state codes (e.g. YY → FL)
+                try:
+                    fixed_yy = db.repair_bogus_states()
+                    if fixed_yy:
+                        self.log_queue.put(
+                            f"Repaired {fixed_yy:,} rows with bogus state codes (YY/XX/…)"
+                        )
+                except Exception:
+                    pass
                 report = db.get_integrity_report()
                 incomplete = db.find_incomplete_reports(
                     need_race=True, need_crime=True, need_photo=True, need_html=False,
@@ -3838,7 +3868,7 @@ class ArchiverApp(ctk.CTk):
         name = (
             f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
         ).strip() or (rec.get("full_name") or "—")
-        state = (rec.get("state") or rec.get("source_state") or "—").strip() or "—"
+        state = _format_state_display(rec)
         race = (mc.expected_race or rec.get("race") or "—")
         eth = mc.likely_ethnicity or "—"
         conf = float(mc.confidence or 0.0)
@@ -4203,7 +4233,7 @@ class ArchiverApp(ctk.CTk):
             name = (
                 f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
             ).strip() or (rec.get("full_name") or "—")
-            state = rec.get("state") or rec.get("source_state") or "—"
+            state = _format_state_display(rec)
             photo = (rec.get("photo_path") or "").strip()
             has_photo = photo and Path(photo).is_file()
             img_html = (

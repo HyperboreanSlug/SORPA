@@ -83,6 +83,41 @@ DEFAULT_JURISDICTIONS = [
     "WV", "WI", "WY", "GU", "PR", "USVI", "AMERICANSAMOA", "CNMI",
 ]
 
+# NSOPW sometimes returns bogus location.state codes (esp. "YY" for FL rows).
+# Prefer jurisdictionId when location.state is not a real US/territory code.
+_VALID_JURISDICTION_CODES = frozenset(j.upper() for j in DEFAULT_JURISDICTIONS) | {
+    "AS",  # American Samoa short form
+    "VI",  # Virgin Islands short form
+    "MP",  # CNMI short form
+}
+_BOGUS_STATE_CODES = frozenset({
+    "YY", "XX", "ZZ", "NA", "N/A", "UN", "UK", "00", "??", "NONE", "NULL",
+})
+
+
+def normalize_jurisdiction_code(
+    *candidates: Optional[str],
+    default: str = "",
+) -> str:
+    """
+    Return the first candidate that looks like a real jurisdiction code.
+
+    Filters NSOPW junk such as location.state == \"YY\" (seen on many FL hits
+    where jurisdictionId correctly reports FL).
+    """
+    for raw in candidates:
+        code = (raw or "").strip().upper()
+        if not code:
+            continue
+        if code in _BOGUS_STATE_CODES:
+            continue
+        if code in _VALID_JURISDICTION_CODES:
+            return code
+        # 2-letter alpha codes that are not in the list still beat YY
+        if len(code) == 2 and code.isalpha() and code not in _BOGUS_STATE_CODES:
+            return code
+    return (default or "").strip().upper()
+
 
 def _token_starts_with(value: str, prefix: str) -> bool:
     """True if value starts with prefix (case-insensitive)."""
@@ -204,6 +239,8 @@ class NSOPWOffender:
         """Map to database/offender dict."""
         import json
 
+        st = normalize_jurisdiction_code(self.state, self.jurisdiction_id)
+        src_st = normalize_jurisdiction_code(self.jurisdiction_id, self.state) or st or "US"
         return {
             "first_name": self.first_name or None,
             "last_name": self.last_name or None,
@@ -211,13 +248,13 @@ class NSOPWOffender:
             "gender": self.gender or None,
             "date_of_birth": self.date_of_birth or None,
             "age": self.age,
-            "state": self.state or self.jurisdiction_id or None,
+            "state": st or None,
             "city": self.city or None,
             "address": self.address or None,
             "zip_code": self.zip_code or None,
             "latitude": self.latitude,
             "longitude": self.longitude,
-            "source_state": self.jurisdiction_id or "US",
+            "source_state": src_st,
             # Normalize: NSOPW state links often append volatile uid= session tokens
             "source_url": _stable_source_url(self.offender_uri) or None,
             "external_id": _stable_external_id(self.offender_uri, self.jurisdiction_id)
@@ -508,6 +545,15 @@ class NSOPWClient:
         except (TypeError, ValueError):
             lat = lon = None
 
+        jur = normalize_jurisdiction_code(
+            loc.get("state"),
+            obj.get("jurisdictionId"),
+        )
+        jur_id = normalize_jurisdiction_code(
+            obj.get("jurisdictionId"),
+            loc.get("state"),
+        ) or (obj.get("jurisdictionId") or "").strip().upper()
+
         return NSOPWOffender(
             first_name=given,
             middle_name=middle,
@@ -516,13 +562,14 @@ class NSOPWClient:
             gender=(obj.get("gender") or "").strip(),
             date_of_birth=dob,
             age=age,
-            state=(loc.get("state") or obj.get("jurisdictionId") or "").strip(),
+            # Prefer real state; never store NSOPW junk like "YY"
+            state=jur or jur_id,
             city=(loc.get("city") or "").strip(),
             address=(loc.get("streetAddress") or "").strip(),
             zip_code=str(loc.get("zipCode") or "").strip(),
             latitude=lat,
             longitude=lon,
-            jurisdiction_id=(obj.get("jurisdictionId") or "").strip(),
+            jurisdiction_id=jur_id or jur,
             offender_uri=unescape((obj.get("offenderUri") or "").strip()),
             image_uri=unescape((obj.get("imageUri") or "").strip()),
             absconder=bool(obj.get("absconder")),

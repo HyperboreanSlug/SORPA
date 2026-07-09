@@ -404,6 +404,7 @@ class Database:
         """
         Write-time identity cleanup: strip session tokens from URLs and prefer
         stable registry Ids in external_id (prevents NSOPW uid= duplicates).
+        Also fixes NSOPW junk state codes like ``YY`` using source_state.
         """
         out = dict(record or {})
         url = str(out.get("source_url") or "").strip()
@@ -425,7 +426,79 @@ class Database:
             norm = self.normalize_identity_url(url)
             if norm:
                 out["external_id"] = norm
+        # Drop junk NSOPW location.state codes (YY seen on many FL rows)
+        try:
+            from .nsopw_client import normalize_jurisdiction_code
+
+            fixed = normalize_jurisdiction_code(out.get("state"), out.get("source_state"))
+            if fixed:
+                out["state"] = fixed
+                if not out.get("source_state") or str(out.get("source_state")).upper() in (
+                    "YY", "XX", "ZZ", "US",
+                ):
+                    out["source_state"] = fixed
+            elif str(out.get("state") or "").strip().upper() in ("YY", "XX", "ZZ"):
+                # Prefer URL host inference for FDLE etc.
+                u = str(out.get("source_url") or "").lower()
+                if "fdle.state.fl" in u or "florida" in u:
+                    out["state"] = "FL"
+                    out["source_state"] = out.get("source_state") or "FL"
+                else:
+                    out["state"] = None
+        except Exception:
+            st = str(out.get("state") or "").strip().upper()
+            if st in ("YY", "XX", "ZZ"):
+                src = str(out.get("source_state") or "").strip().upper()
+                if src and src not in ("YY", "XX", "ZZ", "US"):
+                    out["state"] = src
         return out
+
+    def repair_bogus_states(self) -> int:
+        """
+        Fix existing rows where state is YY/XX/ZZ but source_state (or URL) is real.
+
+        Returns number of rows updated.
+        """
+        try:
+            from .nsopw_client import normalize_jurisdiction_code
+        except Exception:
+            normalize_jurisdiction_code = None  # type: ignore
+
+        rows = self._conn.execute(
+            """
+            SELECT id, state, source_state, source_url FROM offenders
+            WHERE UPPER(TRIM(COALESCE(state, ''))) IN ('YY', 'XX', 'ZZ', 'NA', 'UN')
+               OR (
+                 (state IS NULL OR TRIM(state) = '')
+                 AND source_state IS NOT NULL AND TRIM(source_state) != ''
+               )
+            """
+        ).fetchall()
+        n = 0
+        for row in rows:
+            d = dict(row)
+            fixed = None
+            if normalize_jurisdiction_code:
+                fixed = normalize_jurisdiction_code(d.get("state"), d.get("source_state"))
+            if not fixed:
+                src = str(d.get("source_state") or "").strip().upper()
+                if src and src not in ("YY", "XX", "ZZ", "US", "NA"):
+                    fixed = src
+            if not fixed:
+                u = str(d.get("source_url") or "").lower()
+                if "fdle.state.fl" in u:
+                    fixed = "FL"
+            if not fixed:
+                continue
+            self._conn.execute(
+                "UPDATE offenders SET state = ?, source_state = COALESCE(NULLIF(TRIM(source_state), ''), ?) "
+                "WHERE id = ?",
+                (fixed, fixed, int(d["id"])),
+            )
+            n += 1
+        if n:
+            self._conn.commit()
+        return n
 
     def insert_offender(self, record: Dict[str, Any]) -> int:
         """Insert a single offender record. Returns the row id."""
