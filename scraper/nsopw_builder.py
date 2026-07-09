@@ -1774,12 +1774,33 @@ class NSOPWEthnicDatabaseBuilder:
         )
         return summary
 
+    @staticmethod
+    def record_needs_enrichment(rec: Dict[str, Any]) -> bool:
+        """True if race, crime, photo, URL, or archived HTML is still missing."""
+        if not rec:
+            return False
+        photo = (rec.get("photo_path") or "").strip()
+        has_photo = bool(photo) and Path(photo).is_file()
+        has_race = bool((rec.get("race") or "").strip())
+        has_crime = bool(
+            (rec.get("crime") or "").strip()
+            or (rec.get("offense_description") or "").strip()
+            or (rec.get("offense_type") or "").strip()
+        )
+        has_url = bool((rec.get("source_url") or "").strip())
+        has_html = bool((rec.get("report_html_path") or "").strip()) and Path(
+            (rec.get("report_html_path") or "").strip()
+        ).exists()
+        # Need enrich if any core field is missing
+        return not (has_photo and has_race and has_crime and has_url)
+
     def enrich_misclassified(
         self,
         records: List[Dict[str, Any]],
         *,
         limit: int = 50,
         prefer_missing_photo: bool = True,
+        only_missing_data: bool = True,
         enrich_reports: bool = True,
         save_html: bool = True,
         log: Optional[Callable[[str], None]] = None,
@@ -1789,7 +1810,10 @@ class NSOPWEthnicDatabaseBuilder:
         """
         NSOPW / report refresh for misclassification candidates.
 
-        For each person:
+        By default only rows **missing** photo, race, crime, or source URL are
+        processed (complete rows are skipped).
+
+        For each person still needing data:
           1. If they already have a source_url → re-fetch report (photo/race/crime).
           2. Else search NSOPW by first+last, pick best matching hit, attach URL
              and optional report/photo enrichment, update the existing DB row.
@@ -1802,7 +1826,7 @@ class NSOPWEthnicDatabaseBuilder:
             else:
                 print(msg)
 
-        # Deduplicate by id; prefer rows that still need photo when requested
+        # Deduplicate by id
         by_id: Dict[int, Dict[str, Any]] = {}
         for rec in records or []:
             try:
@@ -1814,11 +1838,22 @@ class NSOPWEthnicDatabaseBuilder:
             by_id[rid] = dict(rec)
 
         queue: List[Dict[str, Any]] = list(by_id.values())
+        skipped_complete = 0
+        if only_missing_data:
+            incomplete: List[Dict[str, Any]] = []
+            for rec in queue:
+                if self.record_needs_enrichment(rec):
+                    incomplete.append(rec)
+                else:
+                    skipped_complete += 1
+            queue = incomplete
+
         if prefer_missing_photo:
             queue.sort(
                 key=lambda r: (
                     0 if not (r.get("photo_path") or "").strip() else 1,
                     0 if not (r.get("source_url") or "").strip() else 1,
+                    0 if not (r.get("race") or "").strip() else 1,
                     str(r.get("last_name") or ""),
                 )
             )
@@ -1827,6 +1862,7 @@ class NSOPWEthnicDatabaseBuilder:
 
         summary: Dict[str, Any] = {
             "queued": len(queue),
+            "skipped_complete": skipped_complete,
             "attempted": 0,
             "updated": 0,
             "nsopw_searched": 0,
@@ -1839,8 +1875,9 @@ class NSOPWEthnicDatabaseBuilder:
         }
         total_q = len(queue)
         _log(
-            f"NSOPW enrich misclassified: {total_q} people "
-            f"(prefer_missing_photo={prefer_missing_photo}, reports={enrich_reports})"
+            f"NSOPW enrich misclassified: {total_q} incomplete "
+            f"(skipped complete={skipped_complete}, "
+            f"only_missing={only_missing_data}, reports={enrich_reports})"
         )
         if on_progress:
             try:

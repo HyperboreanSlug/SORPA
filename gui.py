@@ -2498,6 +2498,8 @@ class ArchiverApp(ctk.CTk):
             messagebox.showwarning("Busy", "Wait for the current job to finish.")
             return
 
+        from scraper.nsopw_builder import NSOPWEthnicDatabaseBuilder
+
         results = list(self._misclass_results or [])
         items = list(self._report_items or [])
         if items:
@@ -2525,13 +2527,27 @@ class ArchiverApp(ctk.CTk):
             )
             return
 
+        # Only rows still missing photo / race / crime / URL
+        incomplete = [
+            r for r in records
+            if NSOPWEthnicDatabaseBuilder.record_needs_enrichment(r)
+        ]
+        n_complete = len(records) - len(incomplete)
+        if not incomplete:
+            messagebox.showinfo(
+                "NSOPW enrich",
+                f"All {len(records):,} candidates already have photo + race + crime + URL.\n"
+                "Nothing to look up.",
+            )
+            return
+
         try:
             enrich_lim = int(self.enrich_limit_var.get()) if hasattr(self, "enrich_limit_var") else 25
         except (TypeError, ValueError):
             enrich_lim = 25
         if enrich_lim <= 0:
             # 0 = no cap (still hard-cap to avoid runaway API use)
-            enrich_lim = min(len(records), 500)
+            enrich_lim = min(len(incomplete), 500)
         else:
             enrich_lim = max(1, min(enrich_lim, 500))
 
@@ -2539,10 +2555,12 @@ class ArchiverApp(ctk.CTk):
             "NSOPW enrich misclassified?",
             (
                 f"Source: {source_label}\n"
-                f"People available: {len(records):,}\n"
-                f"Lookup limit: {enrich_lim} (separate from Reports Max / scan cap)\n"
-                f"Prefers missing photos first.\n\n"
-                "For each person:\n"
+                f"Candidates: {len(records):,} · incomplete (need data): {len(incomplete):,}\n"
+                f"Already complete (skipped): {n_complete:,}\n"
+                f"Lookup limit: {enrich_lim}\n\n"
+                "Only people missing photo, race, crime, or source URL are processed.\n"
+                "Prefer missing photos first.\n\n"
+                "For each incomplete person:\n"
                 "  • If they have a report URL → re-fetch photo/race/crime\n"
                 "  • Else → NSOPW first+last search, attach best match, fetch report\n\n"
                 "Existing DB rows are updated (no new duplicates).\n"
@@ -2594,9 +2612,10 @@ class ArchiverApp(ctk.CTk):
             )
             try:
                 summary = builder.enrich_misclassified(
-                    records,
+                    incomplete,
                     limit=enrich_lim,
                     prefer_missing_photo=True,
+                    only_missing_data=True,
                     enrich_reports=True,
                     save_html=True,
                     log=log,
@@ -2614,6 +2633,7 @@ class ArchiverApp(ctk.CTk):
                         f"{summary.get('attempted', 0)} "
                         f"· matched {summary.get('nsopw_matched', 0)} "
                         f"· photos {summary.get('with_photo', 0)} "
+                        f"· skipped complete {summary.get('skipped_complete', 0)} "
                         f"· errors {summary.get('errors', 0)}"
                     )
                     if hasattr(self, "requeue_status"):
