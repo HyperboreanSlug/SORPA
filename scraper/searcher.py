@@ -30,8 +30,18 @@ class Misclassification:
 # Map likely-ethnicity labels to race strings that are considered a match
 # (i.e. not a misclassification when the recorded race is one of these).
 # Keys are *canonical* race codes from _canonical_race_key().
+#
+# Hispanic: US registries usually record race (White/Black/…) and ethnicity
+# separately. Most states put Hispanic offenders as race=White with little or
+# no ethnicity field filled — that is normal OMB practice, not a mismatch.
+# Only non-White, non-Hispanic race codes count as potential mislabels.
 _ETHNICITY_COMPATIBLE_RACES = {
-    "hispanic": {"HISPANIC", "LATINO", "LATINA", "LATINX", "H", "WHITE HISPANIC"},
+    "hispanic": {
+        "HISPANIC", "LATINO", "LATINA", "LATINX", "H",
+        "WHITE HISPANIC", "HISPANIC OR LATINO", "LATINO OR HISPANIC",
+        # Standard race when ethnicity is not in the race field:
+        "WHITE", "W", "CAUCASIAN", "CAUCASION",
+    },
     "asian": {
         "ASIAN", "ASIAN / PACIFIC ISLANDER", "ASIAN/PACIFIC ISLANDER",
         "PACIFIC ISLANDER", "A", "API", "CHINESE", "KOREAN", "JAPANESE",
@@ -75,6 +85,10 @@ _RACE_ALIASES = {
     "LATINA": "HISPANIC",
     "LATINX": "HISPANIC",
     "HISPANIC": "HISPANIC",
+    "HISPANIC OR LATINO": "HISPANIC",
+    "LATINO OR HISPANIC": "HISPANIC",
+    "HISPANIC/LATINO": "HISPANIC",
+    "LATINO/HISPANIC": "HISPANIC",
     "A": "ASIAN",
     "API": "ASIAN",
     "ASIAN": "ASIAN",
@@ -117,6 +131,9 @@ def _canonical_race_key(recorded_race: str) -> str:
     # White Hispanic kept distinct from White
     if "HISPANIC" in r_spaced and "WHITE" in r_spaced:
         return "WHITE HISPANIC"
+    # "Hispanic or Latino" / "Latino or Hispanic" without White
+    if "HISPANIC" in r_spaced or "LATINO" in r_spaced or "LATINA" in r_spaced:
+        return "HISPANIC"
     if r_spaced.startswith("WHITE") or r_spaced.endswith(" WHITE"):
         return "WHITE"
 
@@ -189,6 +206,11 @@ def _is_compatible(likely_ethnicity: str, recorded_race: str) -> bool:
 
     # Indian surnames: Other / Other Asian are common registry codes — not mismatches
     if family == "indian" and _is_other_or_other_asian(race):
+        return True
+
+    # Hispanic surnames: empty / unknown race are not useful mismatch signals
+    # (registries often omit race; White is handled via compatible set).
+    if family == "hispanic" and race in ("UNKNOWN", "OTHER"):
         return True
 
     compatible = _ETHNICITY_COMPATIBLE_RACES.get(family)

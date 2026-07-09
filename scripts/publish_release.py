@@ -70,7 +70,7 @@ def api_request(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="v1.3.13")
+    ap.add_argument("--tag", default="v1.3.14")
     ap.add_argument(
         "--zip",
         type=Path,
@@ -120,11 +120,9 @@ Standalone **Windows** GUI package (no Python install required).
 4. If the app fails to start, install [VC++ Redistributable 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
 
 ### Highlights ({tag})
-- **Reports race toggles**: separate **White / Black / Other** filters for the list and export
-- **Reports pagination**: **Page size** + **Prev / Next** (export uses full filtered pool)
-- **Show filter**: **Unconfirmed** · **Confirmed incorrect** · **Confirmed correct**
-- **Confirmed correct drops** off the default Unconfirmed sheet (reopen via Show)
-- **Middle names**: export/backfill + first+middle confidence scoring (prior)
+- **Hispanic misclass fix**: race=**White** is compatible with Hispanic surnames (OMB/registry practice) — no more ~98% false positive rate
+- **Hispanic labels**: `Hispanic or Latino` and similar map to Hispanic; Unknown/Other ignored for Hispanic
+- **Reports** (prior): White/Black/Other toggles, pagination, Show Unconfirmed / Confirmed incorrect / Confirmed correct
 
 ### Notes
 - Runtime data (`data/`, downloads, backups) is local-only and is **not** shipped in this package
