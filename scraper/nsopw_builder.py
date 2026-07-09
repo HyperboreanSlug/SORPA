@@ -34,7 +34,105 @@ DEFAULT_FIRST_NAMES = [
 # Single-letter prefixes: one search per letter covers partial first-name matches
 FIRST_INITIALS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
+# Common *Indian / South Asian* given-name starting letters (not US SSA).
+# Frequency-style order: A/S/R/P/M/K/V/N/B/D dominate Indian first names
+# (Amit, Suresh, Raj, Priya, Mohan, Krishna, Vijay, Neha, Bharat, Deepak, …).
+# Optional abbreviated mode — default remains full A–Z for max coverage.
+FIRST_INITIALS_INDIAN = list("ASRPMKVNBD")
+# Slightly wider Indian set (~top 14)
+FIRST_INITIALS_INDIAN_WIDE = list("ASRPMKVNBDGJHT")
+
+# Back-compat aliases (old "common" = US letters; now maps to Indian)
+FIRST_INITIALS_COMMON = FIRST_INITIALS_INDIAN
+FIRST_INITIALS_COMMON_WIDE = FIRST_INITIALS_INDIAN_WIDE
+
+
+def first_initials_for_mode(mode: str) -> List[str]:
+    """Resolve first-name letter set from first_mode string.
+
+    Default is full A–Z. Abbreviated Indian-letter modes are optional.
+    """
+    m = (mode or "initials").lower().strip()
+    if m in (
+        "indian",
+        "common",
+        "common_letters",
+        "most_common",
+        "top10",
+        "abbreviated",
+        "abbrev",
+    ):
+        return list(FIRST_INITIALS_INDIAN)
+    if m in (
+        "indian_wide",
+        "common_wide",
+        "common14",
+        "top14",
+        "wide",
+    ):
+        return list(FIRST_INITIALS_INDIAN_WIDE)
+    if m in ("full", "full_names"):
+        return list(DEFAULT_FIRST_NAMES)
+    # "initials" / "all" / A–Z (default — not abbreviated)
+    return list(FIRST_INITIALS)
+
+
+def is_abbreviated_first_mode(mode: str) -> bool:
+    """True when first-letter set is the optional Indian abbreviated set."""
+    m = (mode or "initials").lower().strip()
+    return m in (
+        "indian",
+        "indian_wide",
+        "common",
+        "common_letters",
+        "most_common",
+        "top10",
+        "common_wide",
+        "common14",
+        "top14",
+        "wide",
+        "abbreviated",
+        "abbrev",
+    )
+
+
+def indian_surname_digraphs(
+    surnames: Sequence[str] | None = None,
+) -> Set[str]:
+    """
+    2-letter last-name prefixes that appear in Indian surnames.
+
+    Used so abbreviated / compact last tokens are only combos that actually
+    occur in Indian name data — never US-frequency or brute-force AA–ZZ.
+    """
+    if surnames is None:
+        try:
+            edb = get_ethnic_database()
+            pool: Set[str] = set()
+            pool.update(edb.indian_surnames or set())
+            pool.update(edb.indian_high_confidence_surnames or set())
+            for names in (edb.indian_surnames_by_group or {}).values():
+                pool.update(names or set())
+            surnames = sorted(pool)
+        except Exception:
+            surnames = [
+                "Patel", "Shah", "Singh", "Kumar", "Gupta", "Sharma",
+                "Reddy", "Nair", "Iyer", "Rao", "Das", "Banerjee",
+                "Chatterjee", "Mukherjee", "Krishnan", "Menon", "Pillai",
+            ]
+    digs: Set[str] = set()
+    for sn in surnames:
+        al = _surname_alnum(sn)
+        if len(al) >= 2:
+            digs.add(al[:2].upper())
+        elif len(al) == 1:
+            digs.add(al.upper())
+    return digs
+
 # NSOPW API: len(firstName) + len(lastName) >= 3 (verified live).
+# Keep the floor at 3 so compact short partials maximize coverage per query
+# (e.g. M+AH covers Ahmed/Ahmad). API alias/fuzzy extras are kept as scrape
+# yield; list surnames are bucketed matched vs other in the builder.
 MIN_COMBINED_NAME_LEN = 3
 
 # Default rate limits (seconds / caps)
@@ -54,8 +152,9 @@ def last_name_search_prefix(
     """
     Shortest last-name token valid with this first name under NSOPW's min length.
 
-    With first="M" (1 char), last needs 2 chars → "AH" for Ahmed/Ahmad.
-    With first="MO" (2), last needs 1 char → "A".
+    Goal: fewest API queries for most coverage. With first="M" (1 char), last
+    needs 2 chars → "AH" for Ahmed/Ahmad (one search covers both). With
+    first="MO" (2), last needs 1 char → "A".
     """
     first_s = (first or "").strip()
     last_s = (surname or "").strip()
@@ -118,6 +217,7 @@ def compact_search_plan(
     surname_pairs: Sequence[Tuple[str, str]],
     firsts: Sequence[str],
     min_combined: int = MIN_COMBINED_NAME_LEN,
+    allowed_last_prefixes: Optional[Set[str]] = None,
 ) -> List[Tuple[str, str, str, List[str]]]:
     """
     Collapse (first, full_surname) into unique (first, last_prefix) queries.
@@ -125,7 +225,16 @@ def compact_search_plan(
     Returns list of (first, last_prefix, eth_label, covered_full_surnames).
     When several list surnames share a short last prefix (Ahmed/Ahmad → AH),
     one NSOPW query covers them all.
+
+    Last prefixes are always derived from the selected surnames (not brute-force
+    AA–ZZ). If ``allowed_last_prefixes`` is set (e.g. Indian digraph whitelist),
+    only prefixes in that set are kept — so abbreviated surname search only uses
+    letter combos that appear in Indian names.
     """
+    allow: Optional[Set[str]] = None
+    if allowed_last_prefixes is not None:
+        allow = {p.upper() for p in allowed_last_prefixes if p}
+
     # key: (first_norm, last_prefix_norm) -> first, last_prefix, eth, surnames
     first_disp: Dict[Tuple[str, str], str] = {}
     prefix_disp: Dict[Tuple[str, str], str] = {}
@@ -146,7 +255,16 @@ def compact_search_plan(
                 prefix = sn
                 if len(fn) + len(prefix) < min_combined:
                     continue
-            key = (fn.upper(), prefix.upper())
+            pref_key = prefix.upper()
+            # Whitelist: only Indian-likely (or other allowed) last letter combos
+            if allow is not None and pref_key not in allow:
+                # 1-letter last prefixes: allow if that letter starts any digraph
+                if len(pref_key) == 1:
+                    if not any(d.startswith(pref_key) for d in allow):
+                        continue
+                else:
+                    continue
+            key = (fn.upper(), pref_key)
             first_disp[key] = fn
             prefix_disp[key] = prefix
             if eth and not eth_disp.get(key):
@@ -173,10 +291,85 @@ def estimate_compact_query_count(
     surname_pairs: Sequence[Tuple[str, str]],
     firsts: Sequence[str] | None = None,
     min_combined: int = MIN_COMBINED_NAME_LEN,
+    allowed_last_prefixes: Optional[Set[str]] = None,
 ) -> int:
     """Estimate unique NSOPW queries after short-prefix collapse."""
     firsts = list(firsts) if firsts is not None else list(FIRST_INITIALS)
-    return len(compact_search_plan(surname_pairs, firsts, min_combined=min_combined))
+    return len(
+        compact_search_plan(
+            surname_pairs,
+            firsts,
+            min_combined=min_combined,
+            allowed_last_prefixes=allowed_last_prefixes,
+        )
+    )
+
+
+def describe_first_mode(mode: str) -> str:
+    """Short human label for first-name strategy."""
+    m = (mode or "initials").lower().strip()
+    if m in (
+        "indian",
+        "common",
+        "common_letters",
+        "most_common",
+        "top10",
+        "abbreviated",
+        "abbrev",
+    ):
+        return (
+            f"Indian firsts {''.join(FIRST_INITIALS_INDIAN)} "
+            f"({len(FIRST_INITIALS_INDIAN)} letters, abbreviated)"
+        )
+    if m in (
+        "indian_wide",
+        "common_wide",
+        "common14",
+        "top14",
+        "wide",
+    ):
+        return (
+            f"Indian firsts wide {''.join(FIRST_INITIALS_INDIAN_WIDE)} "
+            f"({len(FIRST_INITIALS_INDIAN_WIDE)} letters, abbreviated)"
+        )
+    if m in ("full", "full_names"):
+        return f"full first names ({len(DEFAULT_FIRST_NAMES)})"
+    return f"A–Z firsts ({len(FIRST_INITIALS)} letters, default)"
+
+
+def last_prefix_whitelist_for(
+    ethnicity: str,
+    surname_pairs: Sequence[Tuple[str, str]],
+    *,
+    abbreviated: bool,
+) -> Optional[Set[str]]:
+    """
+    When abbreviated Indian search is on, restrict last prefixes to digraphs
+    that appear in Indian surname data only (not US-style / brute-force AA–ZZ).
+
+    Default (non-abbreviated): None → all digraphs derived from selected surnames
+    (still list-derived; never brute-force AA–ZZ).
+    """
+    if not abbreviated:
+        return None
+    eth = (ethnicity or "").lower().strip()
+    indianish = eth in (
+        "indian",
+        "indian_high_confidence",
+        "high_confidence_indian",
+        "high-confidence indian",
+        "indian_hc",
+        "south_asian",
+        "southasian",
+    ) or eth.startswith("indian")
+    if not indianish:
+        # Non-Indian ethnicity: still only list-derived prefixes (no extra filter)
+        return None
+    # Indian corpus digraphs + digraphs from the selected list surnames
+    # (selected is usually already in corpus; union keeps HC-only edge names)
+    return indian_surname_digraphs() | indian_surname_digraphs(
+        [s for s, _ in surname_pairs]
+    )
 
 
 @dataclass
@@ -569,12 +762,19 @@ class NSOPWEthnicDatabaseBuilder:
         Run the ethnic-name NSOPW search pipeline.
 
         first_mode:
-          - "initials" (default): A–Z single-letter prefixes (partial first-name match)
+          - "initials" (default): full A–Z first-letter prefixes
+          - "indian" / "common": abbreviated Indian given-name letters
+            (ASRPMKVNBD) — optional fewer searches; not the default
+          - "indian_wide" / "common_wide": wider Indian set (+GJHT)
           - "full": use DEFAULT_FIRST_NAMES or provided first_names list
           - "custom": only the provided first_names list
 
         Short last-name prefixes (min combined first+last length 3) collapse many
         list surnames into fewer queries (e.g. M+AH covers Ahmed and Ahmad).
+        Prefixes are always derived from the selected surname list (never
+        brute-force AA–ZZ). With abbreviated Indian first-mode on Indian
+        ethnicity lists, last digraphs are further restricted to Indian-likely
+        letter combos.
 
         use_compact_prefixes:
           When True (default), collapse surnames to short last prefixes that
@@ -713,13 +913,11 @@ class NSOPWEthnicDatabaseBuilder:
         mode = (first_mode or "initials").lower().strip()
         if first_names is not None:
             firsts = [f.strip() for f in first_names if f and str(f).strip()]
-        elif mode == "full":
-            firsts = list(DEFAULT_FIRST_NAMES)
         else:
-            firsts = list(FIRST_INITIALS)
+            firsts = first_initials_for_mode(mode)
 
         if not firsts:
-            firsts = list(FIRST_INITIALS)
+            firsts = list(FIRST_INITIALS)  # default full A–Z, not abbreviated
 
         jurs = list(jurisdictions) if jurisdictions else list(DEFAULT_JURISDICTIONS)
         surname_pairs = self.surnames_for_ethnicity(
@@ -731,15 +929,24 @@ class NSOPWEthnicDatabaseBuilder:
         eth_key = (ethnicity or "").lower()
         sub_disp = (subcategory or "all").strip() or "all"
 
-        # Collapse to short last prefixes (first+last ≥ min_combined) for fewer API calls
+        # Collapse to short last prefixes (first+last ≥ min_combined) for fewer API calls.
+        # Last prefixes always come from selected surnames; when abbreviated Indian
+        # first-mode is on, further restrict to Indian-likely digraphs only.
         try:
             mcl = max(3, int(min_combined_len))
         except (TypeError, ValueError):
             mcl = MIN_COMBINED_NAME_LEN
+        abbrev = is_abbreviated_first_mode(mode)
+        last_allow = last_prefix_whitelist_for(
+            eth_key, surname_pairs, abbreviated=abbrev
+        )
         naive_queries = len(surname_pairs) * len(firsts)
         if use_compact_prefixes:
             search_plan = compact_search_plan(
-                surname_pairs, firsts, min_combined=mcl
+                surname_pairs,
+                firsts,
+                min_combined=mcl,
+                allowed_last_prefixes=last_allow,
             )
         else:
             # One query per full surname × first (no prefix collapse), de-duped
@@ -779,13 +986,21 @@ class NSOPWEthnicDatabaseBuilder:
             "Result bucketing: ethnicity-list surnames → primary tab; "
             "other surnames from the same queries are still saved → other tab."
         )
-        _log(f"First-name mode: {mode} ({len(firsts)} prefixes/names)")
-        _log(f"  Prefixes: {', '.join(firsts[:12])}{'…' if len(firsts) > 12 else ''}")
+        _log(f"First-name mode: {describe_first_mode(mode)}")
+        _log(f"  Tokens ({len(firsts)}): {', '.join(firsts[:14])}{'…' if len(firsts) > 14 else ''}")
         if use_compact_prefixes:
+            dig_note = ""
+            if last_allow is not None:
+                dig_note = (
+                    f"; last prefixes restricted to {len(last_allow)} "
+                    f"Indian-likely digraphs"
+                )
+            else:
+                dig_note = "; last prefixes from selected surnames only (not AA–ZZ)"
             _log(
                 f"Compact queries: {compact_queries:,} "
                 f"(vs {naive_queries:,} full surname×first; "
-                f"short last prefixes, min combined {mcl} letters)"
+                f"short last prefixes, min combined {mcl} letters{dig_note})"
             )
         else:
             _log(
@@ -839,8 +1054,9 @@ class NSOPWEthnicDatabaseBuilder:
         _log("NSOPW Conditions of Use apply: https://www.nsopw.gov/")
         if use_compact_prefixes:
             _log(
-                "Partial names: e.g. first='M' last='AH' matches Mohamed Ahmed "
-                f"(API min combined length {mcl})."
+                "Yield mode: short partials (e.g. M+AH) + keep all API hits "
+                f"(aliases/fuzzy included; min combined {mcl}). "
+                "Primary tab = ethnicity-list surnames only; other tab = rest."
             )
         else:
             _log(

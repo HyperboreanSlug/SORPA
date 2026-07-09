@@ -20,8 +20,8 @@ DEFAULTS: Dict[str, Any] = {
     "backup_on_close": False,
     "backup_dir": "data/backups",
     "max_backups": 10,
-    # NSOPW search strategy: short partials (min first+last = 3 letters)
-    # collapses many surnames into fewer queries (e.g. M + AH → Ahmed/Ahmad).
+    # NSOPW: shortest partials (min first+last = 3) → max coverage per search.
+    # e.g. M+AH covers Ahmed/Ahmad; API extras (aliases) are still scraped.
     "nsopw_compact_prefixes": True,
     "nsopw_min_combined_len": 3,
 }

@@ -17,6 +17,7 @@ Polite rate limiting is enforced. Respect NSOPW Conditions of Use.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -50,6 +51,98 @@ DEFAULT_JURISDICTIONS = [
     "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
     "WV", "WI", "WY", "GU", "PR", "USVI", "AMERICANSAMOA", "CNMI",
 ]
+
+
+def _token_starts_with(value: str, prefix: str) -> bool:
+    """True if value starts with prefix (case-insensitive)."""
+    v = (value or "").strip().upper()
+    p = (prefix or "").strip().upper()
+    return bool(v) and bool(p) and v.startswith(p)
+
+
+def _last_starts_with_prefix(surname: str, prefix: str) -> bool:
+    """Primary last or any space/hyphen token starts with prefix."""
+    s = (surname or "").strip().upper()
+    p = (prefix or "").strip().upper()
+    if not s or not p:
+        return False
+    if s.startswith(p):
+        return True
+    for tok in re.split(r"[\s\-]+", s):
+        if tok and tok.startswith(p):
+            return True
+    return False
+
+
+def offender_matches_name_prefixes(
+    first_q: str,
+    last_q: str,
+    *,
+    first_name: str = "",
+    middle_name: str = "",
+    last_name: str = "",
+    alias_dicts: Optional[Sequence[Dict[str, Any]]] = None,
+    aliases: Optional[Sequence[str]] = None,
+    allow_aliases: bool = False,
+) -> bool:
+    """
+    True if this offender is a *real* starts-with match for first_q + last_q.
+
+    NSOPW's national API often returns rows that only match via **aliases** or
+    loose server scoring (looks like "any letters appear somewhere"). By default
+    we require the **primary** record name to satisfy:
+
+      first_name.startswith(first_q) AND last_name.startswith(last_q)
+
+    (case-insensitive; multi-word / hyphenated names match on any token).
+    Middle name may stand in for first (common on registry records).
+
+    Set ``allow_aliases=True`` to also accept alias pairs (including swapped
+    first/last order used by some jurisdictions).
+    """
+    fq = (first_q or "").strip()
+    lq = (last_q or "").strip()
+    if not fq or not lq:
+        return False
+
+    def _pair(giv: str, sur: str) -> bool:
+        return _token_starts_with(giv, fq) and _last_starts_with_prefix(sur, lq)
+
+    # --- Primary record only (default) ---
+    if _pair(first_name, last_name):
+        return True
+    if middle_name and _pair(middle_name, last_name):
+        return True
+    # Hyphenated / multi first names: "XANDON-ANTHONY"
+    for part in re.split(r"[\s\-]+", (first_name or "").strip()):
+        if part and _pair(part, last_name):
+            return True
+
+    if not allow_aliases:
+        return False
+
+    for a in alias_dicts or []:
+        if not isinstance(a, dict):
+            continue
+        ag = str(a.get("givenName") or "")
+        am = str(a.get("middleName") or "")
+        as_ = str(a.get("surName") or "")
+        if _pair(ag, as_):
+            return True
+        if am and _pair(am, as_):
+            return True
+        # Registries often reverse first/last on aliases
+        if _pair(as_, ag):
+            return True
+
+    for a in aliases or []:
+        parts = [p for p in re.split(r"[\s,]+", str(a).strip()) if p]
+        if len(parts) >= 2:
+            if _pair(parts[0], parts[-1]):
+                return True
+            if _pair(parts[-1], parts[0]):
+                return True
+    return False
 
 
 @dataclass
@@ -192,12 +285,22 @@ class NSOPWClient:
         first_name: str,
         last_name: str,
         jurisdictions: Optional[Sequence[str]] = None,
+        *,
+        strict_prefix: bool = False,
     ) -> List[NSOPWOffender]:
         """
         Search NSOPW by first + last name.
 
         Both first and last name are required. The API accepts short *partial*
         prefixes; combined length must be at least 3 (e.g. first="M", last="AH").
+
+        **Yield vs purity:** the national API also matches **aliases** and may
+        return primary names that do not start with the query tokens. By default
+        ``strict_prefix=False`` — we keep **all** API hits so one short query
+        scrapes as much as possible. Set ``strict_prefix=True`` only when you
+        need primary-name starts-with purity (see
+        ``offender_matches_name_prefixes``). Ethnicity bucketing (matched vs
+        other surnames) is applied later in the builder, not here.
         """
         first = (first_name or "").strip()
         last = (last_name or "").strip()
@@ -305,7 +408,28 @@ class NSOPWClient:
             ) from e
 
         raw_offenders = data.get("offenders") or []
-        return [self._parse_offender(o) for o in raw_offenders if isinstance(o, dict)]
+        parsed = [
+            self._parse_offender(o) for o in raw_offenders if isinstance(o, dict)
+        ]
+        if not strict_prefix:
+            return parsed
+
+        kept: List[NSOPWOffender] = []
+        for off in parsed:
+            alias_dicts = [
+                a for a in (off.raw.get("aliases") or []) if isinstance(a, dict)
+            ]
+            if offender_matches_name_prefixes(
+                first,
+                last,
+                first_name=off.first_name,
+                middle_name=off.middle_name,
+                last_name=off.last_name,
+                alias_dicts=alias_dicts,
+                aliases=off.aliases,
+            ):
+                kept.append(off)
+        return kept
 
     def _parse_offender(self, obj: Dict[str, Any]) -> NSOPWOffender:
         name = obj.get("name") or {}

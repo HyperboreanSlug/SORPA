@@ -2798,7 +2798,8 @@ class ArchiverApp(ctk.CTk):
         ctrl = ctk.CTkFrame(controls_host, fg_color=C["surface"])
         ctrl.pack(fill="x", padx=6, pady=(6, 2))
 
-        self.nsopw_first_mode = "initials"
+        # First-name letters: default full A–Z; Indian abbreviated is optional
+        self.nsopw_first_mode_var = ctk.StringVar(value="initials")
         self.nsopw_db_path = self.db_path
         self.nsopw_html_dir = "data/report_pages"
         self._nsopw_insert_count = 0
@@ -2887,6 +2888,32 @@ class ArchiverApp(ctk.CTk):
         )
         self.nsopw_surname_count_label.pack(fill="x", padx=14, pady=(0, 4))
         self._nsopw_refresh_subcategories()
+
+        # Row 1b: first-name letter set (biggest lever on query count)
+        r1b = ctk.CTkFrame(panel, fg_color="transparent")
+        r1b.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkLabel(r1b, text="First letters", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(0, 6)
+        )
+        self.nsopw_first_mode_combo = ctk.CTkComboBox(
+            r1b,
+            variable=self.nsopw_first_mode_var,
+            width=280,
+            values=[
+                "initials",      # A–Z (default — full coverage)
+                "indian",        # ASRPMKVNBD — Indian first-name letters
+                "indian_wide",   # +GJHT
+            ],
+            fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
+            text_color=C["text"], dropdown_fg_color=C["panel"],
+            command=lambda _c=None: self._nsopw_update_surname_count(),
+        )
+        self.nsopw_first_mode_combo.pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(
+            r1b,
+            text="default A–Z · indian = abbreviated Indian firsts (A S R P M K V N B D)",
+            font=FONT_SM, text_color=C["dim"],
+        ).pack(side="left")
 
         # Row 2: limits + delays
         r2 = ctk.CTkFrame(panel, fg_color="transparent")
@@ -3170,10 +3197,18 @@ class ArchiverApp(ctk.CTk):
             from scraper.nsopw_builder import (
                 FIRST_INITIALS,
                 NSOPWEthnicDatabaseBuilder,
+                describe_first_mode,
                 estimate_compact_query_count,
+                first_initials_for_mode,
             )
 
             eth, sub, all_surnames, surnames_limit = self._nsopw_surname_selection_params()
+            first_mode = (
+                (self.nsopw_first_mode_var.get() or "initials").strip().lower()
+                if hasattr(self, "nsopw_first_mode_var")
+                else "initials"
+            )
+            firsts = first_initials_for_mode(first_mode)
             # Avoid full builder init (HTTP clients) — only need ethnic_db for selection
             light = object.__new__(NSOPWEthnicDatabaseBuilder)
             light.ethnic_db = get_ethnic_database()
@@ -3185,7 +3220,8 @@ class ArchiverApp(ctk.CTk):
                 subcategory=sub,
             )
             n = len(pairs)
-            naive = n * len(FIRST_INITIALS)
+            naive = n * len(firsts)
+            az_naive = n * len(FIRST_INITIALS)
             use_compact = bool(self.app_settings.get("nsopw_compact_prefixes", True))
             if hasattr(self, "settings_compact_prefixes"):
                 use_compact = bool(self.settings_compact_prefixes.get())
@@ -3196,16 +3232,32 @@ class ArchiverApp(ctk.CTk):
             except (TypeError, ValueError):
                 mcl = 3
             mcl = max(3, min(mcl, 10))
+            from scraper.nsopw_builder import (
+                is_abbreviated_first_mode,
+                last_prefix_whitelist_for,
+            )
+            last_allow = last_prefix_whitelist_for(
+                eth, pairs, abbreviated=is_abbreviated_first_mode(first_mode)
+            )
             if use_compact:
                 est = estimate_compact_query_count(
+                    pairs, firsts, min_combined=mcl, allowed_last_prefixes=last_allow
+                )
+                est_az = estimate_compact_query_count(
                     pairs, FIRST_INITIALS, min_combined=mcl
                 )
-                mode_txt = f"Est. NSOPW queries (short {mcl}-letter prefixes): {est:,}"
-                if naive != est:
-                    mode_txt += f"  (was {naive:,} full×A–Z)"
+                mode_txt = (
+                    f"Est. queries: {est:,}  ·  {describe_first_mode(first_mode)}"
+                )
+                if first_mode not in ("initials", "all", "") and est_az != est:
+                    mode_txt += f"  (A–Z would be {est_az:,})"
             else:
                 est = naive
-                mode_txt = f"Est. NSOPW queries (full surnames×A–Z): {est:,}"
+                mode_txt = (
+                    f"Est. queries: {est:,} full surnames × {len(firsts)} firsts"
+                )
+                if first_mode not in ("initials", "all", "") and az_naive != est:
+                    mode_txt += f"  (A–Z would be {az_naive:,})"
             scope = f"{eth}" + (f" / {sub}" if sub and sub != "all" else " / all groups")
             self.nsopw_surname_count_label.configure(
                 text=f"Surnames in list: {n:,}  ({scope})  ·  {mode_txt}"
@@ -3758,7 +3810,11 @@ class ArchiverApp(ctk.CTk):
                     all_surnames=all_surnames,
                     subcategory=sub,
                     first_names=None,
-                    first_mode=self.nsopw_first_mode,
+                    first_mode=(
+                        (self.nsopw_first_mode_var.get() or "initials").strip().lower()
+                        if hasattr(self, "nsopw_first_mode_var")
+                        else "initials"
+                    ),
                     jurisdictions=None,
                     max_searches=live0.get("max_searches"),
                     max_names=live0.get("max_names"),
@@ -4093,7 +4149,10 @@ class ArchiverApp(ctk.CTk):
             ns_card,
             "NSOPW accepts partial first and last names. Combined length must be at least 3 "
             "letters (e.g. first=M, last=AH matches Mohamed Ahmed). Compact mode collapses "
-            "surnames that share a short prefix so one query covers many list names.",
+            "surnames that share a short prefix so one query covers many list names. "
+            "Last prefixes always come from the selected surname list (Indian digraphs for "
+            "Indian lists — never brute-force AA–ZZ). First-letter abbreviation (Indian "
+            "letters A/S/R/P/M/K/V/N/B/D) is optional on the NSOPW tab; default is full A–Z.",
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         self.settings_compact_prefixes = ctk.BooleanVar(

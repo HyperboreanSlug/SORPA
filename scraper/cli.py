@@ -601,9 +601,18 @@ Examples:
     )
     p_nsopw.add_argument(
         "--first-mode",
-        choices=["initials", "full", "custom"],
+        choices=[
+            "initials", "indian", "indian_wide",
+            "common", "common_wide",  # aliases → indian / indian_wide
+            "full", "custom",
+        ],
         default="initials",
-        help="First-name strategy: initials A–Z (partial match, default), full names, or custom list",
+        help=(
+            "First-name strategy (default: initials = full A–Z). "
+            "indian = abbreviated Indian first letters ASRPMKVNBD (fewer searches); "
+            "indian_wide adds GJHT; common/common_wide are aliases for indian modes; "
+            "full = full first names; custom with --first-names"
+        ),
     )
     p_nsopw.add_argument(
         "--first-names", type=str, default=None,

@@ -70,7 +70,7 @@ def api_request(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="v1.3.5")
+    ap.add_argument("--tag", default="v1.3.6")
     ap.add_argument(
         "--zip",
         type=Path,
@@ -120,14 +120,13 @@ Standalone **Windows** GUI package (no Python install required).
 4. If the app fails to start, install [VC++ Redistributable 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
 
 ### Highlights ({tag})
-- **NSOPW**: live options mid-run (delays/caps/checkboxes), current search terms, ETA, faster Cancel
-- **Skip completed searches** by default; explicit “Repeat old searches” to re-hit API
-- **Indian surnames**: curated **indian_high_confidence** list; short names no longer false-match (De→De-Vries, John→Johnson)
-- **Photos**: SC DisplayImage Thumb fallback; AL/iCrimewatch WatchSystems docs↔wsdocs; fewer GIF chrome mugshots
-- **Browse Search**: Indian race + surname-ethnicity filters (incl. high-confidence Indian)
-- **Misclassify / Statistics**: % misclassified of selected ethnicity; **photo detail drawer** on row select
-- **Settings**: backup-on-close **off by default** (optional checkbox); Backup now still available
-- Cookie jar / CAPTCHA queue for blocked report pages
+- **NSOPW first letters**: default full **A–Z**; optional **Indian** abbreviated firsts (`ASRPMKVNBD` / wide)
+- **Indian surname digraphs**: compact last prefixes from selected list only; abbreviated Indian mode restricts to Indian-likely letter combos (never US SSA / AA–ZZ)
+- **Yield mode**: keep all API hits by default (optional `strict_prefix` filter only if enabled)
+- **NSOPW**: live options mid-run, current search terms, ETA, faster Cancel; skip completed searches by default
+- **Indian HC list**: curated high-confidence surnames; short names exact-only (no De→De-Vries / John→Johnson)
+- **Photos / Browse / Misclassify**: SC/AL photo fixes; Indian race filters; misclass % + photo drawer
+- **Settings**: backup-on-close off by default; compact short partials recommended
 
 ### Notes
 - Runtime data (`data/`, downloads, backups) is local-only and is **not** shipped in this package

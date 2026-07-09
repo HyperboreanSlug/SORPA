@@ -9,13 +9,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scraper.nsopw_client import NSOPWClient, NSOPWOffender
+from scraper.nsopw_client import NSOPWClient, NSOPWOffender, offender_matches_name_prefixes
 from scraper.nsopw_builder import (
+    FIRST_INITIALS,
+    FIRST_INITIALS_INDIAN,
+    FIRST_INITIALS_INDIAN_WIDE,
     NSOPWEthnicDatabaseBuilder,
     RateLimiter,
     compact_search_plan,
+    estimate_compact_query_count,
+    first_initials_for_mode,
+    indian_surname_digraphs,
+    is_abbreviated_first_mode,
     last_matches_target_surnames,
     last_name_search_prefix,
+    last_prefix_whitelist_for,
 )
 from scraper.report_fetcher import ReportFetcher
 
@@ -60,6 +68,75 @@ class NSOPWParseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.search_by_name("", "Garcia")
         client.close()
+
+    def test_offender_matches_name_prefixes_helper(self):
+        """Helper for optional purity mode — default scrape keeps all API hits."""
+        self.assertFalse(
+            offender_matches_name_prefixes(
+                "A", "PA",
+                first_name="JOSE", middle_name="A", last_name="ALANIZ",
+            )
+        )
+        self.assertTrue(
+            offender_matches_name_prefixes(
+                "A", "PA",
+                first_name="JOSE", middle_name="A", last_name="ALANIZ",
+                alias_dicts=[{"givenName": "ANGEL", "surName": "PARRA"}],
+                allow_aliases=True,
+            )
+        )
+        self.assertTrue(
+            offender_matches_name_prefixes(
+                "M", "AH",
+                first_name="MOHAMED", last_name="AHMED",
+            )
+        )
+
+    def test_search_by_name_keeps_all_api_hits_by_default(self):
+        """Maximize yield: do not drop alias/fuzzy API rows unless strict_prefix."""
+        client = NSOPWClient(delay=0)
+        raw_hits = [
+            {
+                "name": {"givenName": "JOSE", "middleName": "A", "surName": "ALANIZ"},
+                "aliases": [{"givenName": "ANGEL", "surName": "PARRA"}],
+                "jurisdictionId": "FL",
+                "offenderUri": "https://example.gov/1",
+            },
+            {
+                "name": {"givenName": "NAMNUEL", "surName": "CHAVEZ"},
+                "aliases": [],
+                "jurisdictionId": "TX",
+                "offenderUri": "https://example.gov/2",
+            },
+            {
+                "name": {"givenName": "ANTHONY", "surName": "PATEL"},
+                "aliases": [],
+                "jurisdictionId": "CA",
+                "offenderUri": "https://example.gov/3",
+            },
+        ]
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"offenders": raw_hits}
+
+        client._ensure_warm = lambda: None  # type: ignore
+        client.session.post = lambda *a, **k: FakeResp()  # type: ignore
+        client.delay = 0
+        try:
+            hits = client.search_by_name("A", "PA", jurisdictions=["FL", "TX", "CA"])
+            self.assertEqual(len(hits), 3)
+            # Optional purity mode still available
+            hits_strict = client.search_by_name(
+                "A", "PA", jurisdictions=["FL", "TX", "CA"], strict_prefix=True
+            )
+            names = {(h.first_name, h.last_name) for h in hits_strict}
+            self.assertEqual(names, {("ANTHONY", "PATEL")})
+        finally:
+            client.close()
 
 
 class ReportFetcherTests(unittest.TestCase):
@@ -253,7 +330,80 @@ class RateLimiterTests(unittest.TestCase):
 
 
 class CompactPrefixTests(unittest.TestCase):
+    def test_default_first_mode_is_full_az(self):
+        """Abbreviated Indian letters are optional — default is A–Z."""
+        self.assertEqual(first_initials_for_mode("initials"), list(FIRST_INITIALS))
+        self.assertEqual(first_initials_for_mode(""), list(FIRST_INITIALS))
+        self.assertEqual(first_initials_for_mode(None), list(FIRST_INITIALS))
+        self.assertFalse(is_abbreviated_first_mode("initials"))
+        self.assertTrue(is_abbreviated_first_mode("indian"))
+        self.assertTrue(is_abbreviated_first_mode("common"))  # alias
+
+    def test_indian_firsts_not_us_letters(self):
+        """Abbreviated mode uses Indian given-name letters, not US SSA (JMACRDSBLT)."""
+        indian = first_initials_for_mode("indian")
+        self.assertEqual(indian, list(FIRST_INITIALS_INDIAN))
+        self.assertEqual(len(FIRST_INITIALS_INDIAN), 10)
+        # Indian set should include A/S/R/P/K common Indic starts
+        for letter in "ASRPMKVNBD":
+            self.assertIn(letter, indian)
+        # US-heavy-only pattern must not be the abbreviated set
+        self.assertNotEqual("".join(indian), "JMACRDSBLT")
+        # common/common_wide are aliases for indian/indian_wide
+        self.assertEqual(first_initials_for_mode("common"), list(FIRST_INITIALS_INDIAN))
+        self.assertEqual(
+            first_initials_for_mode("indian_wide"), list(FIRST_INITIALS_INDIAN_WIDE)
+        )
+
+    def test_indian_firsts_cut_query_count(self):
+        pairs = [(s, "Indian") for s in ("Patel", "Singh", "Sharma", "Kumar", "Reddy")]
+        full = estimate_compact_query_count(pairs, FIRST_INITIALS, min_combined=3)
+        indian = estimate_compact_query_count(
+            pairs, FIRST_INITIALS_INDIAN, min_combined=3
+        )
+        self.assertLess(indian, full)
+        self.assertGreater(indian, 0)
+
+    def test_surname_digraphs_are_indian_only(self):
+        """Last prefixes come from Indian surnames — never brute-force AA–ZZ."""
+        digs = indian_surname_digraphs(
+            ["Patel", "Singh", "Sharma", "Kumar", "Reddy", "Chatterjee"]
+        )
+        self.assertIn("PA", digs)
+        self.assertIn("SI", digs)
+        self.assertIn("SH", digs)
+        self.assertIn("KU", digs)
+        self.assertIn("RE", digs)
+        self.assertIn("CH", digs)
+        # Unlikely Western digraphs not in this set
+        self.assertNotIn("ZZ", digs)
+        self.assertNotIn("XQ", digs)
+        # Corpus digraphs should include common Indian starts
+        corpus = indian_surname_digraphs()
+        self.assertIn("PA", corpus)
+        self.assertIn("SI", corpus)
+        self.assertNotIn("ZZ", corpus)
+        # Whitelist only when abbreviated Indian mode is on
+        pairs = [(s, "Indian") for s in ("Patel", "Singh")]
+        wl = last_prefix_whitelist_for("indian", pairs, abbreviated=True)
+        self.assertIsNotNone(wl)
+        self.assertIn("PA", wl)
+        self.assertIn("SI", wl)
+        # Default non-abbreviated: no extra filter (None)
+        self.assertIsNone(
+            last_prefix_whitelist_for("indian", pairs, abbreviated=False)
+        )
+        # Compact plan with explicit whitelist drops non-allowed digraphs
+        mixed = [(s, "Indian") for s in ("Patel", "Singh", "Smith")]
+        plan = compact_search_plan(
+            mixed, ["A"], min_combined=3, allowed_last_prefixes={"PA", "SI"}
+        )
+        prefs = {p.upper() for _, p, _, _ in plan}
+        self.assertEqual(prefs, {"PA", "SI"})
+        self.assertNotIn("SM", prefs)
+
     def test_last_prefix_min_combined_3(self):
+        # Shortest legal last token for max coverage per search
         self.assertEqual(last_name_search_prefix("Ahmed", "M"), "Ah")
         self.assertEqual(last_name_search_prefix("Ahmed", "MO"), "A")
         self.assertEqual(last_name_search_prefix("Li", "M"), "Li")
@@ -459,8 +609,8 @@ class BuilderSurnameTests(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.search_by_name.return_value = []
             b.client = mock_client
-            b.search_limiter.wait = lambda: None  # type: ignore
-            b.report_limiter.wait = lambda: None  # type: ignore
+            b.search_limiter.wait = lambda *a, **k: False  # type: ignore
+            b.report_limiter.wait = lambda *a, **k: False  # type: ignore
             b.search_limiter.set_interval(0.0)
             # Start with cap 1; after first search, live_options raises cap to 3
             state = {"n": 0}
@@ -514,8 +664,8 @@ class BuilderSurnameTests(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.search_by_name.return_value = []
             b.client = mock_client
-            b.search_limiter.wait = lambda: None  # type: ignore
-            b.report_limiter.wait = lambda: None  # type: ignore
+            b.search_limiter.wait = lambda *a, **k: False  # type: ignore
+            b.report_limiter.wait = lambda *a, **k: False  # type: ignore
 
             with patch.object(b, "surnames_for_ethnicity", return_value=pairs):
                 stats = b.build(
