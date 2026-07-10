@@ -86,15 +86,19 @@ Copy the entire folder (not just the `.exe`).
 ```
 ├── archiver.py           # Direct-download CLI
 ├── core.py               # Shared download helpers
-├── gui.py                # Tkinter UI
+├── gui.py                # Thin GUI entry (bootstrap)
+├── gui_app/              # Lazy-loaded UI modules (tabs, theme, shell)
 ├── build_exe.py          # PyInstaller helper
+├── MODULES.md            # Module map for efficient code review
 ├── sources.json          # Registry URLs + bulk links
 ├── requirements.txt
 ├── LICENSE
 ├── scraper/
 │   ├── cli.py
 │   ├── config.py
-│   ├── database.py
+│   ├── database/         # SQLite package (schema, query, dedupe, …)
+│   ├── nsopw/            # NSOPW client + builder
+│   ├── reports/          # Jurisdiction report fetch/parse/photo
 │   ├── searcher.py
 │   ├── ethnic_names.py
 │   ├── ethnic_names.json
@@ -102,6 +106,9 @@ Copy the entire folder (not just the `.exe`).
 └── tests/
     └── test_smoke.py
 ```
+
+See **[MODULES.md](MODULES.md)** for per-module responsibilities and review routing
+(which files to open for a given task without loading the whole tree).
 
 ## Scrape support (verified)
 
