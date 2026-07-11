@@ -1064,6 +1064,28 @@ class ReportsTabMixin:
             anchor="w",
         ).pack(fill="x", padx=14, pady=(0, 10))
 
+        # Crime / offense (registry)
+        crime = self._reports_crime_text(rec)
+        if crime:
+            crime_row = ctk.CTkFrame(body, fg_color=C["elevated"], corner_radius=8)
+            crime_row.pack(fill="x", pady=(0, 6))
+            ctk.CTkLabel(
+                crime_row,
+                text="CRIME",
+                font=("Segoe UI", 10, "bold"),
+                text_color=C["muted"],
+                anchor="w",
+            ).pack(fill="x", padx=12, pady=(6, 0))
+            ctk.CTkLabel(
+                crime_row,
+                text=crime,
+                font=FONT_SM,
+                text_color=C["text"],
+                anchor="w",
+                justify="left",
+                wraplength=720,
+            ).pack(fill="x", padx=12, pady=(2, 8))
+
         # Secondary: surname-based ethnicity (smaller)
         chips = ctk.CTkFrame(body, fg_color="transparent")
         chips.pack(fill="x", pady=(2, 4))
@@ -1251,8 +1273,10 @@ class ReportsTabMixin:
                 f"conf={df.get('top_confidence')} sev={df.get('severity') or '—'}"
                 f"\nReason: {df.get('reason') or '—'}"
             )
+        crime_line = f"\nCrime: {crime}" if crime else ""
         copy_blob = (
-            f"{name}\nLISTED AS: {race}\nSurname ethnicity: {eth}\n"
+            f"{name}\nLISTED AS: {race}\nSurname ethnicity: {eth}"
+            f"{crime_line}\n"
             f"{meta}\nMatched: {matches or '—'}{df_line}\n"
             f"State: {state}\nURL: {rec.get('source_url') or '—'}"
         )
@@ -1307,6 +1331,20 @@ class ReportsTabMixin:
                     )
         except Exception:
             pass
+
+    @staticmethod
+    def _reports_crime_text(rec: Optional[Dict[str, Any]]) -> str:
+        """Best available crime / offense text for report cards and exports."""
+        if not rec:
+            return ""
+        for key in ("crime", "offense_description", "offense_type"):
+            raw = rec.get(key)
+            if raw is None:
+                continue
+            s = str(raw).strip()
+            if s:
+                return s
+        return ""
 
     @staticmethod
     def _reports_verdict_label(verdict: str) -> str:
@@ -1393,7 +1431,7 @@ class ReportsTabMixin:
             w.writerow([
                 "verdict", "first_name", "middle_name", "last_name", "name",
                 "recorded_race", "likely_ethnicity", "confidence",
-                "state", "matching_names", "photo_path", "source_url", "id",
+                "crime", "state", "matching_names", "photo_path", "source_url", "id",
             ])
             for mc, verdict, rec in self._reports_iter_export_rows():
                 first = (rec.get("first_name") or "").strip()
@@ -1412,6 +1450,7 @@ class ReportsTabMixin:
                     mc.expected_race,
                     mc.likely_ethnicity,
                     f"{mc.confidence:.4f}",
+                    self._reports_crime_text(rec),
                     _format_state_display(rec),
                     "; ".join(mc.matching_names or []),
                     rec.get("photo_path") or "",
@@ -1518,6 +1557,13 @@ class ReportsTabMixin:
             race = _esc(str(race_disp).upper())
             eth = _esc(mc.likely_ethnicity)
             conf = f"{mc.confidence:.3f}"
+            crime = self._reports_crime_text(rec)
+            crime_html = (
+                f'<p class="crime" title="Crime / offense"><span class="crime-label">Crime</span> '
+                f"{_esc(crime)}</p>"
+                if crime
+                else ""
+            )
             if compact:
                 cards_html.append(
                     f"""
@@ -1529,6 +1575,7 @@ class ReportsTabMixin:
       <span class="listed-label">LISTED AS</span>
       <span class="listed-race">{race}</span>
     </div>
+    {crime_html}
     <p class="vs-eth">vs surname <strong>{eth}</strong></p>
     <p class="meta">{_esc(state)} · {conf} · #{i}</p>
     {link}
@@ -1550,6 +1597,7 @@ class ReportsTabMixin:
       <span class="listed-label">LISTED AS</span>
       <span class="listed-race">{race}</span>
     </div>
+    {crime_html}
     <p class="vs-eth">vs surname ethnicity: <strong>{eth}</strong></p>
     <p class="meta">Confidence {conf} · State {_esc(state)}{(' · Middle: ' + _esc(middle)) if middle else ''}</p>
     <p class="names">Matched: {_esc('; '.join(mc.matching_names[:5]) if mc.matching_names else '—')}</p>
@@ -1609,6 +1657,16 @@ class ReportsTabMixin:
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .vs-eth strong { color: var(--text); font-weight: 650; }
+  .crime {
+    margin: .25rem 0 0; color: var(--text); font-size: .72rem;
+    line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .crime-label {
+    display: block; font-size: .65rem; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+    margin-bottom: .1rem;
+  }
   .meta { margin: .2rem 0 0; color: var(--dim); font-size: .72rem; }
   a.ext { color: var(--accent); font-size: .72rem; }
   @media (max-width: 520px) {
@@ -1670,6 +1728,16 @@ class ReportsTabMixin:
     margin: .15rem 0 .35rem; color: var(--muted); font-size: .95rem;
   }
   .vs-eth strong { color: var(--text); font-weight: 650; }
+  .crime {
+    margin: .35rem 0 .45rem; padding: .5rem .75rem;
+    background: #1a1a20; border-radius: 8px; border: 1px solid var(--border);
+    color: var(--text); font-size: .92rem; line-height: 1.35;
+  }
+  .crime-label {
+    display: block; font-size: .72rem; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+    margin-bottom: .2rem;
+  }
   .meta, .names { margin: .2rem 0; color: var(--muted); font-size: .9rem; }
   a.ext { color: var(--accent); font-size: .88rem; }
   @media print {
