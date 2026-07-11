@@ -19,7 +19,7 @@ from .scrapers.arcgis_scraper import ArcGISScraper
 from .nsopw_client import NSOPWClient
 from .nsopw_builder import NSOPWEthnicDatabaseBuilder
 
-__version__ = "1.3.14"
+__version__ = "1.3.15"
 
 __all__ = [
     "Database",

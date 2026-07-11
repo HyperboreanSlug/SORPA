@@ -702,6 +702,14 @@ class ReportFetcher:
         # No photo on record (SC/others use ImageId=0 as placeholder)
         if "imgid=0" in low_u or "imageid=0" in low_u or "image_id=0" in low_u:
             return None
+        # Never fetch seals / spacers / tracking pixels as mugshots
+        try:
+            from scraper.mugshot_ethnicity.photo_quality import url_looks_like_chrome
+
+            if url_looks_like_chrome(base):
+                return None
+        except Exception:
+            pass
         min_sz = self.MIN_PHOTO_BYTES if min_bytes is None else int(min_bytes)
         try:
             photo_dir = Path(photo_dir)
@@ -712,8 +720,18 @@ class ReportFetcher:
             for existing in photo_dir.glob(f"{key}.*"):
                 if existing.is_file() and existing.stat().st_size >= min_sz:
                     if reject_gif and existing.suffix.lower() == ".gif":
+                        try:
+                            existing.unlink(missing_ok=True)  # type: ignore[call-arg]
+                        except TypeError:
+                            try:
+                                if existing.is_file():
+                                    existing.unlink()
+                            except OSError:
+                                pass
+                        except OSError:
+                            pass
                         continue
-                    # Reject empty/broken cached stubs
+                    # Reject empty/broken / non-mugshot cached stubs
                     try:
                         head = existing.read_bytes()[:16]
                     except OSError:
@@ -724,6 +742,19 @@ class ReportFetcher:
                         continue
                     elif len(head) < 8:
                         continue
+                    try:
+                        from scraper.mugshot_ethnicity.photo_quality import (
+                            is_non_mugshot,
+                        )
+
+                        if is_non_mugshot(existing):
+                            try:
+                                existing.unlink()
+                            except OSError:
+                                pass
+                            continue
+                    except Exception:
+                        pass
                     try:
                         return str(existing.relative_to(Path.cwd()))
                     except ValueError:
@@ -816,9 +847,30 @@ class ReportFetcher:
             ext = guess if guess in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp") else ".jpg"
         if reject_gif and ext == ".gif":
             return None
+        # Reject 1×1 / seals / silhouettes / banner chrome before writing
+        try:
+            from scraper.mugshot_ethnicity.photo_quality import bytes_non_mugshot_reason
+
+            bad = bytes_non_mugshot_reason(body, url=url, ext=ext)
+            if bad:
+                return None
+        except Exception:
+            pass
         # Content-Type image/gif with non-GIF magic is fine (already sniffed)
         dest = photo_dir / f"{key}{ext}"
         dest.write_bytes(body)
+        # Double-check after write (dims/heuristics on file)
+        try:
+            from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+
+            if is_non_mugshot(dest):
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                return None
+        except Exception:
+            pass
         try:
             return str(dest.relative_to(Path.cwd()))
         except ValueError:
@@ -1059,6 +1111,35 @@ class ReportFetcher:
             abs_u = _abs(src)
             if not abs_u:
                 continue
+            # Skip seals / spacers / tracking before network I/O
+            try:
+                from scraper.mugshot_ethnicity.photo_quality import url_looks_like_chrome
+
+                if url_looks_like_chrome(abs_u):
+                    continue
+            except Exception:
+                pass
+            # Alt text: skip explicit chrome labels
+            try:
+                alt0 = (el.get("alt") or "").strip().lower() if hasattr(el, "get") else ""
+            except Exception:
+                alt0 = ""
+            if alt0 and any(
+                k in alt0
+                for k in (
+                    "seal",
+                    "logo",
+                    "spacer",
+                    "skip navigation",
+                    "banner",
+                    "icon",
+                    "sheriff's office",
+                    "sheriffs office",
+                )
+            ):
+                # Keep real "offender photo" etc.
+                if not any(k in alt0 for k in ("offender", "mug", "registrant", "photo of")):
+                    continue
             if abs_u in url_to_local:
                 local = url_to_local[abs_u]
             else:
@@ -1120,15 +1201,27 @@ class ReportFetcher:
                 el["content"] = rel
 
         if candidates:
-            # Prefer high score, then larger file
+            # Prefer high score, then larger file; never pick non-mugshot chrome
+            try:
+                from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+            except Exception:
+                is_non_mugshot = lambda _p: False  # type: ignore
             candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
-            best = candidates[0]
-            # Only treat as primary mugshot if large enough; otherwise leave
-            # photo_path for _ensure_photo to fill from NSOPW imageUri.
-            if best[1] >= self.MIN_PRIMARY_PHOTO_BYTES or best[0] >= 20:
-                primary = best[3]
-            elif best[1] >= 500:
-                primary = best[3]
+            for best in candidates:
+                local_p = best[3]
+                try:
+                    if is_non_mugshot(local_p):
+                        continue
+                except Exception:
+                    pass
+                # Only treat as primary mugshot if large enough; otherwise leave
+                # photo_path for _ensure_photo to fill from NSOPW imageUri.
+                if best[1] >= self.MIN_PRIMARY_PHOTO_BYTES or best[0] >= 20:
+                    primary = local_p
+                    break
+                if best[1] >= 500:
+                    primary = local_p
+                    break
 
         try:
             out = str(soup)

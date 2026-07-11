@@ -338,18 +338,20 @@ class DeepfaceTabMixin:
         tree.bind("<<TreeviewSelect>>", self._deepface_scan_on_select)
         _bind_tree_scroll_isolation(tree, wrap)
 
-        # Review panel: mugshot + confirm/reject
+        # Review panel: live scan mugshot + hit confirm/reject
         rev_card = _card(bottom)
         rev_card.grid(row=0, column=1, sticky="nsew", padx=4, pady=2)
-        _section_label(rev_card, "Review hit").pack(
+        _section_label(rev_card, "Review / live scan").pack(
             anchor="w", padx=14, pady=(12, 4)
         )
         _muted(
             rev_card,
-            "Confirm incorrect = face vs listed race is a real mismatch. "
-            "Confirm correct = listing is fine (not a misclass). "
+            "While scanning, shows the mugshot currently being scored. "
+            "Click a hit in the list to pin it for confirm/skip. "
             "Verdicts sync to Browse → Reports.",
         ).pack(anchor="w", padx=14, pady=(0, 6))
+        self._df_scan_live_preview = True
+        self._df_scan_live_seq = 0
 
         rev_body = ctk.CTkFrame(rev_card, fg_color="transparent")
         rev_body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
@@ -362,7 +364,7 @@ class DeepfaceTabMixin:
         photo_wrap.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 12), pady=4)
         photo_wrap.grid_propagate(False)
         self.df_scan_photo_lbl = ctk.CTkLabel(
-            photo_wrap, text="No hit\nselected", font=FONT_SM, text_color=C["dim"],
+            photo_wrap, text="Start a scan\nto preview", font=FONT_SM, text_color=C["dim"],
         )
         self.df_scan_photo_lbl.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -373,7 +375,7 @@ class DeepfaceTabMixin:
 
         self.df_scan_review_meta = ctk.CTkLabel(
             rev_body,
-            text="Select a hit to show the mugshot and decide.",
+            text="Scan to live-preview each mugshot, or select a hit to review.",
             font=FONT_SM,
             text_color=C["muted"],
             anchor="nw",
@@ -640,10 +642,10 @@ class DeepfaceTabMixin:
 
     def _deepface_scan_clear_review(self) -> None:
         try:
-            self.df_scan_photo_lbl.configure(image=None, text="No hit\nselected")
+            self.df_scan_photo_lbl.configure(image=None, text="Start a scan\nto preview")
             self.df_scan_review_name.configure(text="—")
             self.df_scan_review_meta.configure(
-                text="Select a hit to show the mugshot and decide."
+                text="Scan to live-preview each mugshot, or select a hit to review."
             )
             self.df_scan_review_verdict.configure(text="", text_color=C["dim"])
             for name in (
@@ -658,8 +660,133 @@ class DeepfaceTabMixin:
             pass
         self._df_scan_selected_iid = None
 
+    @staticmethod
+    def _deepface_scan_resolve_photo(raw: Optional[str]) -> Optional[Path]:
+        """Resolve mugshot path against cwd and project ROOT."""
+        s = (raw or "").strip()
+        if not s:
+            return None
+        candidates = [
+            Path(s),
+            ROOT / s,
+            ROOT / s.replace("\\", "/"),
+            Path.cwd() / s,
+        ]
+        for p in candidates:
+            try:
+                if p.is_file() and p.stat().st_size > 0:
+                    return p.resolve()
+            except OSError:
+                continue
+        return None
+
+    def _deepface_scan_set_photo(self, photo_path: Optional[Path]) -> bool:
+        """Paint mugshot into the scan review label. Returns True if shown."""
+        if photo_path is None:
+            try:
+                self.df_scan_photo_lbl.configure(image=None, text="No photo\non disk")
+            except Exception:
+                pass
+            return False
+        try:
+            from PIL import Image
+
+            with Image.open(photo_path) as raw:
+                img = raw.convert("RGB")
+            img.thumbnail((152, 192))
+            img = img.copy()
+            ctk_img = ctk.CTkImage(
+                light_image=img, dark_image=img, size=img.size
+            )
+            if not hasattr(self, "_df_scan_image_refs") or self._df_scan_image_refs is None:
+                self._df_scan_image_refs = []
+            self._df_scan_image_refs.append(ctk_img)
+            if len(self._df_scan_image_refs) > 40:
+                self._df_scan_image_refs = self._df_scan_image_refs[-20:]
+            self.df_scan_photo_lbl.configure(image=ctk_img, text="")
+            return True
+        except Exception:
+            try:
+                self.df_scan_photo_lbl.configure(image=None, text="Photo\nerror")
+            except Exception:
+                pass
+            return False
+
+    def _deepface_scan_show_live(
+        self,
+        rec: dict,
+        done: int,
+        total: int,
+        *,
+        face=None,
+        is_hit: Optional[bool] = None,
+        phase: str = "scoring",
+    ) -> None:
+        """Update review pane with the mugshot currently being scored (live)."""
+        if not getattr(self, "_df_scan_live_preview", True):
+            return
+        if not hasattr(self, "df_scan_photo_lbl"):
+            return
+        rec = rec or {}
+        name = (
+            f"{rec.get('first_name') or ''} {rec.get('last_name') or ''}"
+        ).strip() or (rec.get("full_name") or "—")
+        state = rec.get("state") or rec.get("source_state") or "—"
+        race = rec.get("race") or "—"
+        photo_raw = (rec.get("photo_path") or "").strip()
+        photo_path = self._deepface_scan_resolve_photo(photo_raw)
+
+        meta_lines = [
+            f"● LIVE  {done:,} / {total:,}",
+            f"LISTED AS: {race}",
+            f"State: {state}  ·  ID: {rec.get('id') or '—'}",
+        ]
+        if phase == "scoring":
+            meta_lines.append("Scoring face…")
+        elif face is not None:
+            lab = getattr(face, "top_label", None) or "—"
+            conf = float(getattr(face, "top_confidence", 0) or 0)
+            err = getattr(face, "error", None)
+            if err:
+                meta_lines.append(f"Result: skip — {str(err)[:120]}")
+            elif getattr(face, "ok", False):
+                tag = "HIT" if is_hit else "ok"
+                meta_lines.append(f"Face: {lab} @ {conf:.0%}  ({tag})")
+            else:
+                meta_lines.append("Result: no face / unknown")
+        try:
+            from scraper.mugshot_ethnicity.photo_quality import placeholder_reason
+
+            if photo_path:
+                stub = placeholder_reason(photo_path)
+                if stub:
+                    meta_lines.append(f"⚠ PLACEHOLDER: {stub}")
+        except Exception:
+            pass
+
+        try:
+            self.df_scan_review_name.configure(text=name)
+            self.df_scan_review_meta.configure(text="\n".join(meta_lines))
+            self.df_scan_review_verdict.configure(
+                text="○ Live scan — click a hit to pin for review",
+                text_color=C["accent"] if is_hit else C["dim"],
+            )
+            for bname in (
+                "df_scan_btn_confirm",
+                "df_scan_btn_correct",
+                "df_scan_btn_skip",
+            ):
+                w = getattr(self, bname, None)
+                if w is not None:
+                    w.configure(state="disabled")
+        except Exception:
+            pass
+        self._deepface_scan_set_photo(photo_path)
+        self._df_scan_selected_iid = None
+
     def _deepface_scan_show_hit(self, iid: str, hit) -> None:
-        """Populate review pane for one hit (mugshot + actions)."""
+        """Populate review pane for one hit (mugshot + actions). Pins away from live."""
+        self._df_scan_live_preview = False
         self._df_scan_selected_iid = iid
         rec = getattr(hit, "record", None) or {}
         name = (
@@ -692,30 +819,27 @@ class DeepfaceTabMixin:
             pass
 
         # Mugshot
-        photo_path = (rec.get("photo_path") or "").strip()
-        if not photo_path and getattr(hit, "face", None) is not None:
-            photo_path = (getattr(hit.face, "photo_path", None) or "").strip()
-        shown = False
-        if photo_path and Path(photo_path).is_file():
+        photo_path_raw = (rec.get("photo_path") or "").strip()
+        if not photo_path_raw and getattr(hit, "face", None) is not None:
+            photo_path_raw = (getattr(hit.face, "photo_path", None) or "").strip()
+        photo_path = self._deepface_scan_resolve_photo(photo_path_raw)
+        stub_reason = None
+        if photo_path is not None:
             try:
-                from PIL import Image
+                from scraper.mugshot_ethnicity.photo_quality import placeholder_reason
 
-                img = Image.open(photo_path)
-                img.thumbnail((152, 192))
-                ctk_img = ctk.CTkImage(
-                    light_image=img, dark_image=img, size=img.size
-                )
-                if not hasattr(self, "_df_scan_image_refs"):
-                    self._df_scan_image_refs = []
-                self._df_scan_image_refs.append(ctk_img)
-                # keep list bounded
-                if len(self._df_scan_image_refs) > 30:
-                    self._df_scan_image_refs = self._df_scan_image_refs[-15:]
-                self.df_scan_photo_lbl.configure(image=ctk_img, text="")
-                shown = True
+                stub_reason = placeholder_reason(photo_path)
             except Exception:
-                shown = False
-        if not shown:
+                stub_reason = None
+        shown = self._deepface_scan_set_photo(photo_path)
+        if stub_reason:
+            meta_lines.append(f"⚠ PLACEHOLDER: {stub_reason}")
+            meta_lines.append("Not a real mugshot — skip / do not confirm as a hit.")
+            try:
+                self.df_scan_review_meta.configure(text="\n".join(meta_lines))
+            except Exception:
+                pass
+        if not shown and photo_path is None:
             try:
                 self.df_scan_photo_lbl.configure(image=None, text="No photo\non disk")
             except Exception:
@@ -736,12 +860,12 @@ class DeepfaceTabMixin:
         }.get(verdict, "○ Unconfirmed")
         try:
             self.df_scan_review_verdict.configure(text=vtxt, text_color=vcolor)
-            for name in (
+            for bname in (
                 "df_scan_btn_confirm",
                 "df_scan_btn_correct",
                 "df_scan_btn_skip",
             ):
-                w = getattr(self, name, None)
+                w = getattr(self, bname, None)
                 if w is not None:
                     w.configure(state="normal")
         except Exception:
@@ -758,6 +882,8 @@ class DeepfaceTabMixin:
             hit = (getattr(self, "_df_scan_hits_by_iid", {}) or {}).get(iid)
             if hit is None:
                 return
+            # Pin this hit — stop overwriting with live scan previews
+            self._df_scan_live_preview = False
             self._deepface_scan_show_hit(iid, hit)
         except Exception:
             pass
@@ -910,19 +1036,8 @@ class DeepfaceTabMixin:
                 )
             except Exception:
                 pass
-            # Auto-open first unreviewed hit for immediate review
-            try:
-                sel = self.df_scan_tree.selection()
-                if not sel and verdict == "unreviewed":
-                    self.df_scan_tree.selection_set(iid)
-                    self.df_scan_tree.focus(iid)
-                    self._deepface_scan_show_hit(iid, hit)
-                elif not sel:
-                    self.df_scan_tree.selection_set(iid)
-                    self.df_scan_tree.focus(iid)
-                    self._deepface_scan_show_hit(iid, hit)
-            except Exception:
-                pass
+            # Keep live mugshot preview during scan; don't steal the panel for hits.
+            # When scan finishes (or user clicks a row), review mode takes over.
         except Exception:
             pass
 
@@ -944,10 +1059,16 @@ class DeepfaceTabMixin:
         self._df_scan_hits_by_iid = {}
         self._df_scan_selected_iid = None
         self._df_scan_image_refs = []
+        self._df_scan_live_preview = True
+        self._df_scan_live_seq = int(getattr(self, "_df_scan_live_seq", 0) or 0) + 1
+        live_gen = self._df_scan_live_seq
         try:
             self.df_scan_tree.delete(*self.df_scan_tree.get_children())
             self.df_scan_progress.set(0)
             self._deepface_scan_clear_review()
+            self.df_scan_review_meta.configure(
+                text="Starting scan — mugshots will appear here as they are scored."
+            )
         except Exception:
             pass
         self._deepface_scan_set_busy(True)
@@ -987,6 +1108,39 @@ class DeepfaceTabMixin:
                     self.df_scan_status.configure(
                         text=f"Scoring {done:,} / {total:,}  ·  hits {n:,}",
                         text_color=C["text"],
+                    )
+                except Exception:
+                    pass
+
+            try:
+                self.after(0, ui)
+            except Exception:
+                pass
+
+        def on_photo(rec, done: int, total: int) -> None:
+            # Coalesce: only apply if this is still the active scan generation
+            def ui(r=rec, d=done, t=total, gen=live_gen):
+                if gen != getattr(self, "_df_scan_live_seq", 0):
+                    return
+                try:
+                    self._deepface_scan_show_live(r, d, t, phase="scoring")
+                except Exception:
+                    pass
+
+            try:
+                self.after(0, ui)
+            except Exception:
+                pass
+
+        def on_scored(rec, face, is_hit: bool, done: int, total: int) -> None:
+            def ui(r=rec, f=face, h=is_hit, d=done, t=total, gen=live_gen):
+                if gen != getattr(self, "_df_scan_live_seq", 0):
+                    return
+                if not getattr(self, "_df_scan_live_preview", True):
+                    return
+                try:
+                    self._deepface_scan_show_live(
+                        r, d, t, face=f, is_hit=h, phase="scored"
                     )
                 except Exception:
                     pass
@@ -1047,6 +1201,8 @@ class DeepfaceTabMixin:
                     persist=True,
                     detector=detector,
                     on_hit=on_hit,
+                    on_photo=on_photo,
+                    on_scored=on_scored,
                 )
             except Exception as e:
                 err = e
@@ -1088,6 +1244,12 @@ class DeepfaceTabMixin:
                 )
                 try:
                     self._deepface_scan_refresh_db_stats()
+                except Exception:
+                    pass
+                # After scan: open first unreviewed hit for review
+                try:
+                    if n and getattr(self, "_df_scan_live_preview", True):
+                        self.after(80, self._deepface_scan_next_unreviewed)
                 except Exception:
                     pass
 

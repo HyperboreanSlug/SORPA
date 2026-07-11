@@ -70,7 +70,7 @@ def api_request(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="v1.3.14")
+    ap.add_argument("--tag", default="v1.3.15")
     ap.add_argument(
         "--zip",
         type=Path,
@@ -120,9 +120,10 @@ Standalone **Windows** GUI package (no Python install required).
 4. If the app fails to start, install [VC++ Redistributable 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
 
 ### Highlights ({tag})
-- **Hispanic misclass fix**: race=**White** is compatible with Hispanic surnames (OMB/registry practice) — no more ~98% false positive rate
-- **Hispanic labels**: `Hispanic or Latino` and similar map to Hispanic; Unknown/Other ignored for Hispanic
-- **Reports** (prior): White/Black/Other toggles, pagination, Show Unconfirmed / Confirmed incorrect / Confirmed correct
+- **Placeholder / chrome photos**: detect CO silhouettes, 1×1 seals/spacers; skip in DeepFace scan; do not save as mugshots
+- **DeepFace live review**: show current mugshot while scanning; Browse DeepFace photo paint fixes
+- **Reports grid**: Layout Grid/List, crime summary fits in tile (dates stripped), defaults White-only + DeepFace hits off
+- **Analyze & build**: works without opening Misclassify first (filter vars ensured)
 
 ### Notes
 - Runtime data (`data/`, downloads, backups) is local-only and is **not** shipped in this package

@@ -43,6 +43,63 @@ class MockScorerTests(unittest.TestCase):
             self.assertEqual(s.top_label, "black")
             self.assertGreaterEqual(s.top_confidence, 0.9)
 
+    def test_known_placeholder_md5_skipped(self):
+        from scraper.mugshot_ethnicity.photo_quality import (
+            KNOWN_PLACEHOLDER_MD5,
+            clear_placeholder_cache,
+            is_placeholder_photo,
+            placeholder_reason,
+        )
+
+        clear_placeholder_cache()
+        # Build a file whose MD5 matches the known CO silhouette hash
+        # by writing exact bytes from a tiny synthetic only if we inject MD5.
+        # Instead, monkeypatch: write any file and check known set membership via
+        # is_placeholder_photo after putting real hash in KNOWN set for this file.
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "stub.jpg"
+            payload = b"\xff\xd8\xff" + b"\x11" * 3000
+            p.write_bytes(payload)
+            import hashlib
+
+            digest = hashlib.md5(payload).hexdigest()
+            self.assertFalse(is_placeholder_photo(p))
+            KNOWN_PLACEHOLDER_MD5.add(digest)
+            try:
+                clear_placeholder_cache()
+                self.assertTrue(is_placeholder_photo(p))
+                self.assertIn("known stub", placeholder_reason(p) or "")
+                sc = MugshotEthnicityScorer(backend=MockBackend())
+                s = sc.score_path(str(p))
+                self.assertFalse(s.ok)
+                self.assertIn("placeholder", (s.error or "").lower())
+            finally:
+                KNOWN_PLACEHOLDER_MD5.discard(digest)
+                clear_placeholder_cache()
+
+    def test_silhouette_heuristic(self):
+        """White background + dark outline → placeholder."""
+        from scraper.mugshot_ethnicity.photo_quality import (
+            clear_placeholder_cache,
+            is_placeholder_photo,
+        )
+
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError:
+            self.skipTest("Pillow required")
+
+        clear_placeholder_cache()
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "silhouette.jpg"
+            # 200x200 mostly white with a thick black head outline
+            img = Image.new("L", (200, 200), color=255)
+            draw = ImageDraw.Draw(img)
+            draw.ellipse((50, 30, 150, 140), outline=0, width=8)
+            draw.rectangle((85, 140, 115, 190), outline=0, width=6)
+            img.save(p, format="JPEG", quality=90)
+            self.assertTrue(is_placeholder_photo(p))
+
 
 class VerifyAndScanTests(unittest.TestCase):
     def setUp(self):

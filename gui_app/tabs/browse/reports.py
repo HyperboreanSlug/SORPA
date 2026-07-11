@@ -100,8 +100,8 @@ class ReportsTabMixin:
             command=lambda: self._reports_on_filter_change(),
         ).pack(side="left", padx=(0, 8))
 
-        # Include stored DeepFace mugshot hits (from DeepFace → Scan)
-        self.report_include_deepface = ctk.BooleanVar(value=True)
+        # Include stored DeepFace mugshot hits (from DeepFace → Scan) — off by default
+        self.report_include_deepface = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             bar, text="DeepFace hits", variable=self.report_include_deepface,
             font=FONT_SM, text_color=C["text"],
@@ -110,19 +110,36 @@ class ReportsTabMixin:
             command=lambda: self._reports_on_filter_change(),
         ).pack(side="left", padx=(0, 8))
 
-        self.report_grid_view = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            bar, text="Grid view", variable=self.report_grid_view,
-            font=FONT_SM, text_color=C["text"],
-            fg_color=C["accent"], hover_color=C["accent_hover"],
-            border_color=C["border"], checkmark_color=C["bg"],
-            command=lambda: self._reports_rebuild_cards(refilter=False),
-        ).pack(side="left", padx=(0, 8))
+        # Layout: list rows vs multi-column mugshot grid (also used by Open HTML)
+        self.report_grid_view = ctk.BooleanVar(value=True)
+        self.report_layout_mode = ctk.StringVar(value="Grid")
+        ctk.CTkLabel(bar, text="Layout", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(4, 4)
+        )
+        self.report_layout_seg = ctk.CTkSegmentedButton(
+            bar,
+            values=["Grid", "List"],
+            variable=self.report_layout_mode,
+            command=self._reports_on_layout_change,
+            font=FONT_SM,
+            fg_color=C["elevated"],
+            selected_color=C["accent_dim"],
+            selected_hover_color=C["select"],
+            unselected_color=C["elevated"],
+            unselected_hover_color=C["panel"],
+            text_color=C["text"],
+            height=28,
+        )
+        self.report_layout_seg.pack(side="left", padx=(0, 10))
+        try:
+            self.report_layout_seg.set("Grid")
+        except Exception:
+            pass
 
-        # Separate race toggles for list + export (misclassified-as buckets)
+        # Race toggles (misclassified-as buckets) — White only by default
         self.report_race_white = ctk.BooleanVar(value=True)
-        self.report_race_black = ctk.BooleanVar(value=True)
-        self.report_race_other = ctk.BooleanVar(value=True)
+        self.report_race_black = ctk.BooleanVar(value=False)
+        self.report_race_other = ctk.BooleanVar(value=False)
         for label, var in (
             ("White", self.report_race_white),
             ("Black", self.report_race_black),
@@ -208,6 +225,13 @@ class ReportsTabMixin:
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
         ).pack(side="left", padx=(6, 0))
+        self.report_layout_hint = ctk.CTkLabel(
+            page_row,
+            text="Grid · multi-column mugshots  ·  Open HTML uses same layout",
+            font=FONT_SM,
+            text_color=C["dim"],
+        )
+        self.report_layout_hint.pack(side="left", padx=(14, 0))
 
         # ---- Summary metrics ----
         sum_row = ctk.CTkFrame(top, fg_color="transparent")
@@ -561,6 +585,49 @@ class ReportsTabMixin:
             allow = {"White", "Black", "Other"}
         return allow
 
+    def _reports_on_layout_change(self, value: Optional[str] = None) -> None:
+        """Toggle Grid vs List cards; keep BooleanVar in sync for Open HTML."""
+        raw = (
+            value
+            if value is not None
+            else (getattr(self, "report_layout_mode", None) and self.report_layout_mode.get())
+            or "Grid"
+        )
+        is_grid = str(raw or "Grid").strip().lower().startswith("g")
+        if not hasattr(self, "report_grid_view") or self.report_grid_view is None:
+            self.report_grid_view = ctk.BooleanVar(value=is_grid)
+        else:
+            try:
+                self.report_grid_view.set(is_grid)
+            except Exception:
+                self.report_grid_view = ctk.BooleanVar(value=is_grid)
+        if hasattr(self, "report_layout_hint"):
+            try:
+                self.report_layout_hint.configure(
+                    text=(
+                        "Grid · multi-column mugshots  ·  Open HTML uses same layout"
+                        if is_grid
+                        else "List · full-width rows  ·  Open HTML uses same layout"
+                    )
+                )
+            except Exception:
+                pass
+        try:
+            self._reports_rebuild_cards(refilter=False)
+        except Exception:
+            pass
+
+    def _reports_is_grid(self) -> bool:
+        """True when layout is Grid (segment or legacy checkbox)."""
+        if hasattr(self, "report_layout_mode") and self.report_layout_mode is not None:
+            try:
+                return str(self.report_layout_mode.get() or "").strip().lower().startswith("g")
+            except Exception:
+                pass
+        return bool(
+            getattr(self, "report_grid_view", None) and self.report_grid_view.get()
+        )
+
     def _reports_page_size(self) -> int:
         try:
             n = int(self.report_max_var.get())
@@ -861,6 +928,9 @@ class ReportsTabMixin:
     def _reports_build_list(self):
         """Run Analyze (shared filters), merge DeepFace hits, render photo cards."""
         try:
+            # Misclassify tab is lazy — ensure filter vars exist before Analyze
+            if hasattr(self, "_ensure_misclass_filter_vars"):
+                self._ensure_misclass_filter_vars()
             self._run_misclassification()
         except Exception as e:
             messagebox.showerror("Analyze & build", str(e))
@@ -930,19 +1000,18 @@ class ReportsTabMixin:
         page_size = self._reports_page_size()
         page = int(getattr(self, "_report_page", 0) or 0)
         offset = page * page_size
-        grid = bool(
-            getattr(self, "report_grid_view", None) and self.report_grid_view.get()
-        )
+        grid = self._reports_is_grid()
         if grid:
             host = ctk.CTkFrame(scroll, fg_color="transparent")
             host.pack(fill="both", expand=True, padx=4, pady=4)
-            # ~4–5 columns on typical widths
+            # ~3–6 columns depending on width (larger tiles for mugshots)
             try:
-                w = max(int(scroll.winfo_width() or 900), 600)
+                w = int(scroll.winfo_width() or 0)
             except Exception:
-                w = 900
-            # Wider tiles for larger mugshots
-            n_cols = max(2, min(5, w // 210))
+                w = 0
+            if w < 200:
+                w = 1000
+            n_cols = max(2, min(6, w // 200))
             for c in range(n_cols):
                 host.grid_columnconfigure(c, weight=1, uniform="rg")
             for i, mc in enumerate(items):
@@ -953,10 +1022,20 @@ class ReportsTabMixin:
                     card.grid(
                         row=i // n_cols,
                         column=i % n_cols,
-                        padx=4,
-                        pady=4,
+                        padx=5,
+                        pady=5,
                         sticky="nsew",
                     )
+            # Re-flow columns once the scroll area has a real width
+            try:
+                self.after(
+                    120,
+                    lambda h=host, it=items, off=offset, pn=pool_n: (
+                        self._reports_reflow_grid(h, it, offset=off, pool_n=pn)
+                    ),
+                )
+            except Exception:
+                pass
         else:
             for i, mc in enumerate(items):
                 self._reports_add_card(
@@ -985,6 +1064,50 @@ class ReportsTabMixin:
                     "Confirmed correct leaves Unconfirmed"
                 )
             )
+
+    def _reports_reflow_grid(
+        self, host, items: list, *, offset: int, pool_n: int
+    ) -> None:
+        """Recompute grid columns after the scroll frame gets a real width."""
+        if not self._reports_is_grid():
+            return
+        scroll = getattr(self, "_report_scroll", None)
+        if scroll is None or host is None:
+            return
+        try:
+            if not host.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            w = int(scroll.winfo_width() or 0)
+        except Exception:
+            w = 0
+        if w < 200:
+            return
+        n_cols = max(2, min(6, w // 200))
+        try:
+            kids = [c for c in host.winfo_children() if c.winfo_exists()]
+        except Exception:
+            return
+        if not kids:
+            return
+        for c in range(n_cols):
+            try:
+                host.grid_columnconfigure(c, weight=1, uniform="rg")
+            except Exception:
+                pass
+        for i, child in enumerate(kids):
+            try:
+                child.grid(
+                    row=i // n_cols,
+                    column=i % n_cols,
+                    padx=5,
+                    pady=5,
+                    sticky="nsew",
+                )
+            except Exception:
+                pass
 
     def _reports_drop_card(self, card_widget, mc) -> None:
         """Remove one card from the UI and pools without rebuilding the page."""
@@ -1351,13 +1474,65 @@ class ReportsTabMixin:
         return (no_mid[: max_len - 1] + "…") if len(no_mid) > max_len else no_mid
 
     @staticmethod
-    def _reports_abbreviate_crime(crime: str, *, max_len: int = 42) -> str:
-        """Short crime line for grid tiles — drop boilerplate, compress words."""
+    def _reports_strip_dates_from_text(s: str) -> str:
+        """Remove dates/date phrases for grid crime summaries."""
+        import re
+
+        t = (s or "").strip()
+        if not t:
+            return ""
+        # ISO / numeric dates
+        t = re.sub(r"\b\d{4}-\d{1,2}-\d{1,2}\b", " ", t)
+        t = re.sub(r"\b\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}\b", " ", t)
+        # Month name dates: January 5, 2019 / Jan 5 2019 / 5 January 2019
+        months = (
+            r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|"
+            r"Nov(?:ember)?|Dec(?:ember)?)"
+        )
+        t = re.sub(
+            rf"\b{months}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{2,4}}\b",
+            " ",
+            t,
+            flags=re.I,
+        )
+        t = re.sub(
+            rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+{months}\.?,?\s+\d{{2,4}}\b",
+            " ",
+            t,
+            flags=re.I,
+        )
+        # "on/dated/as of <date-ish>" leftovers
+        t = re.sub(
+            r"\b(?:on|dated?|as of|since|until|from|through)\s+(?=\s|$|,|;)",
+            " ",
+            t,
+            flags=re.I,
+        )
+        # Year-only when clearly a date tag: (2019) or , 2019 at end of clause
+        t = re.sub(r"\(\s*(?:19|20)\d{2}\s*\)", " ", t)
+        t = re.sub(r"\b(?:19|20)\d{2}\b", " ", t)
+        # Cleanup punctuation left by removals
+        t = re.sub(r"\s*[,;:/|–—\-]+\s*", " ", t)
+        t = re.sub(r"\s{2,}", " ", t)
+        return t.strip(" ,;:.-")
+
+    @staticmethod
+    def _reports_abbreviate_crime(
+        crime: str,
+        *,
+        max_len: int = 42,
+        strip_dates: bool = False,
+    ) -> str:
+        """Crime summary for cards — drop boilerplate; grid strips dates."""
         s = (crime or "").strip()
         if not s:
             return ""
         # Normalize whitespace
         s = " ".join(s.split())
+        if strip_dates:
+            s = ReportsTabMixin._reports_strip_dates_from_text(s)
+            s = " ".join(s.split())
         # Drop common statute prefixes / noise
         for prefix in (
             "Convicted of ",
@@ -1366,6 +1541,8 @@ class ReportsTabMixin:
             "Crime: ",
             "Charge: ",
             "Charges: ",
+            "Found guilty of ",
+            "Guilty of ",
         ):
             if s.lower().startswith(prefix.lower()):
                 s = s[len(prefix) :].strip()
@@ -1375,17 +1552,25 @@ class ReportsTabMixin:
         s = re.sub(r"\bSection\s+", "§", s, flags=re.I)
         s = re.sub(r"\bsubsection\s+", "sub§", s, flags=re.I)
         s = re.sub(r"\bCount\s+(\d+)\b", r"Ct.\1", s, flags=re.I)
-        # Prefer text before first semicolon / pipe if long
+        # Prefer text before first semicolon / pipe if still very long
         if len(s) > max_len:
-            for sep in (";", "|", " - ", " — "):
+            for sep in (";", "|", " / "):
                 if sep in s:
-                    head = s.split(sep, 1)[0].strip()
-                    if len(head) >= 12:
-                        s = head
+                    parts = [p.strip() for p in s.split(sep) if p.strip()]
+                    # Keep as many leading parts as fit fully (no mid-cut if possible)
+                    built = ""
+                    for p in parts:
+                        trial = p if not built else f"{built}; {p}"
+                        if len(trial) <= max_len:
+                            built = trial
+                        else:
+                            break
+                    if built and len(built) >= 12:
+                        s = built
                         break
         if len(s) <= max_len:
             return s
-        # Word-boundary trim
+        # Word-boundary trim only as last resort
         cut = s[: max_len - 1]
         if " " in cut:
             cut = cut.rsplit(" ", 1)[0]
@@ -1411,20 +1596,20 @@ class ReportsTabMixin:
         border: str,
         index: int,
     ):
-        """Dense tile for grid view (no surname-ethnicity line)."""
+        """Dense tile for grid view — name, listed race, full crime summary (no dates)."""
+        # Grow with content so the full crime summary is never clipped
         card = ctk.CTkFrame(
             parent,
             fg_color=C["panel"],
             border_color=border,
             border_width=1,
             corner_radius=8,
-            width=200,
-            height=340,
+            width=210,
         )
-        card.grid_propagate(False)
+        card.grid_propagate(True)
 
         photo_wrap = ctk.CTkFrame(
-            card, fg_color=C["tree_bg"], corner_radius=6, height=180,
+            card, fg_color=C["tree_bg"], corner_radius=6, height=158,
         )
         photo_wrap.pack(fill="x", padx=6, pady=(6, 4))
         photo_wrap.pack_propagate(False)
@@ -1433,7 +1618,7 @@ class ReportsTabMixin:
         )
         photo_lbl.place(relx=0.5, rely=0.5, anchor="center")
         if has_photo:
-            thumb = self._reports_load_thumb(photo_path, (188, 176))
+            thumb = self._reports_load_thumb(photo_path, (196, 154))
             if thumb is not None:
                 photo_lbl.configure(image=thumb, text="")
 
@@ -1452,7 +1637,7 @@ class ReportsTabMixin:
             text_color=C["text"],
             anchor="w",
             justify="left",
-            wraplength=180,
+            wraplength=190,
         ).pack(fill="x", padx=8)
         ctk.CTkLabel(
             card,
@@ -1461,7 +1646,26 @@ class ReportsTabMixin:
             text_color=C["danger"],
             anchor="w",
         ).pack(fill="x", padx=8)
-        # Face / conf / state only — no surname ethnicity
+
+        # Crime summary: strip dates; keep complete offense text visible in-box
+        # ~5 lines × ~30 chars ≈ 150 chars fits wraplength 190 without clipping
+        crime_short = self._reports_abbreviate_crime(
+            crime, max_len=150, strip_dates=True
+        )
+        crime_line = f"Crime: {crime_short}" if crime_short else "Crime: —"
+        crime_box = ctk.CTkFrame(card, fg_color="transparent")
+        crime_box.pack(fill="x", padx=8, pady=(2, 0))
+        ctk.CTkLabel(
+            crime_box,
+            text=crime_line,
+            font=FONT_SM,
+            text_color=C["text"] if crime_short else C["dim"],
+            anchor="nw",
+            justify="left",
+            wraplength=190,
+        ).pack(fill="x", anchor="w")
+
+        # Conf / state / face only — no dates, no surname ethnicity
         face_bit = ""
         if df:
             flab = df.get("predicted_label") or df.get("top_label") or ""
@@ -1477,18 +1681,7 @@ class ReportsTabMixin:
             font=FONT_SM,
             text_color=C["muted"],
             anchor="w",
-        ).pack(fill="x", padx=8)
-        crime_short = self._reports_abbreviate_crime(crime, max_len=42)
-        if crime_short:
-            ctk.CTkLabel(
-                card,
-                text=crime_short,
-                font=FONT_SM,
-                text_color=C["dim"],
-                anchor="w",
-                justify="left",
-                wraplength=180,
-            ).pack(fill="x", padx=8)
+        ).pack(fill="x", padx=8, pady=(2, 0))
 
         status_lbl = ctk.CTkLabel(
             card,
@@ -1500,7 +1693,7 @@ class ReportsTabMixin:
         status_lbl.pack(fill="x", padx=8, pady=(2, 0))
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.pack(fill="x", padx=6, pady=(4, 6))
+        actions.pack(fill="x", padx=6, pady=(4, 8))
 
         def _set(v: str, m=mc, card_widget=card, status=status_lbl):
             self._set_verdict_for_mc(m, v, save=True)
@@ -1562,13 +1755,46 @@ class ReportsTabMixin:
         """Best available crime / offense text for report cards and exports."""
         if not rec:
             return ""
-        for key in ("crime", "offense_description", "offense_type"):
+        keys = (
+            "crime",
+            "offense_description",
+            "offense_type",
+            "offense",
+            "offenses",
+            "charges",
+            "charge",
+            "conviction_offense",
+            "statute",
+            "statute_description",
+        )
+        for key in keys:
             raw = rec.get(key)
             if raw is None:
                 continue
             s = str(raw).strip()
-            if s:
+            if s and s.lower() not in ("none", "null", "n/a", "na", "-"):
                 return s
+        # Nested blobs sometimes hold the only offense text
+        for blob_key in ("raw_data_json", "sources_json", "raw_data"):
+            blob = rec.get(blob_key)
+            if not blob:
+                continue
+            try:
+                if isinstance(blob, str):
+                    data = json.loads(blob)
+                else:
+                    data = blob
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            for key in keys:
+                raw = data.get(key)
+                if raw is None:
+                    continue
+                s = str(raw).strip()
+                if s and s.lower() not in ("none", "null", "n/a", "na", "-"):
+                    return s
         return ""
 
     @staticmethod
@@ -1690,7 +1916,7 @@ class ReportsTabMixin:
         self.log_queue.put(f"Reports CSV: {n} rows (race: {races}) → {path}")
 
     def _reports_open_html(self):
-        """Build HTML gallery for the current report pool and open it in the browser."""
+        """Build HTML gallery (grid or list) for the current report pool."""
         source = self._reports_export_source()
         if not source:
             messagebox.showinfo("Open HTML", "Build a report list first.")
@@ -1711,16 +1937,16 @@ class ReportsTabMixin:
             return
         verdict_filter = {"confirmed"} if only else None
 
-        # Prefer current Grid view checkbox; otherwise ask once
-        if hasattr(self, "report_grid_view"):
-            compact = bool(self.report_grid_view.get())
-        else:
-            compact = messagebox.askyesno(
-                "HTML layout",
-                "Use compact photo grid?\n\n"
-                "Yes = multi-column grid\n"
-                "No = list cards",
-            )
+        # Layout: follow Reports Grid/List control; still confirm so HTML can differ
+        prefer_grid = self._reports_is_grid()
+        compact = messagebox.askyesno(
+            "HTML layout",
+            "Use multi-column photo grid?\n\n"
+            f"(Reports view is currently {'Grid' if prefer_grid else 'List'})\n\n"
+            "Yes = compact mugshot grid (recommended)\n"
+            "No = full-width list cards",
+        )
+        # askyesno: Yes=True → grid; No=False → list
 
         rows = list(self._reports_iter_export_rows(verdicts=verdict_filter))
         if not rows:
@@ -1741,7 +1967,7 @@ class ReportsTabMixin:
         eth_f = meta.get("eth_filter", "all")
         min_c = meta.get("min_conf", "")
         generated = datetime.now().strftime("%Y-%m-%d %H:%M")
-        layout = "compact" if compact else "list"
+        layout = "grid" if compact else "list"
 
         def _esc(s: Any) -> str:
             t = str(s if s is not None else "")
@@ -1763,10 +1989,17 @@ class ReportsTabMixin:
             first = (rec.get("first_name") or "").strip()
             middle = (rec.get("middle_name") or "").strip()
             last = (rec.get("last_name") or "").strip()
-            name = (
-                " ".join(p for p in (first, middle, last) if p)
-                or (rec.get("full_name") or "—")
-            )
+            full = str(rec.get("full_name") or "")
+            if compact:
+                name = self._reports_grid_display_name(
+                    first, middle, last, full, max_len=40
+                )
+            else:
+                name = (
+                    " ".join(p for p in (first, middle, last) if p)
+                    or full
+                    or "—"
+                )
             state = _format_state_display(rec)
             photo = (rec.get("photo_path") or "").strip()
             has_photo = photo and Path(photo).is_file()
@@ -1784,14 +2017,35 @@ class ReportsTabMixin:
             race_disp = _format_race_display(mc.expected_race) or (mc.expected_race or "—")
             race = _esc(str(race_disp).upper())
             eth = _esc(mc.likely_ethnicity)
-            conf = f"{mc.confidence:.3f}"
+            conf = f"{float(mc.confidence or 0):.2f}"
             crime = self._reports_crime_text(rec)
+            if compact:
+                crime_short = self._reports_abbreviate_crime(
+                    crime, max_len=150, strip_dates=True
+                )
+            else:
+                crime_short = crime
             crime_html = (
-                f'<p class="crime" title="Crime / offense"><span class="crime-label">Crime</span> '
-                f"{_esc(crime)}</p>"
-                if crime
-                else ""
+                f'<p class="crime" title="{_esc(crime)}">'
+                f'<span class="crime-label">Crime</span> {_esc(crime_short)}</p>'
+                if crime_short
+                else (
+                    '<p class="crime"><span class="crime-label">Crime</span> —</p>'
+                    if compact
+                    else ""
+                )
             )
+            df = rec.get("_deepface") or {}
+            face_bit = ""
+            if df:
+                flab = df.get("predicted_label") or df.get("top_label") or ""
+                fconf = df.get("top_confidence")
+                if flab:
+                    try:
+                        face_bit = f" · face {flab}@{float(fconf):.0%}"
+                    except (TypeError, ValueError):
+                        face_bit = f" · face {flab}"
+            badge = _esc(self._reports_verdict_label_short(verdict))
             if compact:
                 cards_html.append(
                     f"""
@@ -1804,8 +2058,8 @@ class ReportsTabMixin:
       <span class="listed-race">{race}</span>
     </div>
     {crime_html}
-    <p class="vs-eth">vs surname <strong>{eth}</strong></p>
-    <p class="meta">{_esc(state)} · {conf} · #{i}</p>
+    <p class="meta">{_esc(state)} · {conf}{ _esc(face_bit) } · #{i}</p>
+    <p class="badge-line">{badge}</p>
     {link}
   </div>
 </article>"""
@@ -1819,7 +2073,7 @@ class ReportsTabMixin:
     <header>
       <h2>{_esc(name)}</h2>
       <span class="idx">#{i} / {len(rows)}</span>
-      <span class="badge">{_esc(verdict)}</span>
+      <span class="badge">{badge}</span>
     </header>
     <div class="listed-as" title="Registry-listed race">
       <span class="listed-label">LISTED AS</span>
@@ -1827,7 +2081,7 @@ class ReportsTabMixin:
     </div>
     {crime_html}
     <p class="vs-eth">vs surname ethnicity: <strong>{eth}</strong></p>
-    <p class="meta">Confidence {conf} · State {_esc(state)}{(' · Middle: ' + _esc(middle)) if middle else ''}</p>
+    <p class="meta">Confidence {conf} · State {_esc(state)}{(' · Middle: ' + _esc(middle)) if middle else ''}{_esc(face_bit)}</p>
     <p class="names">Matched: {_esc('; '.join(mc.matching_names[:5]) if mc.matching_names else '—')}</p>
     {link}
   </div>
@@ -1838,19 +2092,20 @@ class ReportsTabMixin:
         layout_css = (
             """
   main {
-    max-width: 1400px; margin: 0 auto; padding: .85rem 1rem 2.5rem;
+    max-width: 1500px; margin: 0 auto; padding: .85rem 1rem 2.5rem;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: .65rem;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: .75rem;
   }
   .card {
-    display: flex; flex-direction: column; gap: .45rem;
+    display: flex; flex-direction: column; gap: .4rem;
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 12px; padding: .55rem; align-items: stretch;
     min-width: 0;
   }
-  .card.v-confirmed { border-color: #8a4040; }
+  .card.v-confirmed { border-color: #8a4040; box-shadow: inset 0 0 0 1px #8a404055; }
   .card.v-correct { border-color: #3a6a50; }
+  .card.v-skip { border-color: #4a4a55; opacity: .9; }
   .photo { width: 100%; }
   .photo img {
     width: 100%; aspect-ratio: 4/5; height: auto; object-fit: cover;
@@ -1863,11 +2118,12 @@ class ReportsTabMixin:
   }
   .body { min-width: 0; }
   .body h2 {
-    margin: 0; font-size: .88rem; font-weight: 650; line-height: 1.25;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin: 0; font-size: .9rem; font-weight: 650; line-height: 1.25;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .listed-as {
-    margin: .35rem 0 .2rem; padding: .4rem .5rem .45rem;
+    margin: .3rem 0 .15rem; padding: .4rem .5rem .45rem;
     background: #5c1f1f; border: 2px solid var(--danger);
     border-radius: 8px; text-align: center;
   }
@@ -1876,29 +2132,30 @@ class ReportsTabMixin:
     letter-spacing: .08em; color: #f0b0b0; margin-bottom: .1rem;
   }
   .listed-race {
-    display: block; font-size: 1.15rem; font-weight: 800;
+    display: block; font-size: 1.05rem; font-weight: 800;
     line-height: 1.15; color: #fff; letter-spacing: .02em;
     word-break: break-word;
   }
-  .vs-eth {
-    margin: .15rem 0 0; color: var(--muted); font-size: .72rem;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .vs-eth strong { color: var(--text); font-weight: 650; }
   .crime {
-    margin: .25rem 0 0; color: var(--text); font-size: .72rem;
-    line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical; overflow: hidden;
+    margin: .2rem 0 0; color: var(--text); font-size: .72rem;
+    line-height: 1.3; white-space: normal; overflow: visible;
+    word-break: break-word;
   }
   .crime-label {
-    display: block; font-size: .65rem; font-weight: 700;
+    display: block; font-size: .62rem; font-weight: 700;
     letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-    margin-bottom: .1rem;
+    margin-bottom: .08rem;
   }
-  .meta { margin: .2rem 0 0; color: var(--dim); font-size: .72rem; }
+  .meta { margin: .15rem 0 0; color: var(--dim); font-size: .72rem; }
+  .badge-line { margin: .1rem 0 0; color: var(--muted); font-size: .72rem; }
+  .v-confirmed .badge-line { color: var(--danger); }
+  .v-correct .badge-line { color: var(--success); }
   a.ext { color: var(--accent); font-size: .72rem; }
+  @media (min-width: 1200px) {
+    main { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  }
   @media (max-width: 520px) {
-    main { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .5rem; }
+    main { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .5rem; }
   }
   @media print {
     header.page { position: static; }
@@ -2031,7 +2288,7 @@ class ReportsTabMixin:
         if hasattr(self, "report_status"):
             try:
                 self.report_status.configure(
-                    text=f"Opened HTML · {len(rows):,} cards · {path}"
+                    text=f"Opened HTML ({layout}) · {len(rows):,} cards · {path}"
                 )
             except Exception:
                 pass

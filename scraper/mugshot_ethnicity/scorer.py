@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Union
 
 from scraper.mugshot_ethnicity.backends import EthnicityBackend, create_backend, list_backend_status
 from scraper.mugshot_ethnicity.models import FaceEthnicityScore
+from scraper.mugshot_ethnicity.photo_quality import placeholder_reason
 
 
 class BackendUnavailableError(RuntimeError):
@@ -88,7 +89,19 @@ class MugshotEthnicityScorer:
                 error=f"file too small ({p.stat().st_size} bytes)",
             )
         else:
-            result = self.backend.analyze(str(p))
+            stub = placeholder_reason(p)
+            if stub:
+                # White-bg black-outline SOR stubs (e.g. CO "no photo")
+                result = FaceEthnicityScore(
+                    photo_path=path,
+                    top_label="unknown",
+                    top_confidence=0.0,
+                    backend=self.backend_name,
+                    face_detected=False,
+                    error=stub,
+                )
+            else:
+                result = self.backend.analyze(str(p))
 
         if self._cache_enabled:
             self._cache[key] = result

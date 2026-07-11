@@ -678,22 +678,43 @@ class DeepfaceReportsTabMixin:
             pass
 
         if photo_path is not None:
-            ok, msg = self._dfr_set_photo_image(photo_path)
-            if ok:
-                # Confirm load in meta (helps diagnose blank-image issues)
-                lines.append(f"Image OK: {msg}")
+            stub_reason = None
+            try:
+                from scraper.mugshot_ethnicity.photo_quality import placeholder_reason
+
+                stub_reason = placeholder_reason(photo_path)
+            except Exception:
+                stub_reason = None
+            if stub_reason:
+                # Still paint the silhouette so user sees what was stored, but flag it
+                ok, msg = self._dfr_set_photo_image(photo_path)
+                lines.append(f"⚠ PLACEHOLDER: {stub_reason}")
+                lines.append(
+                    "Not a real mugshot — registry white/outline stub. "
+                    "Do not treat as a face hit."
+                )
+                if ok:
+                    lines.append(f"Image OK (stub): {msg}")
                 try:
                     self.dfr_meta.configure(text="\n".join(lines))
                 except Exception:
                     pass
             else:
-                self._dfr_set_photo_placeholder(f"Photo error\n{msg[:100]}")
-                try:
-                    self.dfr_meta.configure(
-                        text="\n".join(lines + [f"Image FAIL: {msg}"])
-                    )
-                except Exception:
-                    pass
+                ok, msg = self._dfr_set_photo_image(photo_path)
+                if ok:
+                    lines.append(f"Image OK: {msg}")
+                    try:
+                        self.dfr_meta.configure(text="\n".join(lines))
+                    except Exception:
+                        pass
+                else:
+                    self._dfr_set_photo_placeholder(f"Photo error\n{msg[:100]}")
+                    try:
+                        self.dfr_meta.configure(
+                            text="\n".join(lines + [f"Image FAIL: {msg}"])
+                        )
+                    except Exception:
+                        pass
         else:
             self._dfr_set_photo_placeholder(
                 "No photo on disk" + (f"\n{photo_raw[:60]}" if photo_raw else "")

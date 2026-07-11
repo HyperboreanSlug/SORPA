@@ -2126,6 +2126,13 @@ class NSOPWEthnicDatabaseBuilder:
                 sz = p.stat().st_size
                 if sz < min_any:
                     return False
+                try:
+                    from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+
+                    if is_non_mugshot(p):
+                        return False
+                except Exception:
+                    pass
                 ext = p.suffix.lower()
                 # GIFs on state sites are almost always logos/banners/spacers
                 if ext == ".gif":
@@ -2152,6 +2159,13 @@ class NSOPWEthnicDatabaseBuilder:
             # Never persist GIFs as the offender photo
             if path and str(path).lower().endswith(".gif"):
                 return
+            try:
+                from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+
+                if path and is_non_mugshot(path):
+                    return
+            except Exception:
+                pass
             record["photo_path"] = path
             self.stats.photos_saved += 1
             if not from_url:
@@ -2255,15 +2269,31 @@ class NSOPWEthnicDatabaseBuilder:
 
         # 3) Keep a weak existing path only if nothing better is available
         if existing and _file_ok(existing, min_any) and not existing.lower().endswith(".gif"):
+            try:
+                from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+
+                if is_non_mugshot(existing):
+                    record["photo_path"] = None
+                    return
+            except Exception:
+                pass
             # Prefer clearing shared asset placeholders so integrity shows missing
             parts_l = [x.lower() for x in Path(existing).parts]
             if any(x.endswith("_assets") for x in parts_l) and photo_url:
                 record["photo_path"] = None
                 return
             return
-        # Drop GIF placeholders so integrity shows missing photo
+        # Drop GIF / chrome placeholders so integrity shows missing photo
         if existing and existing.lower().endswith(".gif"):
             record["photo_path"] = None
+            return
+        try:
+            from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+
+            if existing and is_non_mugshot(existing):
+                record["photo_path"] = None
+        except Exception:
+            pass
 
     @staticmethod
     def _best_asset_photo(html_path: str, *, min_bytes: int = 80) -> Optional[str]:
@@ -2273,6 +2303,10 @@ class NSOPWEthnicDatabaseBuilder:
         if not assets.is_dir():
             return None
         best: Optional[Tuple[int, int, Path]] = None  # score, size, path
+        try:
+            from scraper.mugshot_ethnicity.photo_quality import is_non_mugshot
+        except Exception:
+            is_non_mugshot = lambda _p: False  # type: ignore
         for cand in assets.iterdir():
             if not cand.is_file():
                 continue
@@ -2286,6 +2320,11 @@ class NSOPWEthnicDatabaseBuilder:
                 continue
             if sz < min_bytes:
                 continue
+            try:
+                if is_non_mugshot(cand):
+                    continue
+            except Exception:
+                pass
             name = cand.name.lower()
             ext = cand.suffix.lower()
             score = 0

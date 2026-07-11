@@ -11,6 +11,7 @@ from scraper.mugshot_ethnicity.labels import (
     normalize_face_label,
 )
 from scraper.mugshot_ethnicity.models import FaceEthnicityScore, GrossMisclassHit
+from scraper.mugshot_ethnicity.photo_quality import is_placeholder_photo, placeholder_reason
 from scraper.mugshot_ethnicity.scorer import BackendUnavailableError, MugshotEthnicityScorer
 from scraper.searcher import Misclassification, _canonical_race_key, format_race_label
 
@@ -164,7 +165,14 @@ def load_deepface_hits_as_misclass(
             min_confidence=min_confidence,
             state=state,
         )
-        return [deepface_hit_to_misclassification(r) for r in rows]
+        out: List[Misclassification] = []
+        for r in rows:
+            photo = (r.get("photo_path") or "").strip()
+            # Hide false hits that were scored on silhouette stubs
+            if photo and is_placeholder_photo(photo):
+                continue
+            out.append(deepface_hit_to_misclassification(r))
+        return out
     finally:
         if own:
             db.close()
@@ -191,6 +199,10 @@ def scan_gross_misclassifications(
     persist: bool = True,
     detector: str = "",
     on_hit: Optional[Callable[[GrossMisclassHit], None]] = None,
+    on_photo: Optional[Callable[[Dict[str, Any], int, int], None]] = None,
+    on_scored: Optional[
+        Callable[[Dict[str, Any], FaceEthnicityScore, bool, int, int], None]
+    ] = None,
 ) -> List[GrossMisclassHit]:
     """
     Scan mugshots for high-confidence face ethnicity that grossly contradicts
@@ -205,6 +217,12 @@ def scan_gross_misclassifications(
     *persist*: write every scored result to ``deepface_scans`` (hits and non-hits).
 
     *on_hit*: optional callback invoked for each hit as it is found (live UI).
+
+    *on_photo*: optional callback ``(record, index, total)`` before each score
+    (live mugshot preview).
+
+    *on_scored*: optional callback ``(record, face, is_hit, index, total)``
+    after each score (update preview with face result).
     """
     def _log(msg: str) -> None:
         if log:
@@ -274,6 +292,7 @@ def scan_gross_misclassifications(
     rows = [dict(r) for r in db._conn.execute(sql, params).fetchall()]
     candidates = []
     skipped = 0
+    skipped_placeholder = 0
     for rec in rows:
         race = (rec.get("race") or "").strip()
         if not _race_is_target(race, targets):
@@ -285,6 +304,36 @@ def scan_gross_misclassifications(
             oid = int(rec["id"]) if rec.get("id") is not None else None
         except (TypeError, ValueError):
             oid = None
+        # Skip SOR silhouette stubs (white bg + black outline) — not real faces
+        if photo and is_placeholder_photo(photo):
+            skipped_placeholder += 1
+            # Persist as non-hit so skip_scanned can avoid re-touching them
+            if persist and oid is not None:
+                try:
+                    reason_stub = placeholder_reason(photo) or "placeholder"
+                    face_stub = FaceEthnicityScore(
+                        photo_path=photo,
+                        top_label="unknown",
+                        top_confidence=0.0,
+                        backend=sc.backend_name,
+                        face_detected=False,
+                        error=reason_stub,
+                    )
+                    _store_scan(
+                        db,
+                        rec,
+                        face_stub,
+                        is_hit=False,
+                        recorded_race=format_race_label(race) if race else race,
+                        predicted_label="",
+                        severity="",
+                        reason="",
+                        min_confidence=min_confidence,
+                        detector=detector,
+                    )
+                except Exception:
+                    pass
+            continue
         if oid is not None and oid in already:
             skipped += 1
             continue
@@ -295,6 +344,11 @@ def scan_gross_misclassifications(
     _log(
         f"Mugshot gross-scan: {len(candidates)} to score"
         + (f", skipped {skipped} already scanned" if skipped else "")
+        + (
+            f", skipped {skipped_placeholder} placeholder silhouettes"
+            if skipped_placeholder
+            else ""
+        )
         + f" (recorded∈{sorted(targets)}, face∈{sorted(want_faces)}, "
         f"min_conf={min_confidence}, backend={sc.backend_name}"
         f"{', rescan' if force_rescan or not skip_scanned else ''})"
@@ -322,8 +376,12 @@ def scan_gross_misclassifications(
                     lab, conf, race, want_faces=want_faces, min_confidence=min_confidence
                 ):
                     continue
+                prior_photo = (rec.get("photo_path") or "").strip()
+                # Drop prior false hits that were scored on silhouette stubs
+                if prior_photo and is_placeholder_photo(prior_photo):
+                    continue
                 face = FaceEthnicityScore(
-                    photo_path=(rec.get("photo_path") or ""),
+                    photo_path=prior_photo,
                     top_label=lab,
                     top_confidence=conf,
                     scores=dict(df.get("scores") or {}),
@@ -353,9 +411,22 @@ def scan_gross_misclassifications(
                 f"({len(hits)} hits total)"
             )
             break
-        if progress and (i % 5 == 0 or i + 1 == total or i == 0):
+        idx = i + 1
+        # Live UI: current mugshot before (slow) model score
+        if on_photo:
             try:
-                progress(i + 1, total)
+                on_photo(rec, idx, total)
+            except Exception:
+                pass
+        # Progress every photo when live preview is on; otherwise every 5
+        if progress and (
+            on_photo is not None
+            or idx % 5 == 0
+            or idx == total
+            or i == 0
+        ):
+            try:
+                progress(idx, total)
             except Exception:
                 pass
         face = sc.score_record(rec)
@@ -394,6 +465,12 @@ def scan_gross_misclassifications(
                 f"{rec.get('first_name')} {rec.get('last_name')} "
                 f"race={race} face={lab}@{conf:.2f}"
             )
+
+        if on_scored:
+            try:
+                on_scored(rec, face, hit, idx, total)
+            except Exception:
+                pass
 
         if persist:
             _store_scan(

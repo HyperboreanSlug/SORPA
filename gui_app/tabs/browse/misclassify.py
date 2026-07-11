@@ -52,15 +52,30 @@ from gui_app.paths import ROOT
 
 
 class MisclassifyTabMixin:
+    def _ensure_misclass_filter_vars(self) -> None:
+        """Create Analyze filter vars even if Misclassify tab was never opened.
+
+        Reports → Analyze & build and CSV export call into this path while the
+        Misclassify UI (which used to create the vars) may still be lazy-unbuilt.
+        """
+        if not hasattr(self, "misclass_ethnicity_var"):
+            self.misclass_ethnicity_var = ctk.StringVar(value="all")
+        if not hasattr(self, "misclass_conf_var"):
+            self.misclass_conf_var = ctk.DoubleVar(value=0.5)
+        if not hasattr(self, "misclass_limit_var"):
+            # 0 = scan entire DB; when capped, Analyze walks newest ids first
+            self.misclass_limit_var = ctk.IntVar(value=0)
+        if not hasattr(self, "enrich_limit_var"):
+            self.enrich_limit_var = ctk.IntVar(value=25)
+        if not hasattr(self, "_misclass_results"):
+            self._misclass_results = []
+        if not hasattr(self, "_misclass_meta"):
+            self._misclass_meta = {}
+
     def _misclass_controls_bar(self, parent) -> ctk.CTkFrame:
         """Shared Analyze filters (used by Misclassify + Statistics)."""
         bar = ctk.CTkFrame(parent, fg_color="transparent")
-
-        if not hasattr(self, "misclass_ethnicity_var"):
-            self.misclass_ethnicity_var = ctk.StringVar(value="all")
-            self.misclass_conf_var = ctk.DoubleVar(value=0.5)
-            # 0 = scan entire DB; when capped, Analyze walks newest ids first
-            self.misclass_limit_var = ctk.IntVar(value=0)
+        self._ensure_misclass_filter_vars()
 
         ctk.CTkComboBox(
             bar, variable=self.misclass_ethnicity_var, width=160,
@@ -97,8 +112,6 @@ class MisclassifyTabMixin:
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
         ).pack(side="left", padx=(0, 6))
-        if not hasattr(self, "enrich_limit_var"):
-            self.enrich_limit_var = ctk.IntVar(value=25)
         ctk.CTkLabel(bar, text="Enrich lim", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(8, 4)
         )
@@ -196,6 +209,7 @@ class MisclassifyTabMixin:
     def _run_misclassification(self):
         from scraper.searcher import SexOffenderSearcher
 
+        self._ensure_misclass_filter_vars()
         searcher = SexOffenderSearcher(db_path=self.db_path)
         eth = (self.misclass_ethnicity_var.get() or "all").strip()
         try:
@@ -278,6 +292,7 @@ class MisclassifyTabMixin:
     def _export_misclass(self):
         from scraper.searcher import SexOffenderSearcher
 
+        self._ensure_misclass_filter_vars()
         path = filedialog.asksaveasfilename(defaultextension=".csv")
         if not path:
             return
