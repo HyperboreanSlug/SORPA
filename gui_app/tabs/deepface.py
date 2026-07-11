@@ -218,8 +218,10 @@ class DeepfaceTabMixin:
             DOWNLOAD_GUIDANCE,
             WEIGHT_MODELS,
             detector_dropdown_label,
+            detector_local_status,
             explain_detector,
             explain_weight,
+            weight_local_status,
         )
 
         guide = ctk.CTkLabel(
@@ -234,7 +236,7 @@ class DeepfaceTabMixin:
         guide.pack(fill="x", padx=14, pady=(0, 10))
 
         det_default = str(sett.get("deepface_detector") or "retinaface")
-        # Dropdown shows name + VRAM so the face-detector option itself reports usage
+        # Dropdown shows name + VRAM + local download status
         det_labels = [detector_dropdown_label(d) for d in DETECTOR_OPTIONS]
         det_id_by_label = {
             detector_dropdown_label(d): d["id"] for d in DETECTOR_OPTIONS
@@ -244,30 +246,42 @@ class DeepfaceTabMixin:
         }
         self._df_det_id_by_label = det_id_by_label
         self._df_label_by_det_id = label_by_det_id
+        self._df_detector_options = DETECTOR_OPTIONS
 
         det_row = ctk.CTkFrame(w_card, fg_color="transparent")
         det_row.pack(fill="x", padx=14, pady=(0, 6))
         ctk.CTkLabel(
             det_row,
-            text="Face detector (one only · VRAM shown)",
+            text="Face detector (one only · VRAM · download status)",
             font=FONT_SM,
             text_color=C["muted"],
         ).pack(side="left", padx=(0, 8))
         self.df_detector_var = ctk.StringVar(
             value=label_by_det_id.get(det_default, det_labels[0])
         )
-        ctk.CTkComboBox(
+        self.df_detector_combo = ctk.CTkComboBox(
             det_row,
             variable=self.df_detector_var,
             values=det_labels,
-            width=420,
+            width=480,
             fg_color=C["bg"],
             border_color=C["border"],
             button_color=C["elevated"],
             text_color=C["text"],
             dropdown_fg_color=C["panel"],
             command=self._deepface_on_detector_change,
-        ).pack(side="left")
+        )
+        self.df_detector_combo.pack(side="left")
+
+        det_st = detector_local_status(det_default)
+        self.df_detector_status = ctk.CTkLabel(
+            det_row,
+            text=det_st.get("label") or "",
+            font=FONT_SM,
+            text_color=C["success"] if det_st.get("downloaded") else C["danger"],
+            anchor="w",
+        )
+        self.df_detector_status.pack(side="left", padx=(12, 0))
 
         self.df_detector_help = ctk.CTkLabel(
             w_card,
@@ -284,6 +298,7 @@ class DeepfaceTabMixin:
             w_card,
             text=(
                 "Model weights (check boxes, then Download selected weights). "
+                "Green “Downloaded” = file present under ~/.deepface/weights. "
                 "Race alone is enough for ethnicity tools."
             ),
             font=FONT_SM,
@@ -302,6 +317,8 @@ class DeepfaceTabMixin:
             saved_models.add("Race")
 
         self._df_weight_vars: Dict[str, ctk.BooleanVar] = {}
+        self._df_weight_status_labels: Dict[str, ctk.CTkLabel] = {}
+        self._df_weight_summary_labels: Dict[str, ctk.CTkLabel] = {}
         weights_frame = ctk.CTkFrame(w_card, fg_color="transparent")
         weights_frame.pack(fill="x", padx=10, pady=(0, 6))
 
@@ -320,8 +337,14 @@ class DeepfaceTabMixin:
             row.pack(fill="x", pady=3)
             vram = m.get("vram_short") or m.get("vram") or ""
             size = m.get("size") or ""
+            st = weight_local_status(mid)
+            st_label = st.get("label") or "Not downloaded"
+            st_ok = bool(st.get("downloaded"))
+
+            head = ctk.CTkFrame(row, fg_color="transparent")
+            head.pack(fill="x", padx=10, pady=(8, 2))
             cb = ctk.CTkCheckBox(
-                row,
+                head,
                 text=f"{m['label']}  ·  {size}" + (f"  ·  {vram}" if vram else ""),
                 variable=var,
                 font=FONT_SM,
@@ -332,19 +355,28 @@ class DeepfaceTabMixin:
                 checkmark_color=C["bg"],
                 command=lambda mid=mid: self._deepface_on_weight_toggle(mid),
             )
-            cb.pack(anchor="w", padx=10, pady=(8, 2))
+            cb.pack(side="left", anchor="w")
             if m.get("required"):
-                # Race cannot be unchecked
                 try:
                     cb.configure(state="disabled")
                 except Exception:
                     pass
+            badge = ctk.CTkLabel(
+                head,
+                text=("✓ " + st_label) if st_ok else st_label,
+                font=FONT_SM,
+                text_color=C["success"] if st_ok else C["danger"],
+                anchor="e",
+            )
+            badge.pack(side="right", padx=(8, 0))
+            self._df_weight_status_labels[mid] = badge
+
             cat = m.get("category") or ""
             cat_note = {
                 "attribute": "Attribute model",
                 "recognition": "Identity model (not race)",
             }.get(cat, cat)
-            ctk.CTkLabel(
+            sum_lbl = ctk.CTkLabel(
                 row,
                 text=f"{m['summary']}\n{cat_note} · disk {size} · load {vram}",
                 font=FONT_SM,
@@ -352,7 +384,9 @@ class DeepfaceTabMixin:
                 anchor="w",
                 wraplength=420,
                 justify="left",
-            ).pack(fill="x", padx=14, pady=(0, 8))
+            )
+            sum_lbl.pack(fill="x", padx=14, pady=(0, 8))
+            self._df_weight_summary_labels[mid] = sum_lbl
 
         self.df_weight_help = ctk.CTkLabel(
             w_card,
@@ -626,6 +660,10 @@ class DeepfaceTabMixin:
                     self.df_status_backends.configure(
                         text="Available: " + ", ".join(parts)
                     )
+                    try:
+                        self._deepface_refresh_download_badges()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -657,14 +695,77 @@ class DeepfaceTabMixin:
         return (getattr(self, "_df_det_id_by_label", {}) or {}).get(label, "retinaface")
 
     def _deepface_on_detector_change(self, _choice: str = "") -> None:
-        from scraper.mugshot_ethnicity.weights_catalog import explain_detector
+        from scraper.mugshot_ethnicity.weights_catalog import (
+            detector_local_status,
+            explain_detector,
+        )
 
         det = self._deepface_selected_detector_id()
         try:
             self.df_detector_help.configure(text=explain_detector(det))
         except Exception:
             pass
+        try:
+            st = detector_local_status(det)
+            if hasattr(self, "df_detector_status"):
+                self.df_detector_status.configure(
+                    text=st.get("label") or "",
+                    text_color=C["success"] if st.get("downloaded") else C["danger"],
+                )
+        except Exception:
+            pass
         self._deepface_save_options()
+
+    def _deepface_refresh_download_badges(self) -> None:
+        """Update per-weight / detector “Downloaded” badges from the local cache."""
+        try:
+            from scraper.mugshot_ethnicity.weights_catalog import (
+                DETECTOR_OPTIONS,
+                detector_dropdown_label,
+                detector_local_status,
+                weight_local_status,
+            )
+        except Exception:
+            return
+
+        # Weight cards
+        for mid, lbl in list(getattr(self, "_df_weight_status_labels", {}).items()):
+            try:
+                st = weight_local_status(mid)
+                ok = bool(st.get("downloaded"))
+                text = st.get("label") or ("Downloaded" if ok else "Not downloaded")
+                lbl.configure(
+                    text=("✓ " + text) if ok else text,
+                    text_color=C["success"] if ok else C["danger"],
+                )
+            except Exception:
+                pass
+
+        # Detector dropdown values + badge (preserve selected id)
+        det = self._deepface_selected_detector_id()
+        try:
+            det_labels = [detector_dropdown_label(d) for d in DETECTOR_OPTIONS]
+            det_id_by_label = {
+                detector_dropdown_label(d): d["id"] for d in DETECTOR_OPTIONS
+            }
+            label_by_det_id = {
+                d["id"]: detector_dropdown_label(d) for d in DETECTOR_OPTIONS
+            }
+            self._df_det_id_by_label = det_id_by_label
+            self._df_label_by_det_id = label_by_det_id
+            new_label = label_by_det_id.get(det, det_labels[0] if det_labels else "")
+            if hasattr(self, "df_detector_combo"):
+                self.df_detector_combo.configure(values=det_labels)
+            if hasattr(self, "df_detector_var") and new_label:
+                self.df_detector_var.set(new_label)
+            st = detector_local_status(det)
+            if hasattr(self, "df_detector_status"):
+                self.df_detector_status.configure(
+                    text=st.get("label") or "",
+                    text_color=C["success"] if st.get("downloaded") else C["danger"],
+                )
+        except Exception:
+            pass
 
     def _deepface_on_weight_toggle(self, model_id: str = "") -> None:
         from scraper.mugshot_ethnicity.weights_catalog import explain_weight
@@ -786,6 +887,10 @@ class DeepfaceTabMixin:
             def done():
                 self._deepface_set_busy(False)
                 self._deepface_refresh_status()
+                try:
+                    self._deepface_refresh_download_badges()
+                except Exception:
+                    pass
                 if hasattr(self, "df_job_status"):
                     self.df_job_status.configure(
                         text="Setup finished OK" if ok else "Setup failed — see log",
