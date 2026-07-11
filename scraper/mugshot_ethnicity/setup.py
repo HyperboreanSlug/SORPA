@@ -3,6 +3,12 @@
 Called automatically when mugshot scoring starts with backend auto/deepface.
 Installs from ``requirements-vision.txt`` into the current interpreter, then
 optionally warms the race model (downloads weights to ``~/.deepface/weights/``).
+
+Hardening:
+  * pip always targets *this* process's site-packages (pythonw → python.exe)
+  * cross-process file lock so two GUIs cannot fight over WinError 32
+  * retries on file-lock / permission pip failures
+  * detects numpy ABI mismatches and force-repairs the vision stack
 """
 from __future__ import annotations
 
@@ -12,18 +18,35 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Package roots (repo root = parents[2] from this file)
 _ROOT = Path(__file__).resolve().parents[2]
 _VISION_REQ = _ROOT / "requirements-vision.txt"
+_LOCK_PATH = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "sor-public-archiver" / "deepface_pip.lock"
 
 # pip names if requirements-vision.txt is missing
 _FALLBACK_PACKAGES = [
+    "numpy>=1.26.0,<2.3",
     "deepface>=0.0.93",
-    "tensorflow>=2.13.0",
+    "tensorflow>=2.15.0",
     "tf-keras>=2.15.0",
+    "opencv-python-headless>=4.8.0",
+    "pillow>=10.0.0",
+]
+
+# Packages reinstalled on ABI / binary-incompatibility repair
+_REPAIR_PACKAGES = [
+    "numpy>=1.26.0,<2.3",
+    "pandas",
+    "h5py",
+    "ml_dtypes",
+    "keras",
+    "tensorflow>=2.15.0",
+    "tf-keras>=2.15.0",
+    "deepface>=0.0.93",
     "opencv-python-headless>=4.8.0",
     "pillow>=10.0.0",
 ]
@@ -44,8 +67,29 @@ def _log(log: Optional[Callable[[str], None]], msg: str) -> None:
         print(msg, flush=True)
 
 
+def _pip_python() -> str:
+    """Interpreter for ``-m pip`` (prefer python.exe over pythonw.exe on Windows)."""
+    exe = sys.executable or "python"
+    try:
+        p = Path(exe)
+        name = p.name.lower()
+        if name == "pythonw.exe":
+            sibling = p.with_name("python.exe")
+            if sibling.is_file():
+                return str(sibling)
+    except Exception:
+        pass
+    return exe
+
+
+def _in_venv() -> bool:
+    return getattr(sys, "base_prefix", sys.prefix) != sys.prefix or bool(
+        os.environ.get("VIRTUAL_ENV")
+    )
+
+
 def deepface_importable() -> bool:
-    """True if ``import deepface`` would succeed."""
+    """True if ``import deepface`` would succeed (module present on path)."""
     return importlib.util.find_spec("deepface") is not None
 
 
@@ -60,36 +104,210 @@ def deepface_available() -> bool:
         return False
 
 
-def _pip_install(packages_or_req: List[str], *, log: Optional[Callable[[str], None]]) -> bool:
-    """Run pip install into *this* interpreter. Returns True on exit 0."""
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
-    # Prefer --user when not in a venv (matches gui.py bootstrap)
-    in_venv = getattr(sys, "base_prefix", sys.prefix) != sys.prefix or bool(
-        os.environ.get("VIRTUAL_ENV")
+def deepface_runtime_ok() -> Tuple[bool, str]:
+    """
+    Deeper check: numpy + tensorflow/keras path used by DeepFace race models.
+
+    Returns (ok, detail). Catches the common ``numpy.dtype size changed`` ABI
+    break that still allows bare ``import deepface`` to succeed.
+    """
+    if not deepface_importable():
+        return False, "deepface package not installed"
+    try:
+        import numpy as np  # noqa: F401
+    except Exception as e:
+        return False, f"numpy import failed: {e}"
+    try:
+        # keras/TF is what actually fails on ABI mismatch
+        import keras  # noqa: F401
+    except Exception as e:
+        msg = str(e)
+        if "numpy.dtype size changed" in msg or "binary incompatibility" in msg:
+            return False, f"numpy ABI mismatch (keras): {msg}"
+        # TF may be importable via tensorflow.keras only
+        try:
+            import tensorflow as tf  # noqa: F401
+        except Exception as e2:
+            msg2 = str(e2)
+            if "numpy.dtype size changed" in msg2 or "binary incompatibility" in msg2:
+                return False, f"numpy ABI mismatch (tensorflow): {msg2}"
+            return False, f"tensorflow/keras import failed: {e2}"
+    try:
+        import deepface  # noqa: F401
+        return True, "ok"
+    except Exception as e:
+        return False, f"deepface import failed: {e}"
+
+
+def _clear_ml_modules() -> None:
+    """Drop cached ML imports so a reinstall is visible in this process."""
+    importlib.invalidate_caches()
+    prefixes = (
+        "deepface",
+        "tensorflow",
+        "keras",
+        "tf_keras",
+        "h5py",
+        "pandas",
+        "cv2",
+        "numpy",
+        "ml_dtypes",
+        "retinaface",
+        "mtcnn",
+        "gdown",
     )
-    if not in_venv:
+    for mod in list(sys.modules):
+        if mod == "numpy" or any(
+            mod == p or mod.startswith(p + ".") for p in prefixes
+        ):
+            try:
+                del sys.modules[mod]
+            except KeyError:
+                pass
+
+
+class _ProcessFileLock:
+    """Best-effort exclusive lock across processes (Windows + POSIX)."""
+
+    def __init__(self, path: Path, *, timeout: float = 900.0):
+        self.path = path
+        self.timeout = timeout
+        self._fh = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        start = time.time()
+        self._fh = open(self.path, "a+", encoding="utf-8")
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    self._fh.seek(0)
+                    msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._fh.seek(0)
+                self._fh.truncate()
+                self._fh.write(f"pid={os.getpid()} exe={sys.executable}\n")
+                self._fh.flush()
+                return self
+            except OSError:
+                if time.time() - start >= self.timeout:
+                    raise TimeoutError(f"Timed out waiting for DeepFace pip lock: {self.path}")
+                time.sleep(1.5)
+
+    def __exit__(self, *exc):
+        if self._fh is None:
+            return
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+        self._fh = None
+
+
+def _is_lock_error(text: str) -> bool:
+    t = (text or "").lower()
+    return any(
+        s in t
+        for s in (
+            "winerror 32",
+            "being used by another process",
+            "cannot access the file",
+            "permission denied",
+            "[errno 13]",
+            "temporarily unavailable",
+        )
+    )
+
+
+def _is_abi_error(text: str) -> bool:
+    t = (text or "").lower()
+    return "numpy.dtype size changed" in t or "binary incompatibility" in t
+
+
+def _pip_install(
+    packages_or_req: List[str],
+    *,
+    log: Optional[Callable[[str], None]],
+    force_reinstall: bool = False,
+    no_cache: bool = False,
+    retries: int = 3,
+) -> bool:
+    """Run pip install into *this* interpreter's environment."""
+    py = _pip_python()
+    cmd = [py, "-m", "pip", "install", "--upgrade"]
+    if force_reinstall:
+        cmd.append("--force-reinstall")
+    if no_cache:
+        cmd.append("--no-cache-dir")
+    if not _in_venv():
         cmd.append("--user")
     cmd.extend(packages_or_req)
-    _log(log, f"Installing DeepFace stack:\n  {' '.join(cmd)}")
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=int(os.environ.get("SOR_DEEPFACE_PIP_TIMEOUT", "1200")),
-        )
-    except subprocess.TimeoutExpired:
-        _log(log, "DeepFace pip install timed out")
-        return False
-    except Exception as e:
-        _log(log, f"DeepFace pip install failed to start: {e}")
-        return False
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "")[-1500:]
+
+    for attempt in range(1, max(1, retries) + 1):
+        _log(log, f"Installing DeepFace stack (attempt {attempt}/{retries}):\n  {' '.join(cmd)}")
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=int(os.environ.get("SOR_DEEPFACE_PIP_TIMEOUT", "1800")),
+            )
+        except subprocess.TimeoutExpired:
+            _log(log, "DeepFace pip install timed out")
+            return False
+        except Exception as e:
+            _log(log, f"DeepFace pip install failed to start: {e}")
+            return False
+
+        out = (proc.stderr or "") + "\n" + (proc.stdout or "")
+        if proc.returncode == 0:
+            _log(log, "DeepFace packages installed OK")
+            return True
+
+        tail = out[-1800:]
         _log(log, f"DeepFace pip install failed (exit {proc.returncode}):\n{tail}")
+        if attempt < retries and _is_lock_error(out):
+            wait = 4.0 * attempt
+            _log(log, f"File lock / permission conflict — retrying in {wait:.0f}s …")
+            time.sleep(wait)
+            continue
         return False
-    _log(log, "DeepFace packages installed OK")
-    return True
+    return False
+
+
+def _repair_numpy_stack(*, log: Optional[Callable[[str], None]]) -> bool:
+    """Force-reinstall numpy + dependents to fix ABI mismatches."""
+    _log(
+        log,
+        "Repairing vision stack (numpy ABI / binary incompatibility). "
+        "This reinstalls numpy, pandas, keras, tensorflow, deepface …",
+    )
+    ok = _pip_install(
+        list(_REPAIR_PACKAGES),
+        log=log,
+        force_reinstall=True,
+        no_cache=True,
+        retries=3,
+    )
+    _clear_ml_modules()
+    return ok
 
 
 def ensure_deepface(
@@ -102,8 +320,8 @@ def ensure_deepface(
     """
     Make DeepFace usable in this process.
 
-    1. If already importable → optionally warm race model → True
-    2. Else if auto_install → pip install requirements-vision.txt → re-check
+    1. If runtime-ok → optionally warm race model → True
+    2. Else if auto_install → pip install (with lock + ABI repair) → re-check
     3. Else False
 
     Safe to call repeatedly (install attempted at most once per process unless
@@ -111,82 +329,163 @@ def ensure_deepface(
     """
     global _install_attempted, _install_ok, _warm_attempted
 
-    if deepface_available() and not force_reinstall:
+    runtime_ok, detail = deepface_runtime_ok()
+    if runtime_ok and not force_reinstall:
         if warm:
             warm_deepface_models(log=log)
         return True
 
+    # Importable but ABI-broken — still need repair even if "available"
+    needs_repair = _is_abi_error(detail) or (
+        deepface_importable() and not runtime_ok and "ABI" in detail
+    )
+
     if not auto_install:
+        if not runtime_ok:
+            _log(log, f"DeepFace not ready: {detail}")
         return False
 
     with _install_lock:
-        if _install_attempted and not force_reinstall:
-            ok = bool(_install_ok and deepface_available())
+        if _install_attempted and not force_reinstall and not needs_repair:
+            ok = bool(_install_ok and deepface_runtime_ok()[0])
             if ok and warm:
                 warm_deepface_models(log=log)
             return ok
 
         _install_attempted = True
-        if deepface_available() and not force_reinstall:
+
+        runtime_ok, detail = deepface_runtime_ok()
+        if runtime_ok and not force_reinstall:
             _install_ok = True
             if warm:
                 warm_deepface_models(log=log)
             return True
 
-        env_skip = os.environ.get("SOR_SKIP_DEEPFACE_INSTALL", "").strip() in (
-            "1", "true", "yes",
+        env_skip = os.environ.get("SOR_SKIP_DEEPFACE_INSTALL", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
         )
         if env_skip:
             _log(log, "SOR_SKIP_DEEPFACE_INSTALL set — not auto-installing DeepFace")
             _install_ok = False
             return False
 
-        if _VISION_REQ.is_file():
-            ok = _pip_install(["-r", str(_VISION_REQ)], log=log)
-        else:
-            ok = _pip_install(list(_FALLBACK_PACKAGES), log=log)
+        _log(log, f"Interpreter: {sys.executable}")
+        _log(log, f"Pip target:  {_pip_python()}")
+        if detail and detail != "ok":
+            _log(log, f"Pre-install status: {detail}")
 
-        # Invalidate import caches after install
-        importlib.invalidate_caches()
-        # Drop partial imports if any
-        for mod in list(sys.modules):
-            if mod == "deepface" or mod.startswith("deepface."):
-                del sys.modules[mod]
+        try:
+            with _ProcessFileLock(_LOCK_PATH, timeout=900.0):
+                if needs_repair or force_reinstall or _is_abi_error(detail):
+                    ok = _repair_numpy_stack(log=log)
+                else:
+                    if _VISION_REQ.is_file():
+                        ok = _pip_install(
+                            ["-r", str(_VISION_REQ)],
+                            log=log,
+                            force_reinstall=force_reinstall,
+                            retries=3,
+                        )
+                    else:
+                        ok = _pip_install(
+                            list(_FALLBACK_PACKAGES),
+                            log=log,
+                            force_reinstall=force_reinstall,
+                            retries=3,
+                        )
+                    _clear_ml_modules()
+                    runtime_ok, detail = deepface_runtime_ok()
+                    if ok and not runtime_ok and (
+                        _is_abi_error(detail) or "ABI" in detail or not deepface_importable()
+                    ):
+                        _log(log, f"Post-install check failed ({detail}) — running ABI repair")
+                        ok = _repair_numpy_stack(log=log)
+        except TimeoutError as e:
+            _log(log, str(e))
+            ok = False
+        except Exception as e:
+            _log(log, f"DeepFace install lock error: {e}")
+            ok = False
 
-        _install_ok = bool(ok and deepface_available())
+        _clear_ml_modules()
+        runtime_ok, detail = deepface_runtime_ok()
+        _install_ok = bool(ok and runtime_ok)
         if not _install_ok:
             _log(
                 log,
-                "DeepFace still not importable after install. "
-                f"Interpreter: {sys.executable}\n"
-                "Try manually:\n"
-                f"  {sys.executable} -m pip install -r requirements-vision.txt",
+                "DeepFace still not ready after install.\n"
+                f"  Detail: {detail}\n"
+                f"  Interpreter: {sys.executable}\n"
+                "Try manually (close other Python apps first):\n"
+                f"  {_pip_python()} -m pip install --user --force-reinstall "
+                f"--no-cache-dir -r {_VISION_REQ if _VISION_REQ.is_file() else 'requirements-vision.txt'}",
             )
             return False
 
-        _log(log, "DeepFace import OK")
+        _log(log, "DeepFace runtime OK")
         if warm:
             warm_deepface_models(log=log)
         return True
+
+
+def _model_task(model_id: str) -> str:
+    """DeepFace ≥0.0.95 requires an explicit task for build_model."""
+    mid = (model_id or "").strip()
+    if mid in ("Age", "Gender", "Emotion", "Race"):
+        return "facial_attribute"
+    detectors = {
+        "opencv",
+        "ssd",
+        "dlib",
+        "mtcnn",
+        "retinaface",
+        "mediapipe",
+        "yunet",
+        "fastmtcnn",
+        "centerface",
+        "yolov8",
+        "yolov11",
+        "yolov12",
+    }
+    low = mid.lower()
+    if low in detectors or low.startswith("yolo"):
+        return "face_detector"
+    if low in ("fasnet",):
+        return "spoofing"
+    return "facial_recognition"
 
 
 def _build_one_model(DeepFace: Any, model_id: str, log: Optional[Callable[[str], None]]) -> bool:
     """Download/build a single DeepFace model by name."""
     _log(log, f"Downloading / building weights: {model_id} …")
     try:
-        if hasattr(DeepFace, "build_model"):
-            try:
-                DeepFace.build_model(model_id)
-                _log(log, f"  OK: {model_id}")
-                return True
-            except TypeError:
-                DeepFace.build_model(model_name=model_id)
-                _log(log, f"  OK: {model_id}")
-                return True
-        _log(log, f"  build_model unavailable for {model_id}")
-        return False
+        if not hasattr(DeepFace, "build_model"):
+            _log(log, f"  build_model unavailable for {model_id}")
+            return False
+        task = _model_task(model_id)
+        # New API: build_model(model_name, task=...)
+        try:
+            DeepFace.build_model(model_id, task=task)
+            _log(log, f"  OK: {model_id} (task={task})")
+            return True
+        except TypeError:
+            pass
+        # Older API: build_model(model_name) only
+        try:
+            DeepFace.build_model(model_id)
+            _log(log, f"  OK: {model_id}")
+            return True
+        except TypeError:
+            DeepFace.build_model(model_name=model_id)
+            _log(log, f"  OK: {model_id}")
+            return True
     except Exception as e:
+        msg = str(e)
         _log(log, f"  FAIL {model_id}: {e}")
+        if _is_abi_error(msg):
+            raise
         return False
 
 
@@ -204,8 +503,9 @@ def download_selected_weights(
     """
     from scraper.mugshot_ethnicity.weights_catalog import default_selected_weights
 
-    if not deepface_available():
-        _log(log, "DeepFace not installed — cannot download weights")
+    ok, detail = deepface_runtime_ok()
+    if not ok:
+        _log(log, f"DeepFace not ready — cannot download weights ({detail})")
         return {}
 
     models = list(model_ids or default_selected_weights())
@@ -269,8 +569,24 @@ def warm_deepface_models(
     First run may take a few minutes; later runs are fast.
     """
     global _warm_attempted
-    if not deepface_available():
-        return False
+    ok, detail = deepface_runtime_ok()
+    if not ok:
+        # Attempt one ABI repair if that is the problem
+        if _is_abi_error(detail) or "ABI" in detail:
+            _log(log, f"Warm-up blocked ({detail}) — repairing stack first")
+            try:
+                with _ProcessFileLock(_LOCK_PATH, timeout=900.0):
+                    _repair_numpy_stack(log=log)
+            except Exception as e:
+                _log(log, f"Repair failed: {e}")
+                return False
+            ok, detail = deepface_runtime_ok()
+            if not ok:
+                _log(log, f"Still not ready after repair: {detail}")
+                return False
+        else:
+            return False
+
     # Allow re-warm when explicit model list provided
     if _warm_attempted and not model_ids:
         return True
@@ -287,7 +603,20 @@ def warm_deepface_models(
             _log(log, "DeepFace weights ready under ~/.deepface/weights/")
         return ok
     except Exception as e:
+        msg = str(e)
         _log(log, f"DeepFace warm-up failed: {e}")
+        if _is_abi_error(msg):
+            try:
+                with _ProcessFileLock(_LOCK_PATH, timeout=900.0):
+                    if _repair_numpy_stack(log=log):
+                        _warm_attempted = False
+                        return warm_deepface_models(
+                            log=log,
+                            model_ids=model_ids or ["Race"],
+                            detector_backend=detector_backend,
+                        )
+            except Exception as e2:
+                _log(log, f"Repair after warm-up failure failed: {e2}")
         return False
 
 
@@ -296,6 +625,7 @@ def ensure_deepface_background(
     log: Optional[Callable[[str], None]] = None,
 ) -> threading.Thread:
     """Start ensure_deepface in a daemon thread (non-blocking GUI startup)."""
+
     def _run() -> None:
         try:
             ensure_deepface(auto_install=True, warm=True, log=log)

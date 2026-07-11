@@ -469,24 +469,32 @@ class DeepfaceTabMixin:
         try:
             from scraper.mugshot_ethnicity import (
                 deepface_available,
+                deepface_runtime_ok,
                 get_available_backends,
             )
 
-            avail = deepface_available()
+            pkg = deepface_available()
+            runtime_ok, runtime_detail = deepface_runtime_ok()
+            if runtime_ok:
+                inst_txt = "Installed: Yes (runtime OK)"
+                inst_col = C["success"]
+            elif pkg:
+                inst_txt = f"Installed: package present but broken — {runtime_detail}"
+                inst_col = C["danger"]
+            else:
+                inst_txt = "Installed: No"
+                inst_col = C["danger"]
+            self.df_status_installed.configure(text=inst_txt, text_color=inst_col)
             backends = get_available_backends()
-            self.df_status_installed.configure(
-                text=f"Installed: {'Yes' if avail else 'No'}",
-                text_color=C["success"] if avail else C["danger"],
-            )
             # Prefer deepface if available
-            if backends.get("deepface"):
+            if runtime_ok and backends.get("deepface"):
                 be = "deepface (ready)"
                 col = C["success"]
             elif backends.get("clip"):
                 be = "clip (fallback)"
                 col = C["accent"]
             else:
-                be = "none — install required for mugshot tools"
+                be = "none — install / repair required for mugshot tools"
                 col = C["danger"]
             self.df_status_backend.configure(text=f"Preferred backend: {be}", text_color=col)
             parts = [f"{k}={'yes' if v else 'no'}" for k, v in sorted(backends.items())]
