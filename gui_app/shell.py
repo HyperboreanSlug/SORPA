@@ -56,6 +56,7 @@ from gui_app.tabs.browse import BrowseTabMixin
 from gui_app.tabs.browse.integrity import IntegrityTabMixin
 from gui_app.tabs.browse.misclassify import MisclassifyTabMixin
 from gui_app.tabs.browse.reports import ReportsTabMixin
+from gui_app.tabs.browse.deepface_reports import DeepfaceReportsTabMixin
 from gui_app.tabs.browse.search import SearchTabMixin
 from gui_app.tabs.browse.statistics import StatisticsTabMixin
 from gui_app.tabs.nsopw import NsopwTabMixin
@@ -72,6 +73,7 @@ class ArchiverApp(
     MisclassifyTabMixin,
     StatisticsTabMixin,
     ReportsTabMixin,
+    DeepfaceReportsTabMixin,
     NsopwTabMixin,
     ScrapeTabMixin,
     DeepfaceTabMixin,

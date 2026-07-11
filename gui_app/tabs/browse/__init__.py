@@ -38,6 +38,7 @@ class BrowseTabMixin:
         host.register("Misclassify", lambda p: self._build_misclass(p) or True)
         host.register("Statistics", lambda p: self._build_misclass_statistics(p) or True)
         host.register("Reports", lambda p: self._build_reports(p) or True)
+        host.register("DeepFace", lambda p: self._build_deepface_reports(p) or True)
 
         try:
             sub.set("Search")
@@ -47,5 +48,14 @@ class BrowseTabMixin:
         return host
 
     def _on_browse_tab_change(self, _name: Optional[str] = None) -> None:
-        """Hook for Browse sub-tab switches (extend as needed)."""
-        pass
+        """Hook for Browse sub-tab switches."""
+        try:
+            name = _name or self.browse_tabs.get()
+        except Exception:
+            name = ""
+        if name == "DeepFace" and hasattr(self, "_dfr_refresh"):
+            # Refresh hit list when opening the DeepFace review tab
+            try:
+                self.after(50, self._dfr_refresh)
+            except Exception:
+                pass
