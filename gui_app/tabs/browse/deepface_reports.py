@@ -34,6 +34,26 @@ from gui_app.paths import ROOT
 class DeepfaceReportsTabMixin:
     """Dedicated queue for stored DeepFace gross-misclass hits + verdict tracking."""
 
+    # Same labels as Reports cards (manual ethnicity override)
+    _DFR_ETHNICITY_OPTIONS = [
+        "Asian",
+        "Asian (vietnamese)",
+        "Asian (chinese)",
+        "Asian (korean)",
+        "Asian (japanese)",
+        "Asian (filipino)",
+        "Indian",
+        "Indian (india)",
+        "Hispanic",
+        "African American",
+        "Arabic",
+        "Jewish",
+        "Portuguese",
+        "European",
+        "Native American",
+        "Unknown",
+    ]
+
     def _build_deepface_reports(self, tab) -> None:
         tab.configure(fg_color=C["surface"])
         tab.grid_columnconfigure(0, weight=1)
@@ -280,6 +300,39 @@ class DeepfaceReportsTabMixin:
             state="disabled",
         )
         self.dfr_btn_skip.pack(side="left")
+
+        # Ethnicity override (persists to offender.likely_ethnicity + Reports Actual)
+        eth_row = ctk.CTkFrame(rev, fg_color="transparent")
+        eth_row.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkLabel(
+            eth_row, text="Ethnicity", font=FONT_SM, text_color=C["muted"],
+        ).pack(side="left", padx=(0, 6))
+        self.dfr_eth_var = ctk.StringVar(value="Unknown")
+        eth_opts = list(
+            getattr(self, "_ETHNICITY_OPTIONS", None) or self._DFR_ETHNICITY_OPTIONS
+        )
+        self.dfr_eth_combo = ctk.CTkComboBox(
+            eth_row,
+            variable=self.dfr_eth_var,
+            values=eth_opts,
+            width=200,
+            height=30,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            button_color=C["elevated"],
+            text_color=C["text"],
+            dropdown_fg_color=C["panel"],
+            state="disabled",
+            font=FONT_SM,
+            command=self._dfr_on_ethnicity_change,
+        )
+        self.dfr_eth_combo.pack(side="left")
+        ctk.CTkLabel(
+            eth_row,
+            text="Saved on the person · used by Reports Actual filter",
+            font=FONT_SM,
+            text_color=C["dim"],
+        ).pack(side="left", padx=(10, 0))
 
         self.after(80, self._dfr_refresh)
 
@@ -587,6 +640,87 @@ class DeepfaceReportsTabMixin:
             self.dfr_verdict_lbl.configure(text="", text_color=C["dim"])
             for b in (self.dfr_btn_bad, self.dfr_btn_ok, self.dfr_btn_skip):
                 b.configure(state="disabled")
+            if hasattr(self, "dfr_eth_combo"):
+                self.dfr_eth_combo.configure(state="disabled")
+            if hasattr(self, "dfr_eth_var"):
+                self.dfr_eth_var.set("Unknown")
+        except Exception:
+            pass
+
+    def _dfr_current_ethnicity(self, mc) -> str:
+        """Best ethnicity label for the combo (saved, then face, then Unknown)."""
+        rec = getattr(mc, "record", None) or {}
+        eth = (getattr(mc, "likely_ethnicity", None) or "").strip()
+        if not eth or eth in ("—", "-"):
+            eth = (rec.get("likely_ethnicity") or "").strip()
+        if eth and eth not in ("—", "-", "unknown"):
+            return eth
+        df = rec.get("_deepface") or {}
+        face = (df.get("predicted_label") or df.get("top_label") or "").strip()
+        if face:
+            face_l = face.lower().replace("_", " ")
+            # Map face labels to display options
+            if "black" in face_l or "african" in face_l:
+                return "African American"
+            if "indian" in face_l:
+                return "Indian"
+            if "asian" in face_l:
+                return "Asian"
+            if "hispanic" in face_l or "latino" in face_l:
+                return "Hispanic"
+            if "white" in face_l:
+                return "European"
+            if "middle" in face_l or "arab" in face_l:
+                return "Arabic"
+            return face.replace("_", " ").title()
+        return "Unknown"
+
+    def _dfr_on_ethnicity_change(self, choice: str = "") -> None:
+        """Persist ethnicity for the selected DeepFace hit."""
+        if getattr(self, "_dfr_eth_updating", False):
+            return
+        iid = getattr(self, "_dfr_selected_iid", None)
+        mc = (getattr(self, "_dfr_hits_by_iid", {}) or {}).get(iid) if iid else None
+        if mc is None:
+            return
+        eth = (choice or "").strip()
+        if not eth and hasattr(self, "dfr_eth_var"):
+            eth = (self.dfr_eth_var.get() or "").strip()
+        eth = eth or "Unknown"
+
+        if hasattr(self, "_set_ethnicity_for_mc"):
+            try:
+                self._set_ethnicity_for_mc(mc, eth)
+            except Exception:
+                self._dfr_set_ethnicity_fallback(mc, eth)
+        else:
+            self._dfr_set_ethnicity_fallback(mc, eth)
+
+        # Refresh meta so "Ethnicity:" line updates without losing selection
+        try:
+            self._dfr_show(iid, mc, preserve_eth=True)
+        except Exception:
+            pass
+
+    def _dfr_set_ethnicity_fallback(self, mc, ethnicity: str) -> None:
+        """Write likely_ethnicity when Reports mixin method is unavailable."""
+        eth = (ethnicity or "").strip() or "Unknown"
+        mc.likely_ethnicity = eth
+        rec = mc.record if isinstance(mc.record, dict) else {}
+        rec = dict(rec)
+        rec["likely_ethnicity"] = eth
+        mc.record = rec
+        rid = rec.get("id")
+        if rid is None:
+            return
+        try:
+            from scraper.database import Database
+
+            db = Database(str(getattr(self, "db_path", None) or "data/offenders.db"))
+            try:
+                db.update_offender(int(rid), {"likely_ethnicity": eth})
+            finally:
+                db.close()
         except Exception:
             pass
 
@@ -629,7 +763,7 @@ class DeepfaceReportsTabMixin:
         if mc is not None:
             self._dfr_show(pick, mc)
 
-    def _dfr_show(self, iid: str, mc) -> None:
+    def _dfr_show(self, iid: str, mc, *, preserve_eth: bool = False) -> None:
         self._dfr_selected_iid = iid
         rec = dict(mc.record or {})
         name = (
@@ -644,6 +778,7 @@ class DeepfaceReportsTabMixin:
         conf = float(mc.confidence or 0)
         sev = df.get("severity") or ""
         reason = df.get("reason") or ""
+        eth_cur = self._dfr_current_ethnicity(mc)
         crime = ""
         for key in ("crime", "offense_description", "offense_type"):
             if rec.get(key):
@@ -656,6 +791,7 @@ class DeepfaceReportsTabMixin:
         lines = [
             f"LISTED AS: {race}",
             f"Face: {face} @ {conf:.0%}{(' · ' + sev) if sev else ''}",
+            f"Ethnicity: {eth_cur}",
             f"State: {state}  ·  ID: {rec.get('id') or '—'}",
         ]
         if df.get("scanned_at"):
@@ -739,6 +875,24 @@ class DeepfaceReportsTabMixin:
                 b.configure(state="normal")
         except Exception:
             pass
+
+        # Ethnicity combo (skip re-set when user just changed it to avoid loops)
+        if not preserve_eth and hasattr(self, "dfr_eth_combo"):
+            try:
+                eth_opts = list(
+                    getattr(self, "_ETHNICITY_OPTIONS", None)
+                    or self._DFR_ETHNICITY_OPTIONS
+                )
+                if eth_cur not in eth_opts:
+                    eth_opts = [eth_cur] + eth_opts
+                self._dfr_eth_updating = True
+                try:
+                    self.dfr_eth_combo.configure(values=eth_opts, state="normal")
+                    self.dfr_eth_var.set(eth_cur)
+                finally:
+                    self._dfr_eth_updating = False
+            except Exception:
+                self._dfr_eth_updating = False
 
     def _dfr_set_verdict(self, verdict: str) -> None:
         iid = getattr(self, "_dfr_selected_iid", None)
