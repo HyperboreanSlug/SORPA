@@ -115,6 +115,13 @@ class ArchiverApp(
         self._poll_log()
         self._bind_global_copy_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Defer CTk canvas redraws while the user drag-resizes the window
+        try:
+            from gui_app.resize_perf import bind_root_resize_throttle
+
+            bind_root_resize_throttle(self, settle_ms=80)
+        except Exception:
+            pass
         # First-run / enabled DB sync from GitHub Releases
         self.after(400, self._maybe_prompt_or_sync_database)
 

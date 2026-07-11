@@ -7,6 +7,14 @@ from tkinter import ttk
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
+# Install CTk resize throttle as early as possible (before widgets are created)
+try:
+    from gui_app.resize_perf import install_ctk_resize_throttle
+
+    install_ctk_resize_throttle()
+except Exception:
+    pass
+
 C = {
     "bg": "#0c0c0e",
     "surface": "#141418",

@@ -65,7 +65,11 @@ def tree_frame(parent) -> tuple[ctk.CTkFrame, ttk.Treeview]:
 
 
 def vpaned(parent) -> tk.PanedWindow:
-    """Vertical drag-sash splitter for resizable data panes."""
+    """Vertical drag-sash splitter for resizable data panes.
+
+    opaqueresize=False: only reflow children when the sash is released
+    (live reflow of CTk trees is a major resize/sash lag source).
+    """
     return tk.PanedWindow(
         parent,
         orient=tk.VERTICAL,
@@ -73,12 +77,15 @@ def vpaned(parent) -> tk.PanedWindow:
         sashrelief=tk.FLAT,
         bg=C["border"],
         bd=0,
-        opaqueresize=True,
+        opaqueresize=False,
     )
 
 
 def hpaned(parent) -> tk.PanedWindow:
-    """Horizontal drag-sash splitter for resizable data panes."""
+    """Horizontal drag-sash splitter for resizable data panes.
+
+    opaqueresize=False avoids continuous CTk redraws while dragging the sash.
+    """
     return tk.PanedWindow(
         parent,
         orient=tk.HORIZONTAL,
@@ -86,7 +93,7 @@ def hpaned(parent) -> tk.PanedWindow:
         sashrelief=tk.FLAT,
         bg=C["border"],
         bd=0,
-        opaqueresize=True,
+        opaqueresize=False,
     )
 
 
