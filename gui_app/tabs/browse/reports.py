@@ -110,6 +110,15 @@ class ReportsTabMixin:
             command=lambda: self._reports_on_filter_change(),
         ).pack(side="left", padx=(0, 8))
 
+        self.report_grid_view = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            bar, text="Grid view", variable=self.report_grid_view,
+            font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            border_color=C["border"], checkmark_color=C["bg"],
+            command=lambda: self._reports_rebuild_cards(refilter=False),
+        ).pack(side="left", padx=(0, 8))
+
         # Separate race toggles for list + export (misclassified-as buckets)
         self.report_race_white = ctk.BooleanVar(value=True)
         self.report_race_black = ctk.BooleanVar(value=True)
@@ -130,7 +139,7 @@ class ReportsTabMixin:
         ctk.CTkLabel(bar, text="Page size", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(8, 4)
         )
-        self.report_max_var = ctk.IntVar(value=40)
+        self.report_max_var = ctk.IntVar(value=48)
         page_size_entry = ctk.CTkEntry(
             bar, textvariable=self.report_max_var, width=48,
             fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
@@ -233,14 +242,16 @@ class ReportsTabMixin:
         )
         self.report_status.pack(fill="x", padx=8, pady=(0, 4))
 
-        # ---- Scrollable card list ----
+        # ---- Scrollable card list (fast wheel binding after paint) ----
         scroll = ctk.CTkScrollableFrame(
             tab, fg_color=C["surface"], corner_radius=0, border_width=0,
         )
         scroll.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 6))
         scroll.grid_columnconfigure(0, weight=1)
         self._report_scroll = scroll
+        self._report_tab = tab
         self.after(30, lambda: _wire_wide_scroll(tab, scroll))
+        self.after(80, lambda: self._reports_bind_fast_scroll(tab, scroll))
 
         # Empty-state placeholder
         self._report_empty = ctk.CTkLabel(
@@ -919,10 +930,45 @@ class ReportsTabMixin:
         page_size = self._reports_page_size()
         page = int(getattr(self, "_report_page", 0) or 0)
         offset = page * page_size
-        for i, mc in enumerate(items):
-            self._reports_add_card(
-                scroll, mc, index=offset + i + 1, total=pool_n
-            )
+        grid = bool(
+            getattr(self, "report_grid_view", None) and self.report_grid_view.get()
+        )
+        if grid:
+            host = ctk.CTkFrame(scroll, fg_color="transparent")
+            host.pack(fill="both", expand=True, padx=4, pady=4)
+            # ~4–5 columns on typical widths
+            try:
+                w = max(int(scroll.winfo_width() or 900), 600)
+            except Exception:
+                w = 900
+            n_cols = max(3, min(6, w // 180))
+            for c in range(n_cols):
+                host.grid_columnconfigure(c, weight=1, uniform="rg")
+            for i, mc in enumerate(items):
+                card = self._reports_add_card(
+                    host, mc, index=offset + i + 1, total=pool_n, grid=True
+                )
+                if card is not None:
+                    card.grid(
+                        row=i // n_cols,
+                        column=i % n_cols,
+                        padx=4,
+                        pady=4,
+                        sticky="nsew",
+                    )
+        else:
+            for i, mc in enumerate(items):
+                self._reports_add_card(
+                    scroll, mc, index=offset + i + 1, total=pool_n, grid=False
+                )
+
+        # Re-bind fast scroll after widgets change
+        try:
+            tab = getattr(self, "_report_tab", None)
+            if tab is not None:
+                self.after(40, lambda: self._reports_bind_fast_scroll(tab, scroll))
+        except Exception:
+            pass
 
         self._reports_update_metrics()
         if hasattr(self, "report_status"):
@@ -965,17 +1011,105 @@ class ReportsTabMixin:
                 text=f"Dropped · remaining on page {page_n:,} · pool {pool_n:,}"
             )
 
-    def _reports_add_card(self, parent, mc, *, index: int, total: int) -> None:
-        """One presentation card: photo + name + race mismatch + verdict."""
-        rec = dict(mc.record or {})
-        key = self._report_item_key(mc)
-        verdict = self._verdict_for_mc(mc)
+    def _reports_bind_fast_scroll(self, tab, scroll_frame) -> None:
+        """Snappy wheel scrolling over report cards (fraction of viewport)."""
+        try:
+            canvas = scroll_frame._parent_canvas  # type: ignore[attr-defined]
+        except Exception:
+            return
+        PAGE_FRAC = 0.22
 
+        def _scroll(notches: int) -> None:
+            if notches == 0:
+                return
+            try:
+                first, last = canvas.yview()
+                page = max(last - first, 0.05)
+                step = notches * max(PAGE_FRAC * page, 0.08)
+                canvas.yview_moveto(max(0.0, min(1.0, first + step)))
+            except Exception:
+                canvas.yview_scroll(notches * 10, "units")
+
+        def _wheel(event):
+            delta = getattr(event, "delta", 0) or 0
+            if delta:
+                notches = int(-delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+                if notches == 0:
+                    notches = -1 if delta > 0 else 1
+                _scroll(notches)
+            else:
+                num = getattr(event, "num", 0)
+                if num == 4:
+                    _scroll(-1)
+                elif num == 5:
+                    _scroll(1)
+            return "break"
+
+        def _walk(w):
+            try:
+                w.bind("<MouseWheel>", _wheel)
+                w.bind("<Button-4>", _wheel)
+                w.bind("<Button-5>", _wheel)
+            except Exception:
+                pass
+            try:
+                for ch in w.winfo_children():
+                    _walk(ch)
+            except Exception:
+                pass
+
+        try:
+            _walk(tab)
+            _walk(scroll_frame)
+            for w in (
+                tab,
+                getattr(scroll_frame, "_parent_frame", None),
+                canvas,
+                scroll_frame,
+            ):
+                if w is None:
+                    continue
+                try:
+                    w.bind("<MouseWheel>", _wheel)
+                    w.bind("<Button-4>", _wheel)
+                    w.bind("<Button-5>", _wheel)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _reports_load_thumb(self, photo_path: str, max_size: tuple) -> Optional[Any]:
+        """Load a small CTkImage; keep refs for GC. Returns None on failure."""
+        try:
+            from PIL import Image
+
+            img = Image.open(photo_path)
+            # Downsample aggressively for scroll performance
+            try:
+                resample = Image.Resampling.BILINEAR
+            except AttributeError:
+                resample = Image.BILINEAR  # type: ignore[attr-defined]
+            img.thumbnail(max_size, resample)
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            if not hasattr(self, "_report_image_refs") or self._report_image_refs is None:
+                self._report_image_refs = []
+            self._report_image_refs.append(ctk_img)
+            if len(self._report_image_refs) > 120:
+                self._report_image_refs = self._report_image_refs[-80:]
+            return ctk_img
+        except Exception:
+            return None
+
+    def _reports_add_card(
+        self, parent, mc, *, index: int, total: int, grid: bool = False
+    ):
+        """Compact list row or grid tile with mugshot + quick verdicts."""
+        rec = dict(mc.record or {})
+        verdict = self._verdict_for_mc(mc)
         first = (rec.get("first_name") or "").strip()
-        middle = (rec.get("middle_name") or "").strip()
         last = (rec.get("last_name") or "").strip()
         name = (
-            " ".join(p for p in (first, middle, last) if p)
+            " ".join(p for p in (first, last) if p)
             or (rec.get("full_name") or "—")
         )
         state = _format_state_display(rec)
@@ -985,7 +1119,8 @@ class ReportsTabMixin:
         conf = float(mc.confidence or 0.0)
         photo_path = (rec.get("photo_path") or "").strip()
         has_photo = bool(photo_path and Path(photo_path).is_file())
-
+        crime = self._reports_crime_text(rec)
+        df = rec.get("_deepface") or {}
         border = {
             "confirmed": C["danger"],
             "correct": C["success"],
@@ -993,344 +1128,332 @@ class ReportsTabMixin:
             "unreviewed": C["border"],
         }.get(verdict, C["border"])
 
+        if grid:
+            return self._reports_add_grid_tile(
+                parent, mc, rec,
+                name=name, state=state, race=race, eth=eth, conf=conf,
+                crime=crime, df=df, photo_path=photo_path, has_photo=has_photo,
+                verdict=verdict, border=border, index=index,
+            )
+
+        # ---- Compact list row ----
         card = ctk.CTkFrame(
             parent,
             fg_color=C["panel"],
             border_color=border,
-            border_width=2 if verdict != "unreviewed" else 1,
-            corner_radius=12,
+            border_width=1,
+            corner_radius=8,
+            height=96,
         )
-        card.pack(fill="x", padx=8, pady=5)
+        card.pack(fill="x", padx=6, pady=2)
+        card.pack_propagate(False)
         card.grid_columnconfigure(1, weight=1)
 
-        # Photo
+        # Small photo
         photo_wrap = ctk.CTkFrame(
-            card, fg_color=C["tree_bg"], corner_radius=8, width=112, height=140,
+            card, fg_color=C["tree_bg"], corner_radius=6, width=72, height=84,
         )
-        photo_wrap.grid(row=0, column=0, rowspan=2, padx=12, pady=12, sticky="nw")
+        photo_wrap.grid(row=0, column=0, padx=(8, 8), pady=6, sticky="nw")
         photo_wrap.grid_propagate(False)
         photo_lbl = ctk.CTkLabel(
-            photo_wrap, text="No photo", font=FONT_SM, text_color=C["dim"],
+            photo_wrap, text="—", font=FONT_SM, text_color=C["dim"],
         )
         photo_lbl.place(relx=0.5, rely=0.5, anchor="center")
         if has_photo:
-            try:
-                from PIL import Image
+            thumb = self._reports_load_thumb(photo_path, (70, 82))
+            if thumb is not None:
+                photo_lbl.configure(image=thumb, text="")
 
-                img = Image.open(photo_path)
-                img.thumbnail((108, 136))
-                ctk_img = ctk.CTkImage(
-                    light_image=img, dark_image=img, size=img.size
-                )
-                self._report_image_refs.append(ctk_img)
-                photo_lbl.configure(image=ctk_img, text="")
-            except Exception:
-                photo_lbl.configure(text="Photo\nerror")
-
-        # Text column
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.grid(row=0, column=1, sticky="nsew", padx=(0, 12), pady=(12, 4))
+        body.grid(row=0, column=1, sticky="nsew", padx=(0, 8), pady=6)
 
-        head = ctk.CTkFrame(body, fg_color="transparent")
-        head.pack(fill="x")
+        line1 = ctk.CTkFrame(body, fg_color="transparent")
+        line1.pack(fill="x")
         ctk.CTkLabel(
-            head, text=name, font=FONT_TITLE, text_color=C["text"], anchor="w",
+            line1, text=name, font=FONT_BOLD, text_color=C["text"], anchor="w",
         ).pack(side="left")
         ctk.CTkLabel(
-            head, text=f"  #{index} / {total}", font=FONT_SM, text_color=C["dim"],
-        ).pack(side="left", padx=(8, 0))
-
-        # Primary callout: registry-listed race (the shareable error signal)
-        race_banner = ctk.CTkFrame(
-            body,
-            fg_color="#5c1f1f",
-            corner_radius=10,
-            border_width=2,
-            border_color=C["danger"],
+            line1, text=f"  #{index}", font=FONT_SM, text_color=C["dim"],
+        ).pack(side="left")
+        status_lbl = ctk.CTkLabel(
+            line1,
+            text=self._reports_verdict_label_short(verdict),
+            font=FONT_SM,
+            text_color=self._reports_verdict_color(verdict),
         )
-        race_banner.pack(fill="x", pady=(10, 6))
-        ctk.CTkLabel(
-            race_banner,
-            text="LISTED AS",
-            font=("Segoe UI", 11, "bold"),
-            text_color="#f0b0b0",
-            anchor="w",
-        ).pack(fill="x", padx=14, pady=(8, 0))
-        ctk.CTkLabel(
-            race_banner,
-            text=str(race).upper(),
-            font=("Segoe UI", 28, "bold"),
-            text_color="#ffffff",
-            anchor="w",
-        ).pack(fill="x", padx=14, pady=(0, 10))
+        status_lbl.pack(side="right")
 
-        # Crime / offense (registry)
-        crime = self._reports_crime_text(rec)
-        if crime:
-            crime_row = ctk.CTkFrame(body, fg_color=C["elevated"], corner_radius=8)
-            crime_row.pack(fill="x", pady=(0, 6))
-            ctk.CTkLabel(
-                crime_row,
-                text="CRIME",
-                font=("Segoe UI", 10, "bold"),
-                text_color=C["muted"],
-                anchor="w",
-            ).pack(fill="x", padx=12, pady=(6, 0))
-            ctk.CTkLabel(
-                crime_row,
-                text=crime,
-                font=FONT_SM,
-                text_color=C["text"],
-                anchor="w",
-                justify="left",
-                wraplength=720,
-            ).pack(fill="x", padx=12, pady=(2, 8))
-
-        # Secondary: surname-based ethnicity (smaller)
-        chips = ctk.CTkFrame(body, fg_color="transparent")
-        chips.pack(fill="x", pady=(2, 4))
-        ctk.CTkLabel(
-            chips, text="vs surname", font=FONT_SM, text_color=C["dim"],
-        ).pack(side="left", padx=(0, 8))
-        eth_pill = ctk.CTkFrame(
-            chips,
-            fg_color=C["elevated"],
-            corner_radius=8,
-            border_width=1,
-            border_color=C["border"],
-        )
-        eth_pill.pack(side="left", padx=(0, 8))
-        eth_pill_lbl = ctk.CTkLabel(
-            eth_pill,
-            text=str(eth),
-            font=FONT_BOLD,
-            text_color=C["text"],
-        )
-        eth_pill_lbl.pack(padx=12, pady=5)
-
-        # Manual ethnicity correction (in-place; does not rebuild page)
-        eth_row = ctk.CTkFrame(body, fg_color="transparent")
-        eth_row.pack(fill="x", pady=(6, 0))
-        ctk.CTkLabel(
-            eth_row, text="Correct ethnicity", font=FONT_SM, text_color=C["muted"],
-        ).pack(side="left", padx=(0, 8))
-        eth_current = str(eth or "Unknown").strip() or "Unknown"
-        eth_opts = list(self._ETHNICITY_OPTIONS)
-        if eth_current not in eth_opts:
-            eth_opts = [eth_current] + eth_opts
-        eth_var = ctk.StringVar(value=eth_current)
-        eth_combo = ctk.CTkComboBox(
-            eth_row,
-            variable=eth_var,
-            values=eth_opts,
-            width=200,
-            fg_color=C["bg"],
-            border_color=C["border"],
-            button_color=C["elevated"],
-            text_color=C["text"],
-            dropdown_fg_color=C["panel"],
-            state="readonly",
-        )
-        eth_combo.pack(side="left")
-
-        meta_parts = [f"Confidence {conf:.3f}", f"State {state}"]
-        if middle:
-            meta_parts.append(f"Middle {middle}")
-        if rec.get("gender"):
-            meta_parts.append(str(rec.get("gender")))
-        if rec.get("date_of_birth"):
-            meta_parts.append(f"DOB {rec.get('date_of_birth')}")
-        df = rec.get("_deepface") or {}
+        # LISTED AS + eth + conf + state (one line)
+        listed = f"LISTED {str(race).upper()}"
+        face_bit = ""
         if df:
             flab = df.get("predicted_label") or df.get("top_label") or ""
             fconf = df.get("top_confidence")
             try:
-                fconf_s = f"{float(fconf):.0%}" if fconf is not None else "—"
+                face_bit = f"  ·  face {flab}@{float(fconf):.0%}" if flab else ""
             except (TypeError, ValueError):
-                fconf_s = "—"
-            if flab:
-                meta_parts.append(f"DeepFace face={flab}@{fconf_s}")
-            if df.get("severity"):
-                meta_parts.append(f"sev {df.get('severity')}")
-        meta = "  ·  ".join(meta_parts)
+                face_bit = f"  ·  face {flab}" if flab else ""
         ctk.CTkLabel(
-            body, text=meta, font=FONT_SM, text_color=C["muted"], anchor="w",
-        ).pack(fill="x", pady=(2, 0))
+            body,
+            text=f"{listed}  ·  vs {eth}  ·  {conf:.2f}  ·  {state}{face_bit}",
+            font=FONT_SM,
+            text_color=C["muted"],
+            anchor="w",
+        ).pack(fill="x")
 
-        matches = "; ".join(mc.matching_names[:4]) if mc.matching_names else ""
-        matches_lbl = None
-        if matches:
-            is_df = bool(rec.get("_deepface_is_hit") or "deepface" in (mc.matching_names or []))
-            prefix = "DeepFace / matches: " if is_df else "Matched names: "
-            matches_lbl = ctk.CTkLabel(
-                body, text=f"{prefix}{matches}",
-                font=FONT_SM, text_color=C["dim"], anchor="w",
-            )
-            matches_lbl.pack(fill="x", pady=(2, 0))
+        if crime:
+            ctk.CTkLabel(
+                body,
+                text=(crime[:110] + ("…" if len(crime) > 110 else "")),
+                font=FONT_SM,
+                text_color=C["dim"],
+                anchor="w",
+            ).pack(fill="x")
 
-        # Verdict row
-        actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
-
-        status_lbl = ctk.CTkLabel(
-            actions, text=self._reports_verdict_label(verdict),
-            font=FONT_BOLD, text_color=self._reports_verdict_color(verdict),
-        )
-        status_lbl.pack(side="left", padx=(0, 12))
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.pack(fill="x", pady=(4, 0))
 
         def _set(v: str, m=mc, card_widget=card, status=status_lbl):
             self._set_verdict_for_mc(m, v, save=True)
-            # Stats: Correct drops from pie immediately
             self._refresh_stats_from_verdicts()
             want = self._reports_verdict_filter_key()
-            # Leave this sheet when new verdict is outside current Show filter
-            # (e.g. Unconfirmed → Confirmed incorrect must drop off Unconfirmed).
             if not self._reports_verdict_passes_filter(v, want):
                 self._reports_drop_card(card_widget, m)
                 return
-            # Still on this sheet (e.g. Show=All): update this card in place
-            border = {
+            b = {
                 "confirmed": C["danger"],
                 "correct": C["success"],
                 "skip": C["dim"],
                 "unreviewed": C["border"],
             }.get(v, C["border"])
             try:
-                card_widget.configure(
-                    border_color=border,
-                    border_width=2 if v != "unreviewed" else 1,
-                )
+                card_widget.configure(border_color=b, border_width=1)
             except Exception:
                 pass
             try:
                 status.configure(
-                    text=self._reports_verdict_label(v),
+                    text=self._reports_verdict_label_short(v),
                     text_color=self._reports_verdict_color(v),
                 )
             except Exception:
                 pass
             self._reports_update_metrics()
 
-        def _on_ethnicity(choice: str, m=mc, card_widget=card, pill=eth_pill_lbl):
+        ctk.CTkButton(
+            actions, text="Incorrect", width=78, height=26,
+            command=lambda: _set("confirmed"),
+            fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
+            font=FONT_SM,
+        ).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(
+            actions, text="Correct", width=70, height=26,
+            command=lambda: _set("correct"),
+            fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
+            font=FONT_SM,
+        ).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(
+            actions, text="Skip", width=50, height=26,
+            command=lambda: _set("skip"),
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
+            border_width=1, border_color=C["border"], font=FONT_SM,
+        ).pack(side="left", padx=(0, 4))
+
+        # Compact ethnicity override
+        eth_opts = list(self._ETHNICITY_OPTIONS)
+        eth_cur = str(eth or "Unknown").strip() or "Unknown"
+        if eth_cur not in eth_opts:
+            eth_opts = [eth_cur] + eth_opts
+        eth_var = ctk.StringVar(value=eth_cur)
+        eth_combo = ctk.CTkComboBox(
+            actions,
+            variable=eth_var,
+            values=eth_opts,
+            width=130,
+            height=26,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            button_color=C["elevated"],
+            text_color=C["text"],
+            dropdown_fg_color=C["panel"],
+            state="readonly",
+            font=FONT_SM,
+        )
+        eth_combo.pack(side="left", padx=(8, 0))
+
+        def _on_eth(choice: str, m=mc, card_widget=card):
             new_eth = (choice or eth_var.get() or "").strip() or "Unknown"
             self._set_ethnicity_for_mc(m, new_eth)
-            try:
-                pill.configure(text=str(new_eth))
-            except Exception:
-                pass
-            if matches_lbl is not None:
-                try:
-                    names = "; ".join((m.matching_names or [])[:4])
-                    matches_lbl.configure(
-                        text=f"Matched names: {names}" if names else "Matched names: manual_override"
-                    )
-                except Exception:
-                    pass
-            # If ethnicity now matches recorded race, drop from the mismatch queue
             if self._ethnicity_compatible_with_record(m):
                 self._refresh_stats_from_verdicts()
                 self._reports_drop_card(card_widget, m)
-                if hasattr(self, "report_status"):
-                    self.report_status.configure(
-                        text=f"Ethnicity set to {new_eth} — no longer a mismatch"
-                    )
                 return
             self._refresh_stats_from_verdicts()
             self._reports_update_metrics()
-            if hasattr(self, "report_status"):
-                self.report_status.configure(text=f"Ethnicity set to {new_eth}")
 
-        eth_combo.configure(command=_on_ethnicity)
+        eth_combo.configure(command=_on_eth)
 
-        ctk.CTkButton(
-            actions, text="Confirmed incorrect", width=150,
-            command=lambda: _set("confirmed"),
-            fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            actions, text="Confirmed correct", width=140,
-            command=lambda: _set("correct"),
-            fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            actions, text="Skip", width=70,
-            command=lambda: _set("skip"),
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
-            border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            actions, text="Confirm others", width=120,
-            command=lambda m=mc: self._reports_confirm_others(m),
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=(0, 6))
-
-        # Selectable summary line + copy
-        df_line = ""
-        if df:
-            df_line = (
-                f"\nDeepFace: face={df.get('predicted_label') or df.get('top_label')} "
-                f"conf={df.get('top_confidence')} sev={df.get('severity') or '—'}"
-                f"\nReason: {df.get('reason') or '—'}"
-            )
         crime_line = f"\nCrime: {crime}" if crime else ""
         copy_blob = (
             f"{name}\nLISTED AS: {race}\nSurname ethnicity: {eth}"
-            f"{crime_line}\n"
-            f"{meta}\nMatched: {matches or '—'}{df_line}\n"
-            f"State: {state}\nURL: {rec.get('source_url') or '—'}"
+            f"{crime_line}\nConf {conf:.3f} · {state}\n"
+            f"URL: {rec.get('source_url') or '—'}"
         )
         ctk.CTkButton(
-            actions, text="Copy", width=60,
+            actions, text="Copy", width=50, height=26,
             command=lambda t=copy_blob, n=name: self._copy_to_clipboard(
                 t, toast=f"Copied {n}"
             ),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=(0, 6))
+            border_width=1, border_color=C["border"], font=FONT_SM,
+        ).pack(side="right")
+        return card
 
-        # Open helpers
-        html_path = (rec.get("report_html_path") or "").strip()
-        try:
-            from scraper.public_links import openable_url_for_record
+    def _reports_add_grid_tile(
+        self,
+        parent,
+        mc,
+        rec,
+        *,
+        name: str,
+        state: str,
+        race: str,
+        eth: str,
+        conf: float,
+        crime: str,
+        df: dict,
+        photo_path: str,
+        has_photo: bool,
+        verdict: str,
+        border: str,
+        index: int,
+    ):
+        """Dense tile for grid view."""
+        card = ctk.CTkFrame(
+            parent,
+            fg_color=C["panel"],
+            border_color=border,
+            border_width=1,
+            corner_radius=8,
+            width=168,
+            height=260,
+        )
+        card.grid_propagate(False)
 
-            url = openable_url_for_record(rec) or (rec.get("source_url") or "").strip()
-        except Exception:
-            url = (rec.get("source_url") or "").strip()
+        photo_wrap = ctk.CTkFrame(
+            card, fg_color=C["tree_bg"], corner_radius=6, height=130,
+        )
+        photo_wrap.pack(fill="x", padx=6, pady=(6, 4))
+        photo_wrap.pack_propagate(False)
+        photo_lbl = ctk.CTkLabel(
+            photo_wrap, text="No photo", font=FONT_SM, text_color=C["dim"],
+        )
+        photo_lbl.place(relx=0.5, rely=0.5, anchor="center")
         if has_photo:
-            ctk.CTkButton(
-                actions, text="Photo", width=70,
-                command=lambda p=photo_path: self._open_path(Path(p)),
-                fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-                border_width=1, border_color=C["border"],
-            ).pack(side="right", padx=2)
-        if html_path and Path(html_path).exists():
-            ctk.CTkButton(
-                actions, text="HTML", width=70,
-                command=lambda p=html_path: self._open_path(Path(p)),
-                fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-                border_width=1, border_color=C["border"],
-            ).pack(side="right", padx=2)
-        if url:
-            ctk.CTkButton(
-                actions, text="URL", width=60,
-                command=lambda u=url: webbrowser.open(u),
-                fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-                border_width=1, border_color=C["border"],
-            ).pack(side="right", padx=2)
+            thumb = self._reports_load_thumb(photo_path, (150, 128))
+            if thumb is not None:
+                photo_lbl.configure(image=thumb, text="")
 
-        # Click name to copy
-        try:
-            for child in head.winfo_children():
-                if isinstance(child, ctk.CTkLabel):
-                    child.bind(
-                        "<Button-1>",
-                        lambda _e, n=name: self._copy_to_clipboard(
-                            n, toast=f"Copied name: {n}"
-                        ),
-                    )
-        except Exception:
-            pass
+        ctk.CTkLabel(
+            card,
+            text=(name[:22] + ("…" if len(name) > 22 else "")),
+            font=FONT_BOLD,
+            text_color=C["text"],
+            anchor="w",
+        ).pack(fill="x", padx=8)
+        ctk.CTkLabel(
+            card,
+            text=f"LISTED {str(race).upper()}",
+            font=("Segoe UI", 12, "bold"),
+            text_color=C["danger"],
+            anchor="w",
+        ).pack(fill="x", padx=8)
+        face_bit = ""
+        if df:
+            flab = df.get("predicted_label") or df.get("top_label") or ""
+            if flab:
+                face_bit = f" · face {flab}"
+        ctk.CTkLabel(
+            card,
+            text=f"vs {eth} · {conf:.2f} · {state}{face_bit}",
+            font=FONT_SM,
+            text_color=C["muted"],
+            anchor="w",
+        ).pack(fill="x", padx=8)
+        if crime:
+            ctk.CTkLabel(
+                card,
+                text=(crime[:40] + ("…" if len(crime) > 40 else "")),
+                font=FONT_SM,
+                text_color=C["dim"],
+                anchor="w",
+            ).pack(fill="x", padx=8)
+
+        status_lbl = ctk.CTkLabel(
+            card,
+            text=self._reports_verdict_label_short(verdict),
+            font=FONT_SM,
+            text_color=self._reports_verdict_color(verdict),
+            anchor="w",
+        )
+        status_lbl.pack(fill="x", padx=8, pady=(2, 0))
+
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.pack(fill="x", padx=6, pady=(4, 6))
+
+        def _set(v: str, m=mc, card_widget=card, status=status_lbl):
+            self._set_verdict_for_mc(m, v, save=True)
+            self._refresh_stats_from_verdicts()
+            want = self._reports_verdict_filter_key()
+            if not self._reports_verdict_passes_filter(v, want):
+                self._reports_drop_card(card_widget, m)
+                return
+            b = {
+                "confirmed": C["danger"],
+                "correct": C["success"],
+                "skip": C["dim"],
+                "unreviewed": C["border"],
+            }.get(v, C["border"])
+            try:
+                card_widget.configure(border_color=b)
+            except Exception:
+                pass
+            try:
+                status.configure(
+                    text=self._reports_verdict_label_short(v),
+                    text_color=self._reports_verdict_color(v),
+                )
+            except Exception:
+                pass
+            self._reports_update_metrics()
+
+        ctk.CTkButton(
+            actions, text="✗", width=40, height=26,
+            command=lambda: _set("confirmed"),
+            fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
+            font=FONT_SM,
+        ).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(
+            actions, text="✓", width=40, height=26,
+            command=lambda: _set("correct"),
+            fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
+            font=FONT_SM,
+        ).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(
+            actions, text="Skip", width=48, height=26,
+            command=lambda: _set("skip"),
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
+            border_width=1, border_color=C["border"], font=FONT_SM,
+        ).pack(side="left")
+        return card
+
+    @staticmethod
+    def _reports_verdict_label_short(verdict: str) -> str:
+        return {
+            "confirmed": "● Incorrect",
+            "correct": "● Correct",
+            "skip": "● Skip",
+            "unreviewed": "○ Open",
+        }.get(verdict, "○ Open")
 
     @staticmethod
     def _reports_crime_text(rec: Optional[Dict[str, Any]]) -> str:
