@@ -136,22 +136,57 @@ class ReportsTabMixin:
         except Exception:
             pass
 
-        # Race toggles (misclassified-as buckets) — White only by default
+        # Listed-as (registry race) + actual (surname / face) — dropdowns
+        ctk.CTkLabel(bar, text="Listed as", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(4, 4)
+        )
+        self.report_listed_filter = ctk.StringVar(value="White")
+        ctk.CTkComboBox(
+            bar,
+            variable=self.report_listed_filter,
+            width=100,
+            values=["All", "White", "Black", "Other"],
+            fg_color=C["bg"],
+            border_color=C["border"],
+            button_color=C["elevated"],
+            text_color=C["text"],
+            dropdown_fg_color=C["panel"],
+            command=lambda _v: self._reports_on_filter_change(),
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkLabel(bar, text="Actual", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(4, 4)
+        )
+        self.report_actual_filter = ctk.StringVar(value="All")
+        ctk.CTkComboBox(
+            bar,
+            variable=self.report_actual_filter,
+            width=150,
+            values=[
+                "All",
+                "Hispanic",
+                "Indian",
+                "Asian",
+                "African American",
+                "Arabic",
+                "European",
+                "Jewish",
+                "Portuguese",
+                "Native American",
+                "Other",
+            ],
+            fg_color=C["bg"],
+            border_color=C["border"],
+            button_color=C["elevated"],
+            text_color=C["text"],
+            dropdown_fg_color=C["panel"],
+            command=lambda _v: self._reports_on_filter_change(),
+        ).pack(side="left", padx=(0, 8))
+
+        # Legacy BooleanVars kept in sync for any old callers
         self.report_race_white = ctk.BooleanVar(value=True)
         self.report_race_black = ctk.BooleanVar(value=False)
         self.report_race_other = ctk.BooleanVar(value=False)
-        for label, var in (
-            ("White", self.report_race_white),
-            ("Black", self.report_race_black),
-            ("Other", self.report_race_other),
-        ):
-            ctk.CTkCheckBox(
-                bar, text=label, variable=var,
-                font=FONT_SM, text_color=C["text"],
-                fg_color=C["accent"], hover_color=C["accent_hover"],
-                border_color=C["border"], checkmark_color=C["bg"],
-                command=lambda: self._reports_on_filter_change(),
-            ).pack(side="left", padx=(0, 6))
 
         ctk.CTkLabel(bar, text="Page size", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(8, 4)
@@ -571,19 +606,111 @@ class ReportsTabMixin:
             )
             self._misclass_records_by_iid[iid] = rec
 
-    def _reports_race_buckets_allowed(self) -> set:
-        """Which misclassified-as race buckets are enabled (White/Black/Other)."""
-        allow: set = set()
+    def _reports_listed_filter_value(self) -> str:
+        """Selected Listed-as dropdown: All | White | Black | Other."""
+        if hasattr(self, "report_listed_filter") and self.report_listed_filter is not None:
+            try:
+                v = (self.report_listed_filter.get() or "All").strip()
+                if v in ("All", "White", "Black", "Other"):
+                    return v
+            except Exception:
+                pass
+        # Legacy checkboxes
+        allow = set()
         if bool(getattr(self, "report_race_white", None) and self.report_race_white.get()):
             allow.add("White")
         if bool(getattr(self, "report_race_black", None) and self.report_race_black.get()):
             allow.add("Black")
         if bool(getattr(self, "report_race_other", None) and self.report_race_other.get()):
             allow.add("Other")
-        # If none selected, treat as all (avoid empty list by accident)
-        if not allow:
-            allow = {"White", "Black", "Other"}
-        return allow
+        if len(allow) == 1:
+            return next(iter(allow))
+        return "All"
+
+    def _reports_actual_filter_value(self) -> str:
+        """Selected Actual (likely ethnicity) dropdown."""
+        if hasattr(self, "report_actual_filter") and self.report_actual_filter is not None:
+            try:
+                return (self.report_actual_filter.get() or "All").strip() or "All"
+            except Exception:
+                pass
+        return "All"
+
+    def _reports_race_buckets_allowed(self) -> set:
+        """Which registry-listed race buckets pass the Listed-as filter."""
+        listed = self._reports_listed_filter_value()
+        if listed == "All":
+            return {"White", "Black", "Other"}
+        if listed in ("White", "Black", "Other"):
+            return {listed}
+        return {"White", "Black", "Other"}
+
+    @staticmethod
+    def _reports_actual_bucket(label: str) -> str:
+        """Map surname / face ethnicity to an Actual filter bucket."""
+        e = (label or "").strip().lower()
+        if not e or e in ("—", "-", "unknown", "other", "n/a"):
+            return "Other"
+        if "hispanic" in e or "latino" in e or "latina" in e:
+            return "Hispanic"
+        if "indian" in e or "south asian" in e or "desi" in e:
+            return "Indian"
+        if (
+            "african" in e
+            or e in ("black", "b")
+            or "afro" in e
+        ):
+            return "African American"
+        if any(
+            k in e
+            for k in (
+                "asian",
+                "chinese",
+                "korean",
+                "vietnamese",
+                "japanese",
+                "filipino",
+                "thai",
+                "cambodian",
+                "hmong",
+            )
+        ):
+            return "Asian"
+        if "arab" in e or "middle east" in e or "middle_eastern" in e:
+            return "Arabic"
+        if "jewish" in e or "israel" in e:
+            return "Jewish"
+        if "portuguese" in e or "brazil" in e:
+            return "Portuguese"
+        if "native" in e or "american indian" in e or "alaska" in e:
+            return "Native American"
+        if "european" in e or e in ("white", "caucasian", "w"):
+            return "European"
+        return "Other"
+
+    def _reports_actual_label_for_mc(self, mc) -> str:
+        """Best 'actual' ethnicity string for a hit (surname, then face)."""
+        eth = (getattr(mc, "likely_ethnicity", None) or "").strip()
+        if eth and eth not in ("—", "-", "Unknown", "unknown"):
+            return eth
+        rec = getattr(mc, "record", None) or {}
+        for key in ("likely_ethnicity", "_misclass_likely"):
+            v = (rec.get(key) or "").strip()
+            if v and v not in ("—", "-", "Unknown", "unknown"):
+                return v
+        df = rec.get("_deepface") or {}
+        lab = (df.get("predicted_label") or df.get("top_label") or "").strip()
+        if lab:
+            # Normalize face labels to display-ish form
+            return lab.replace("_", " ").title()
+        return eth or "Unknown"
+
+    def _reports_actual_passes(self, mc) -> bool:
+        want = self._reports_actual_filter_value()
+        if not want or want == "All":
+            return True
+        got = self._reports_actual_bucket(self._reports_actual_label_for_mc(mc))
+        return got == want
 
     def _reports_on_layout_change(self, value: Optional[str] = None) -> None:
         """Toggle Grid vs List cards; keep BooleanVar in sync for Open HTML."""
@@ -771,6 +898,17 @@ class ReportsTabMixin:
         photos_only = bool(self.report_photos_only.get())
         vfilter = self._reports_verdict_filter_key()
         race_allow = self._reports_race_buckets_allowed()
+        # Keep legacy checkboxes in sync with Listed-as dropdown
+        listed = self._reports_listed_filter_value()
+        try:
+            if hasattr(self, "report_race_white"):
+                self.report_race_white.set(listed in ("All", "White"))
+            if hasattr(self, "report_race_black"):
+                self.report_race_black.set(listed in ("All", "Black"))
+            if hasattr(self, "report_race_other"):
+                self.report_race_other.set(listed in ("All", "Other"))
+        except Exception:
+            pass
         # Ensure verdicts file is loaded (first open / new session)
         if not getattr(self, "_report_verdicts_loaded", False):
             if not hasattr(self, "_report_verdicts") or self._report_verdicts is None:
@@ -828,6 +966,8 @@ class ReportsTabMixin:
             rec = mc.record or {}
             bucket = _misclass_race_bucket(mc.expected_race)
             if bucket not in race_allow:
+                continue
+            if not self._reports_actual_passes(mc):
                 continue
             photo = (rec.get("photo_path") or "").strip()
             has_photo = bool(photo and Path(photo).is_file())
@@ -1004,14 +1144,14 @@ class ReportsTabMixin:
         if grid:
             host = ctk.CTkFrame(scroll, fg_color="transparent")
             host.pack(fill="both", expand=True, padx=4, pady=4)
-            # ~3–6 columns depending on width (larger tiles for mugshots)
+            # Compact tiles: more columns so two rows fit on a typical screen
             try:
                 w = int(scroll.winfo_width() or 0)
             except Exception:
                 w = 0
             if w < 200:
                 w = 1000
-            n_cols = max(2, min(6, w // 200))
+            n_cols = max(3, min(7, w // 155))
             for c in range(n_cols):
                 host.grid_columnconfigure(c, weight=1, uniform="rg")
             for i, mc in enumerate(items):
@@ -1022,8 +1162,8 @@ class ReportsTabMixin:
                     card.grid(
                         row=i // n_cols,
                         column=i % n_cols,
-                        padx=5,
-                        pady=5,
+                        padx=3,
+                        pady=3,
                         sticky="nsew",
                     )
             # Re-flow columns once the scroll area has a real width
@@ -1085,7 +1225,7 @@ class ReportsTabMixin:
             w = 0
         if w < 200:
             return
-        n_cols = max(2, min(6, w // 200))
+        n_cols = max(3, min(7, w // 155))
         try:
             kids = [c for c in host.winfo_children() if c.winfo_exists()]
         except Exception:
@@ -1102,8 +1242,8 @@ class ReportsTabMixin:
                 child.grid(
                     row=i // n_cols,
                     column=i % n_cols,
-                    padx=5,
-                    pady=5,
+                    padx=3,
+                    pady=3,
                     sticky="nsew",
                 )
             except Exception:
@@ -1513,118 +1653,114 @@ class ReportsTabMixin:
         border: str,
         index: int,
     ):
-        """Dense tile for grid view — name, listed race, full crime summary (no dates)."""
-        # Grow with content so the full crime summary is never clipped
+        """Compact grid tile — two full rows should fit on a typical screen."""
+        # Fixed compact height so row density is predictable
         card = ctk.CTkFrame(
             parent,
             fg_color=C["panel"],
             border_color=border,
             border_width=1,
-            corner_radius=8,
-            width=210,
+            corner_radius=6,
+            width=158,
+            height=292,
         )
-        card.grid_propagate(True)
+        card.grid_propagate(False)
+        card.pack_propagate(False)
 
         photo_wrap = ctk.CTkFrame(
-            card, fg_color=C["tree_bg"], corner_radius=6, height=158,
+            card, fg_color=C["tree_bg"], corner_radius=4, height=88,
         )
-        photo_wrap.pack(fill="x", padx=6, pady=(6, 4))
+        photo_wrap.pack(fill="x", padx=4, pady=(4, 2))
         photo_wrap.pack_propagate(False)
         photo_lbl = ctk.CTkLabel(
-            photo_wrap, text="No photo", font=FONT_SM, text_color=C["dim"],
+            photo_wrap, text="—", font=FONT_SM, text_color=C["dim"],
         )
         photo_lbl.place(relx=0.5, rely=0.5, anchor="center")
         if has_photo:
-            thumb = self._reports_load_thumb(photo_path, (196, 154))
+            thumb = self._reports_load_thumb(photo_path, (148, 86))
             if thumb is not None:
                 photo_lbl.configure(image=thumb, text="")
 
-        # Full name (middle abbreviated as needed) — wrap up to 2 lines
         display_name = self._reports_grid_display_name(
             first,
             middle,
             last,
             str(rec.get("full_name") or ""),
-            max_len=36,
+            max_len=22,
         )
         ctk.CTkLabel(
             card,
             text=display_name,
-            font=FONT_BOLD,
+            font=("Segoe UI", 11, "bold"),
             text_color=C["text"],
             anchor="w",
             justify="left",
-            wraplength=190,
-        ).pack(fill="x", padx=8)
-        # High-contrast LISTED race badge (WHITE etc. must pop)
+            wraplength=146,
+        ).pack(fill="x", padx=5, pady=(0, 1))
+
+        # Compact high-contrast LISTED badge (still readable WHITE)
         race_u = str(race or "—").strip().upper() or "—"
         listed_badge = ctk.CTkFrame(
             card,
             fg_color="#6b1a1a",
-            corner_radius=8,
-            border_width=2,
+            corner_radius=5,
+            border_width=1,
             border_color="#e07a7a",
+            height=36,
         )
-        listed_badge.pack(fill="x", padx=6, pady=(4, 2))
+        listed_badge.pack(fill="x", padx=4, pady=(1, 2))
+        listed_badge.pack_propagate(False)
         ctk.CTkLabel(
             listed_badge,
-            text="LISTED AS",
-            font=("Segoe UI", 10, "bold"),
-            text_color="#f0b0b0",
-            anchor="center",
-        ).pack(fill="x", padx=6, pady=(5, 0))
-        ctk.CTkLabel(
-            listed_badge,
-            text=race_u,
-            font=("Segoe UI", 18, "bold"),
+            text=f"LISTED  {race_u}",
+            font=("Segoe UI", 13, "bold"),
             text_color="#ffffff",
             anchor="center",
-        ).pack(fill="x", padx=6, pady=(0, 6))
+        ).place(relx=0.5, rely=0.5, anchor="center")
 
-        # Proper multi-offense summary (not the full statute dump)
-        crime_short = self._reports_summarize_crime(crime, max_len=140)
+        # Short crime summary — 1–2 lines max
+        crime_short = self._reports_summarize_crime(crime, max_len=72)
         crime_line = f"Crime: {crime_short}" if crime_short else "Crime: —"
-        crime_box = ctk.CTkFrame(card, fg_color="transparent")
-        crime_box.pack(fill="x", padx=8, pady=(2, 0))
         ctk.CTkLabel(
-            crime_box,
+            card,
             text=crime_line,
-            font=FONT_SM,
+            font=("Segoe UI", 10),
             text_color=C["text"] if crime_short else C["dim"],
             anchor="nw",
             justify="left",
-            wraplength=190,
-        ).pack(fill="x", anchor="w")
+            wraplength=146,
+            height=32,
+        ).pack(fill="x", padx=5, pady=(0, 1))
 
-        # Conf / state / face only — no dates, no surname ethnicity
         face_bit = ""
         if df:
             flab = df.get("predicted_label") or df.get("top_label") or ""
             fconf = df.get("top_confidence")
             if flab:
                 try:
-                    face_bit = f" · face {flab}@{float(fconf):.0%}"
+                    face_bit = f" · {flab}@{float(fconf):.0%}"
                 except (TypeError, ValueError):
-                    face_bit = f" · face {flab}"
+                    face_bit = f" · {flab}"
+        meta_row = ctk.CTkFrame(card, fg_color="transparent")
+        meta_row.pack(fill="x", padx=5)
         ctk.CTkLabel(
-            card,
+            meta_row,
             text=f"{conf:.2f} · {state}{face_bit}",
-            font=FONT_SM,
+            font=("Segoe UI", 10),
             text_color=C["muted"],
             anchor="w",
-        ).pack(fill="x", padx=8, pady=(2, 0))
-
+        ).pack(side="left")
         status_lbl = ctk.CTkLabel(
-            card,
+            meta_row,
             text=self._reports_verdict_label_short(verdict),
-            font=FONT_SM,
+            font=("Segoe UI", 10),
             text_color=self._reports_verdict_color(verdict),
-            anchor="w",
+            anchor="e",
         )
-        status_lbl.pack(fill="x", padx=8, pady=(2, 0))
+        status_lbl.pack(side="right")
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.pack(fill="x", padx=6, pady=(4, 8))
+        actions.pack(fill="x", padx=3, pady=(2, 3), side="bottom")
 
         def _set(v: str, m=mc, card_widget=card, status=status_lbl):
             self._set_verdict_for_mc(m, v, save=True)
@@ -1653,22 +1789,22 @@ class ReportsTabMixin:
             self._reports_update_metrics()
 
         ctk.CTkButton(
-            actions, text="✗", width=40, height=26,
+            actions, text="✗", width=32, height=22,
             command=lambda: _set("confirmed"),
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
-            font=FONT_SM,
-        ).pack(side="left", padx=(0, 3))
+            font=("Segoe UI", 11),
+        ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="✓", width=40, height=26,
+            actions, text="✓", width=32, height=22,
             command=lambda: _set("correct"),
             fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
-            font=FONT_SM,
-        ).pack(side="left", padx=(0, 3))
+            font=("Segoe UI", 11),
+        ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="Skip", width=48, height=26,
+            actions, text="Skip", width=40, height=22,
             command=lambda: _set("skip"),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
-            border_width=1, border_color=C["border"], font=FONT_SM,
+            border_width=1, border_color=C["border"], font=("Segoe UI", 10),
         ).pack(side="left")
         return card
 
@@ -1799,7 +1935,10 @@ class ReportsTabMixin:
         if not source:
             messagebox.showinfo("Export", "Build a report list first.")
             return
-        races = ", ".join(sorted(self._reports_race_buckets_allowed())) or "all"
+        races = (
+            f"listed={self._reports_listed_filter_value()} "
+            f"actual={self._reports_actual_filter_value()}"
+        )
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv")],
@@ -1853,11 +1992,14 @@ class ReportsTabMixin:
             messagebox.showinfo("Open HTML", "Build a report list first.")
             return
 
-        races = ", ".join(sorted(self._reports_race_buckets_allowed())) or "all"
+        races = (
+            f"listed={self._reports_listed_filter_value()}, "
+            f"actual={self._reports_actual_filter_value()}"
+        )
         only = messagebox.askyesnocancel(
             "Open HTML",
             "Include only Confirmed incorrect rows?\n\n"
-            f"Race filter: {races} · Show filter: "
+            f"Filters: {races} · Show: "
             f"{(self.report_verdict_filter.get() or 'Unconfirmed').strip()}\n"
             "(full pool for that Show/race filter, not just this page)\n\n"
             "Yes = confirmed incorrect only\n"
