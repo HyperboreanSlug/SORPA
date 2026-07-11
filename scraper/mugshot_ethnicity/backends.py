@@ -309,12 +309,21 @@ _BACKEND_CLASSES: List[Type[EthnicityBackend]] = [
 
 
 def list_backend_status() -> Dict[str, bool]:
+    """Fast presence check via find_spec — never import torch/keras on the UI thread."""
+    import importlib.util
+
     out: Dict[str, bool] = {"mock": True}
-    for cls in _BACKEND_CLASSES:
-        try:
-            out[cls.name] = bool(cls().is_available())
-        except Exception:
-            out[cls.name] = False
+    try:
+        out["deepface"] = importlib.util.find_spec("deepface") is not None
+    except Exception:
+        out["deepface"] = False
+    try:
+        out["clip"] = (
+            importlib.util.find_spec("torch") is not None
+            and importlib.util.find_spec("transformers") is not None
+        )
+    except Exception:
+        out["clip"] = False
     return out
 
 

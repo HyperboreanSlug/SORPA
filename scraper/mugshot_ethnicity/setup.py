@@ -56,6 +56,11 @@ _install_attempted = False
 _install_ok: Optional[bool] = None
 _warm_attempted = False
 
+# Cache expensive keras/TF probe so the GUI never blocks on every tab click
+_runtime_cache_lock = threading.Lock()
+_runtime_cache: Optional[Tuple[float, bool, str]] = None
+_RUNTIME_CACHE_TTL = 120.0  # seconds
+
 
 def _log(log: Optional[Callable[[str], None]], msg: str) -> None:
     if log:
@@ -94,49 +99,72 @@ def deepface_importable() -> bool:
 
 
 def deepface_available() -> bool:
-    """True if DeepFace can be imported (module present)."""
-    if not deepface_importable():
-        return False
-    try:
-        import deepface  # noqa: F401
-        return True
-    except Exception:
-        return False
+    """True if the deepface package is on sys.path (fast; no keras/TF load)."""
+    return deepface_importable()
 
 
-def deepface_runtime_ok() -> Tuple[bool, str]:
+def invalidate_runtime_cache() -> None:
+    """Clear cached runtime probe (call after install/repair)."""
+    global _runtime_cache
+    with _runtime_cache_lock:
+        _runtime_cache = None
+
+
+def deepface_runtime_ok(*, force: bool = False) -> Tuple[bool, str]:
     """
     Deeper check: numpy + tensorflow/keras path used by DeepFace race models.
 
     Returns (ok, detail). Catches the common ``numpy.dtype size changed`` ABI
     break that still allows bare ``import deepface`` to succeed.
+
+    Results are cached briefly — keras/TF import can freeze the UI for many
+    seconds if called on the main thread.
     """
+    global _runtime_cache
+    now = time.time()
+    if not force:
+        with _runtime_cache_lock:
+            if _runtime_cache is not None:
+                ts, ok, detail = _runtime_cache
+                if now - ts < _RUNTIME_CACHE_TTL:
+                    return ok, detail
+
     if not deepface_importable():
-        return False, "deepface package not installed"
-    try:
-        import numpy as np  # noqa: F401
-    except Exception as e:
-        return False, f"numpy import failed: {e}"
-    try:
-        # keras/TF is what actually fails on ABI mismatch
-        import keras  # noqa: F401
-    except Exception as e:
-        msg = str(e)
-        if "numpy.dtype size changed" in msg or "binary incompatibility" in msg:
-            return False, f"numpy ABI mismatch (keras): {msg}"
-        # TF may be importable via tensorflow.keras only
+        result = (False, "deepface package not installed")
+    else:
         try:
-            import tensorflow as tf  # noqa: F401
-        except Exception as e2:
-            msg2 = str(e2)
-            if "numpy.dtype size changed" in msg2 or "binary incompatibility" in msg2:
-                return False, f"numpy ABI mismatch (tensorflow): {msg2}"
-            return False, f"tensorflow/keras import failed: {e2}"
-    try:
-        import deepface  # noqa: F401
-        return True, "ok"
-    except Exception as e:
-        return False, f"deepface import failed: {e}"
+            import numpy as np  # noqa: F401
+        except Exception as e:
+            result = (False, f"numpy import failed: {e}")
+        else:
+            try:
+                # keras/TF is what actually fails on ABI mismatch (SLOW first time)
+                import keras  # noqa: F401
+            except Exception as e:
+                msg = str(e)
+                if "numpy.dtype size changed" in msg or "binary incompatibility" in msg:
+                    result = (False, f"numpy ABI mismatch (keras): {msg}")
+                else:
+                    try:
+                        import tensorflow as tf  # noqa: F401
+                    except Exception as e2:
+                        msg2 = str(e2)
+                        if "numpy.dtype size changed" in msg2 or "binary incompatibility" in msg2:
+                            result = (False, f"numpy ABI mismatch (tensorflow): {msg2}")
+                        else:
+                            result = (False, f"tensorflow/keras import failed: {e2}")
+                    else:
+                        result = (True, "ok")
+            else:
+                try:
+                    import deepface  # noqa: F401
+                    result = (True, "ok")
+                except Exception as e:
+                    result = (False, f"deepface import failed: {e}")
+
+    with _runtime_cache_lock:
+        _runtime_cache = (time.time(), result[0], result[1])
+    return result
 
 
 def _clear_ml_modules() -> None:
@@ -307,6 +335,7 @@ def _repair_numpy_stack(*, log: Optional[Callable[[str], None]]) -> bool:
         retries=3,
     )
     _clear_ml_modules()
+    invalidate_runtime_cache()
     return ok
 
 
@@ -396,7 +425,8 @@ def ensure_deepface(
                             retries=3,
                         )
                     _clear_ml_modules()
-                    runtime_ok, detail = deepface_runtime_ok()
+                    invalidate_runtime_cache()
+                    runtime_ok, detail = deepface_runtime_ok(force=True)
                     if ok and not runtime_ok and (
                         _is_abi_error(detail) or "ABI" in detail or not deepface_importable()
                     ):
@@ -410,7 +440,8 @@ def ensure_deepface(
             ok = False
 
         _clear_ml_modules()
-        runtime_ok, detail = deepface_runtime_ok()
+        invalidate_runtime_cache()
+        runtime_ok, detail = deepface_runtime_ok(force=True)
         _install_ok = bool(ok and runtime_ok)
         if not _install_ok:
             _log(

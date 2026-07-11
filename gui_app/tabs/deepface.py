@@ -24,8 +24,48 @@ from gui_app.paths import ROOT
 
 class DeepfaceTabMixin:
     def _build_deepface(self, tab):
-        """Full-area DeepFace status / options / activity (scrollable)."""
+        """Show the tab immediately; build heavy widgets on the next idle tick.
+
+        Keras/TensorFlow must never be imported on the UI thread — that freezes
+        the whole app for many seconds. Status probes run in a worker thread.
+        """
         tab.configure(fg_color=C["surface"])
+        self._df_tab = tab
+        self._df_built = False
+        self._df_status_busy = False
+
+        # Lightweight shell so CTk can switch tabs without blocking
+        shell = ctk.CTkFrame(tab, fg_color=C["surface"], corner_radius=0)
+        shell.pack(fill="both", expand=True)
+        self._df_shell = shell
+        ctk.CTkLabel(
+            shell,
+            text="Loading DeepFace options…",
+            font=FONT_SM,
+            text_color=C["muted"],
+        ).pack(expand=True, pady=40)
+
+        # After the tab paints, build the real UI (still no TF import here)
+        self.after(1, self._deepface_build_content)
+
+    def _deepface_build_content(self) -> None:
+        """Build scrollable DeepFace UI (called after first paint)."""
+        if getattr(self, "_df_built", False):
+            return
+        tab = getattr(self, "_df_tab", None)
+        if tab is None:
+            return
+        self._df_built = True
+
+        # Clear loading shell
+        shell = getattr(self, "_df_shell", None)
+        if shell is not None:
+            try:
+                shell.destroy()
+            except Exception:
+                pass
+            self._df_shell = None
+
         # Scrollable host fills the tab; mouse-wheel works over full area
         root = ctk.CTkScrollableFrame(
             tab,
@@ -346,10 +386,10 @@ class DeepfaceTabMixin:
         self._df_log_queue: queue.Queue = queue.Queue()
         self._df_setup_running = False
 
-        self.after(80, self._deepface_refresh_status)
-        self.after(150, self._deepface_poll_log)
+        self.after(50, self._deepface_refresh_status)
+        self.after(100, self._deepface_poll_log)
         # Re-bind wheel after children exist (wheel is delivered to widget under cursor)
-        self.after(200, lambda: self._deepface_bind_scroll_children(tab, root))
+        self.after(150, lambda: self._deepface_bind_scroll_children(tab, root))
 
     def _deepface_bind_scroll_children(self, tab, scroll_frame) -> None:
         """Fast mouse-wheel scrolling over the full DeepFace tab content."""
@@ -464,70 +504,139 @@ class DeepfaceTabMixin:
             pass
 
     def _deepface_refresh_status(self) -> None:
+        """Update status labels. Keras/TF probe runs off the UI thread."""
         if not hasattr(self, "df_status_installed"):
             return
+        if getattr(self, "_df_status_busy", False):
+            return
+        self._df_status_busy = True
+
+        # Fast UI-thread updates only (no heavy imports)
         try:
-            from scraper.mugshot_ethnicity import (
-                deepface_available,
-                deepface_runtime_ok,
-                get_available_backends,
-            )
+            import importlib.util
 
-            pkg = deepface_available()
-            runtime_ok, runtime_detail = deepface_runtime_ok()
-            if runtime_ok:
-                inst_txt = "Installed: Yes (runtime OK)"
-                inst_col = C["success"]
-            elif pkg:
-                inst_txt = f"Installed: package present but broken — {runtime_detail}"
-                inst_col = C["danger"]
-            else:
-                inst_txt = "Installed: No"
-                inst_col = C["danger"]
-            self.df_status_installed.configure(text=inst_txt, text_color=inst_col)
-            backends = get_available_backends()
-            # Prefer deepface if available
-            if runtime_ok and backends.get("deepface"):
-                be = "deepface (ready)"
-                col = C["success"]
-            elif backends.get("clip"):
-                be = "clip (fallback)"
-                col = C["accent"]
-            else:
-                be = "none — install / repair required for mugshot tools"
-                col = C["danger"]
-            self.df_status_backend.configure(text=f"Preferred backend: {be}", text_color=col)
-            parts = [f"{k}={'yes' if v else 'no'}" for k, v in sorted(backends.items())]
-            self.df_status_backends.configure(text="Available: " + ", ".join(parts))
-        except Exception as e:
+            pkg = importlib.util.find_spec("deepface") is not None
+        except Exception:
+            pkg = False
+
+        try:
             self.df_status_installed.configure(
-                text=f"Installed: error ({e})", text_color=C["danger"]
+                text=(
+                    "Installed: package found — checking runtime…"
+                    if pkg
+                    else "Installed: No"
+                ),
+                text_color=C["accent"] if pkg else C["danger"],
             )
+            self.df_status_backend.configure(
+                text="Preferred backend: checking…",
+                text_color=C["dim"],
+            )
+            self.df_status_backends.configure(text="Available: …")
+        except Exception:
+            pass
 
-        # Weights dir
         home = Path.home() / ".deepface" / "weights"
-        if home.is_dir():
-            try:
-                n = sum(1 for _ in home.glob("*") if _.is_file())
-                size = sum(f.stat().st_size for f in home.glob("*") if f.is_file())
+        try:
+            if home.is_dir():
+                files = [f for f in home.glob("*") if f.is_file()]
+                n = len(files)
+                size = sum(f.stat().st_size for f in files)
                 mb = size / (1024 * 1024)
                 self.df_status_weights.configure(
                     text=f"Weights cache: {home}  ·  {n} files  ·  {mb:.1f} MB"
                 )
-            except Exception:
+            else:
+                self.df_status_weights.configure(
+                    text=f"Weights cache: not created yet ({home})"
+                )
+        except Exception:
+            try:
                 self.df_status_weights.configure(text=f"Weights cache: {home}")
-        else:
-            self.df_status_weights.configure(
-                text=f"Weights cache: not created yet ({home})"
-            )
+            except Exception:
+                pass
 
         skip = os.environ.get("SOR_SKIP_DEEPFACE_INSTALL", "").strip().lower() in (
             "1", "true", "yes",
         )
         if skip and hasattr(self, "df_job_status"):
-            self.df_job_status.configure(
-                text="Note: SOR_SKIP_DEEPFACE_INSTALL is set — auto-install disabled in env"
-            )
+            try:
+                self.df_job_status.configure(
+                    text="Note: SOR_SKIP_DEEPFACE_INSTALL is set — auto-install disabled in env"
+                )
+            except Exception:
+                pass
+
+        def worker() -> None:
+            runtime_ok = False
+            runtime_detail = "check failed"
+            backends: Dict[str, bool] = {}
+            err: Optional[str] = None
+            try:
+                # Import setup directly — avoid package side effects
+                from scraper.mugshot_ethnicity.setup import deepface_runtime_ok
+                from scraper.mugshot_ethnicity.scorer import get_available_backends
+
+                runtime_ok, runtime_detail = deepface_runtime_ok()
+                backends = get_available_backends()
+            except Exception as e:
+                err = str(e)
+
+            def apply() -> None:
+                self._df_status_busy = False
+                if not hasattr(self, "df_status_installed"):
+                    return
+                try:
+                    if err:
+                        self.df_status_installed.configure(
+                            text=f"Installed: error ({err})",
+                            text_color=C["danger"],
+                        )
+                        return
+                    if runtime_ok:
+                        inst_txt = "Installed: Yes (runtime OK)"
+                        inst_col = C["success"]
+                    elif pkg:
+                        inst_txt = (
+                            f"Installed: package present but broken — {runtime_detail}"
+                        )
+                        inst_col = C["danger"]
+                    else:
+                        inst_txt = "Installed: No"
+                        inst_col = C["danger"]
+                    self.df_status_installed.configure(
+                        text=inst_txt, text_color=inst_col
+                    )
+                    if runtime_ok and backends.get("deepface"):
+                        be = "deepface (ready)"
+                        col = C["success"]
+                    elif backends.get("clip"):
+                        be = "clip (fallback)"
+                        col = C["accent"]
+                    else:
+                        be = "none — install / repair required for mugshot tools"
+                        col = C["danger"]
+                    self.df_status_backend.configure(
+                        text=f"Preferred backend: {be}", text_color=col
+                    )
+                    parts = [
+                        f"{k}={'yes' if v else 'no'}"
+                        for k, v in sorted(backends.items())
+                    ]
+                    self.df_status_backends.configure(
+                        text="Available: " + ", ".join(parts)
+                    )
+                except Exception:
+                    pass
+
+            try:
+                self.after(0, apply)
+            except Exception:
+                self._df_status_busy = False
+
+        threading.Thread(
+            target=worker, name="deepface-status", daemon=True
+        ).start()
 
     def _deepface_selected_weight_ids(self) -> List[str]:
         ids = ["Race"]

@@ -248,8 +248,10 @@ class ArchiverApp(
             except Exception:
                 pass
         if name == "DeepFace" and hasattr(self, "_deepface_refresh_status"):
+            # Async status only (never import TF on this thread)
             try:
-                self._deepface_refresh_status()
+                if getattr(self, "_df_built", False):
+                    self.after(30, self._deepface_refresh_status)
             except Exception:
                 pass
         if want and not self._log_visible:
