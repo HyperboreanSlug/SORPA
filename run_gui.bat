@@ -3,6 +3,10 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title SOR Public Archiver
 
+REM Fast launcher: install core deps only, start GUI, exit.
+REM DeepFace / vision models install in the background inside gui.py
+REM (must NOT block here -- Launch SOR Archiver.vbs waits for this bat).
+
 REM Resolve console Python (for pip + path discovery)
 set "USE_PY_LAUNCHER=0"
 set "PY="
@@ -21,11 +25,10 @@ if not defined PY (
   echo ERROR: No Python found.
   echo Install Python 3.10+ from https://www.python.org/downloads/
   echo Check "Add python.exe to PATH".
-  pause
   exit /b 1
 )
 
-REM Absolute path of this interpreter → pair with pythonw.exe (no console)
+REM Absolute path of this interpreter -> pair with pythonw.exe (no console)
 set "PYEXE="
 if "%USE_PY_LAUNCHER%"=="1" (
   for /f "delims=" %%I in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "PYEXE=%%I"
@@ -35,7 +38,6 @@ if "%USE_PY_LAUNCHER%"=="1" (
 if not defined PYEXE (
   echo ERROR: Could not resolve Python path.>"%~dp0gui_error.log"
   echo ERROR: Could not resolve Python path.
-  pause
   exit /b 1
 )
 
@@ -45,30 +47,29 @@ if /i "%PYEXE:~-10%"=="python.exe" (
 )
 if not exist "%PYWEXE%" set "PYWEXE=%PYEXE%"
 
-REM Quiet dependency install (gui.py also bootstraps if needed)
+REM Quiet core deps only (gui.py also bootstraps if needed). Never block on DeepFace.
 "%PYEXE%" -m pip install --user -q -r "%~dp0requirements.txt" 2>nul
 if errorlevel 1 (
   "%PYEXE%" -m pip install -q -r "%~dp0requirements.txt" 2>nul
 )
 if errorlevel 1 (
   echo pip install failed.>"%~dp0gui_error.log"
-  echo pip install failed — try: "%PYEXE%" -m pip install -r requirements.txt
-  pause
+  echo pip install failed - try: "%PYEXE%" -m pip install -r requirements.txt
   exit /b 1
 )
 
-REM DeepFace / vision stack (non-fatal — GUI still starts if this fails)
-if exist "%~dp0requirements-vision.txt" (
-  echo Setting up DeepFace (local face race model^) — first run can take several minutes...
-  "%PYEXE%" -m pip install --user -q -r "%~dp0requirements-vision.txt" 2>nul
+REM Detach GUI so this bat exits immediately (VBS can finish)
+start "" /D "%~dp0" "%PYWEXE%" "%~dp0gui.py"
+if errorlevel 1 (
+  echo Failed to start GUI with pythonw.>"%~dp0gui_error.log"
+  echo PYWEXE=%PYWEXE%>>"%~dp0gui_error.log"
+  echo Falling back to console python...>>"%~dp0gui_error.log"
+  start "" /D "%~dp0" "%PYEXE%" "%~dp0gui.py"
   if errorlevel 1 (
-    "%PYEXE%" -m pip install -q -r "%~dp0requirements-vision.txt" 2>nul
+    echo Fallback start also failed.>>"%~dp0gui_error.log"
+    exit /b 1
   )
-  REM Warm race model weights into %%USERPROFILE%%\.deepface\weights
-  "%PYEXE%" -c "from scraper.mugshot_ethnicity.setup import ensure_deepface; ensure_deepface(auto_install=True, warm=True, log=print)" 2>nul
 )
 
-REM Detach GUI so this console can exit immediately (no lingering CMD)
-start "" "%PYWEXE%" "%~dp0gui.py"
 endlocal
 exit /b 0

@@ -84,18 +84,32 @@ _ensure_dependencies()
 
 
 def _start_deepface_setup_background() -> None:
-    """Install DeepFace + race weights in a daemon thread (does not block GUI)."""
+    """Install DeepFace + race weights in a daemon thread (never blocks GUI launch)."""
+    def _log(msg: str) -> None:
+        try:
+            with open(_ROOT / "deepface_setup.log", "a", encoding="utf-8") as f:
+                from datetime import datetime
+
+                f.write(f"{datetime.now().isoformat()} {msg.rstrip()}\n")
+        except OSError:
+            pass
+
+    def _run() -> None:
+        try:
+            # Delay so first paint / mainloop are not competing with pip/TF
+            import time
+
+            time.sleep(3)
+            from scraper.mugshot_ethnicity.setup import ensure_deepface
+
+            ensure_deepface(auto_install=True, warm=True, log=_log)
+        except Exception as e:
+            _log(f"Background DeepFace setup error: {e}")
+
     try:
-        from scraper.mugshot_ethnicity.setup import ensure_deepface_background
+        import threading
 
-        def _log(msg: str) -> None:
-            try:
-                with open(_ROOT / "deepface_setup.log", "a", encoding="utf-8") as f:
-                    f.write(msg.rstrip() + "\n")
-            except OSError:
-                pass
-
-        ensure_deepface_background(log=_log)
+        threading.Thread(target=_run, name="deepface-setup", daemon=True).start()
     except Exception:
         pass
 
@@ -109,9 +123,9 @@ def main() -> None:
             f"Failed to import GUI:\n\n{e}\n\n{traceback.format_exc()}\n\n{sys.executable}"
         )
         raise SystemExit(1) from e
-    # Local face model ready by the time user opens mugshot tools
-    _start_deepface_setup_background()
     app = ArchiverApp()
+    # After UI exists: install DeepFace in background (does not block VBS/bat)
+    _start_deepface_setup_background()
     app.mainloop()
 
 
