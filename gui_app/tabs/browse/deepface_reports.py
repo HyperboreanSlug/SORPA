@@ -200,22 +200,27 @@ class DeepfaceReportsTabMixin:
         rev_body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         rev_body.grid_columnconfigure(0, weight=1)
 
-        # Use a plain tk.Frame + PhotoImage — CTkLabel/CTkImage often stays blank
-        # for nested frames and grayscale registry thumbs.
-        photo_wrap = tk.Frame(rev_body, bg=C["tree_bg"], height=300)
+        # Must stay pure CTk (tk.Label nested in CTk often never paints images)
+        photo_wrap = ctk.CTkFrame(
+            rev_body,
+            fg_color=C["tree_bg"],
+            corner_radius=10,
+            height=320,
+            border_width=1,
+            border_color=C["border"],
+        )
         photo_wrap.pack(fill="x", pady=(0, 8))
         photo_wrap.pack_propagate(False)
         self.dfr_photo_wrap = photo_wrap
-        self.dfr_photo = tk.Label(
+        self.dfr_photo = ctk.CTkLabel(
             photo_wrap,
             text="Select a hit",
-            bg=C["tree_bg"],
-            fg=C["dim"],
-            font=("Segoe UI", 11),
-            compound="center",
+            font=FONT_SM,
+            text_color=C["dim"],
+            fg_color=C["tree_bg"],
         )
-        self.dfr_photo.pack(expand=True, fill="both")
-        self._dfr_photo_tk = None  # active PhotoImage ref (must keep alive)
+        self.dfr_photo.place(relx=0.5, rely=0.5, anchor="center")
+        self._dfr_photo_img = None  # active CTkImage — keep ref
 
         self.dfr_name = ctk.CTkLabel(
             rev_body, text="—", font=FONT_TITLE, text_color=C["text"], anchor="w",
@@ -482,43 +487,52 @@ class DeepfaceReportsTabMixin:
 
     def _dfr_set_photo_placeholder(self, text: str = "Select a hit") -> None:
         try:
-            self._dfr_photo_tk = None
-            self.dfr_photo.configure(image="", text=text)
+            self._dfr_photo_img = None
+            self.dfr_photo.configure(image=None, text=text)
+            self.dfr_photo.place(relx=0.5, rely=0.5, anchor="center")
         except Exception:
             pass
 
     def _dfr_set_photo_image(self, path: Path) -> tuple[bool, str]:
-        """Load mugshot into the review tk.Label. Returns (ok, message)."""
+        """Load mugshot into the review CTkLabel. Returns (ok, message)."""
         try:
-            from PIL import Image, ImageTk
+            from PIL import Image
         except Exception as e:
             return False, f"PIL missing: {e}"
 
         try:
-            img = Image.open(path)
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGB")
-            elif img.mode == "RGBA":
-                # Flatten alpha onto dark background
-                bg = Image.new("RGB", img.size, (16, 16, 20))
-                bg.paste(img, mask=img.split()[-1])
-                img = bg
-            max_w, max_h = 380, 280
+            with Image.open(path) as raw:
+                img = raw.convert("RGB")  # grayscale "L" → RGB required by CTkImage
+            # Target display size (always readable in the 320px-tall box)
+            max_w, max_h = 340, 300
             img.thumbnail((max_w, max_h))
             w, h = img.size
-            if w < 140 or h < 140:
-                scale = max(140 / max(w, 1), 140 / max(h, 1))
-                w = min(max_w, int(w * scale))
-                h = min(max_h, int(h * scale))
+            if w < 160 or h < 160:
+                scale = max(160 / max(w, 1), 160 / max(h, 1))
+                w = min(max_w, max(1, int(w * scale)))
+                h = min(max_h, max(1, int(h * scale)))
                 try:
                     resample = Image.Resampling.BILINEAR
                 except AttributeError:
                     resample = Image.BILINEAR  # type: ignore[attr-defined]
                 img = img.resize((w, h), resample)
-            # PhotoImage must be kept on self or GC clears the image
-            self._dfr_photo_tk = ImageTk.PhotoImage(img)
-            self.dfr_photo.configure(image=self._dfr_photo_tk, text="")
-            return True, str(path)
+            # Copy pixels so PIL file handle is fully released
+            img = img.copy()
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(w, h))
+            # Keep strong refs (list + attribute) — GC clears blank images otherwise
+            self._dfr_photo_img = ctk_img
+            if not hasattr(self, "_dfr_image_refs") or self._dfr_image_refs is None:
+                self._dfr_image_refs = []
+            self._dfr_image_refs.append(ctk_img)
+            if len(self._dfr_image_refs) > 24:
+                self._dfr_image_refs = self._dfr_image_refs[-12:]
+            self.dfr_photo.configure(image=ctk_img, text="")
+            self.dfr_photo.place(relx=0.5, rely=0.5, anchor="center")
+            try:
+                self.dfr_photo_wrap.update_idletasks()
+            except Exception:
+                pass
+            return True, f"{path.name} ({w}x{h})"
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
@@ -622,8 +636,21 @@ class DeepfaceReportsTabMixin:
 
         if photo_path is not None:
             ok, msg = self._dfr_set_photo_image(photo_path)
-            if not ok:
-                self._dfr_set_photo_placeholder(f"Photo error\n{msg[:80]}")
+            if ok:
+                # Confirm load in meta (helps diagnose blank-image issues)
+                lines.append(f"Image OK: {msg}")
+                try:
+                    self.dfr_meta.configure(text="\n".join(lines))
+                except Exception:
+                    pass
+            else:
+                self._dfr_set_photo_placeholder(f"Photo error\n{msg[:100]}")
+                try:
+                    self.dfr_meta.configure(
+                        text="\n".join(lines + [f"Image FAIL: {msg}"])
+                    )
+                except Exception:
+                    pass
         else:
             self._dfr_set_photo_placeholder(
                 "No photo on disk" + (f"\n{photo_raw[:60]}" if photo_raw else "")
