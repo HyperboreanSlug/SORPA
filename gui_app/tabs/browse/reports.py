@@ -1328,14 +1328,17 @@ class ReportsTabMixin:
             anchor="w",
         ).pack(fill="x")
 
-        if crime:
-            ctk.CTkLabel(
-                body,
-                text=(crime[:110] + ("…" if len(crime) > 110 else "")),
-                font=FONT_SM,
-                text_color=C["dim"],
-                anchor="w",
-            ).pack(fill="x")
+        # Reports: summarized crime only (full text lives in Misclassify detail)
+        crime_sum = self._reports_summarize_crime(crime, max_len=120)
+        ctk.CTkLabel(
+            body,
+            text=f"Crime: {crime_sum}" if crime_sum else "Crime: —",
+            font=FONT_SM,
+            text_color=C["text"] if crime_sum else C["dim"],
+            anchor="w",
+            justify="left",
+            wraplength=520,
+        ).pack(fill="x")
 
         actions = ctk.CTkFrame(body, fg_color="transparent")
         actions.pack(fill="x", pady=(4, 0))
@@ -1419,7 +1422,8 @@ class ReportsTabMixin:
 
         eth_combo.configure(command=_on_eth)
 
-        crime_line = f"\nCrime: {crime}" if crime else ""
+        crime_sum_copy = self._reports_summarize_crime(crime, max_len=200)
+        crime_line = f"\nCrime: {crime_sum_copy}" if crime_sum_copy else ""
         copy_blob = (
             f"{name}\nLISTED AS: {race}\nSurname ethnicity: {eth}"
             f"{crime_line}\nConf {conf:.3f} · {state}\n"
@@ -1474,107 +1478,20 @@ class ReportsTabMixin:
         return (no_mid[: max_len - 1] + "…") if len(no_mid) > max_len else no_mid
 
     @staticmethod
-    def _reports_strip_dates_from_text(s: str) -> str:
-        """Remove dates/date phrases for grid crime summaries."""
-        import re
+    def _reports_summarize_crime(crime: str, *, max_len: int = 140) -> str:
+        """Short human summary for Reports cards/HTML (never the full statute dump)."""
+        try:
+            from scraper.crime_summary import summarize_crime
 
-        t = (s or "").strip()
-        if not t:
-            return ""
-        # ISO / numeric dates
-        t = re.sub(r"\b\d{4}-\d{1,2}-\d{1,2}\b", " ", t)
-        t = re.sub(r"\b\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}\b", " ", t)
-        # Month name dates: January 5, 2019 / Jan 5 2019 / 5 January 2019
-        months = (
-            r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
-            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|"
-            r"Nov(?:ember)?|Dec(?:ember)?)"
-        )
-        t = re.sub(
-            rf"\b{months}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{2,4}}\b",
-            " ",
-            t,
-            flags=re.I,
-        )
-        t = re.sub(
-            rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+{months}\.?,?\s+\d{{2,4}}\b",
-            " ",
-            t,
-            flags=re.I,
-        )
-        # "on/dated/as of <date-ish>" leftovers
-        t = re.sub(
-            r"\b(?:on|dated?|as of|since|until|from|through)\s+(?=\s|$|,|;)",
-            " ",
-            t,
-            flags=re.I,
-        )
-        # Year-only when clearly a date tag: (2019) or , 2019 at end of clause
-        t = re.sub(r"\(\s*(?:19|20)\d{2}\s*\)", " ", t)
-        t = re.sub(r"\b(?:19|20)\d{2}\b", " ", t)
-        # Cleanup punctuation left by removals
-        t = re.sub(r"\s*[,;:/|–—\-]+\s*", " ", t)
-        t = re.sub(r"\s{2,}", " ", t)
-        return t.strip(" ,;:.-")
-
-    @staticmethod
-    def _reports_abbreviate_crime(
-        crime: str,
-        *,
-        max_len: int = 42,
-        strip_dates: bool = False,
-    ) -> str:
-        """Crime summary for cards — drop boilerplate; grid strips dates."""
-        s = (crime or "").strip()
-        if not s:
-            return ""
-        # Normalize whitespace
-        s = " ".join(s.split())
-        if strip_dates:
-            s = ReportsTabMixin._reports_strip_dates_from_text(s)
-            s = " ".join(s.split())
-        # Drop common statute prefixes / noise
-        for prefix in (
-            "Convicted of ",
-            "Conviction: ",
-            "Offense: ",
-            "Crime: ",
-            "Charge: ",
-            "Charges: ",
-            "Found guilty of ",
-            "Guilty of ",
-        ):
-            if s.lower().startswith(prefix.lower()):
-                s = s[len(prefix) :].strip()
-        # Collapse long statutory citations slightly
-        import re
-
-        s = re.sub(r"\bSection\s+", "§", s, flags=re.I)
-        s = re.sub(r"\bsubsection\s+", "sub§", s, flags=re.I)
-        s = re.sub(r"\bCount\s+(\d+)\b", r"Ct.\1", s, flags=re.I)
-        # Prefer text before first semicolon / pipe if still very long
-        if len(s) > max_len:
-            for sep in (";", "|", " / "):
-                if sep in s:
-                    parts = [p.strip() for p in s.split(sep) if p.strip()]
-                    # Keep as many leading parts as fit fully (no mid-cut if possible)
-                    built = ""
-                    for p in parts:
-                        trial = p if not built else f"{built}; {p}"
-                        if len(trial) <= max_len:
-                            built = trial
-                        else:
-                            break
-                    if built and len(built) >= 12:
-                        s = built
-                        break
-        if len(s) <= max_len:
-            return s
-        # Word-boundary trim only as last resort
-        cut = s[: max_len - 1]
-        if " " in cut:
-            cut = cut.rsplit(" ", 1)[0]
-        return cut.rstrip(" ,;:") + "…"
+            return summarize_crime(crime, max_len=max_len)
+        except Exception:
+            s = " ".join((crime or "").split())
+            if len(s) <= max_len:
+                return s
+            cut = s[: max_len - 1]
+            if " " in cut:
+                cut = cut.rsplit(" ", 1)[0]
+            return cut.rstrip(" ,;:") + "…"
 
     def _reports_add_grid_tile(
         self,
@@ -1639,19 +1556,33 @@ class ReportsTabMixin:
             justify="left",
             wraplength=190,
         ).pack(fill="x", padx=8)
-        ctk.CTkLabel(
+        # High-contrast LISTED race badge (WHITE etc. must pop)
+        race_u = str(race or "—").strip().upper() or "—"
+        listed_badge = ctk.CTkFrame(
             card,
-            text=f"LISTED {str(race).upper()}",
-            font=("Segoe UI", 12, "bold"),
-            text_color=C["danger"],
-            anchor="w",
-        ).pack(fill="x", padx=8)
-
-        # Crime summary: strip dates; keep complete offense text visible in-box
-        # ~5 lines × ~30 chars ≈ 150 chars fits wraplength 190 without clipping
-        crime_short = self._reports_abbreviate_crime(
-            crime, max_len=150, strip_dates=True
+            fg_color="#6b1a1a",
+            corner_radius=8,
+            border_width=2,
+            border_color="#e07a7a",
         )
+        listed_badge.pack(fill="x", padx=6, pady=(4, 2))
+        ctk.CTkLabel(
+            listed_badge,
+            text="LISTED AS",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#f0b0b0",
+            anchor="center",
+        ).pack(fill="x", padx=6, pady=(5, 0))
+        ctk.CTkLabel(
+            listed_badge,
+            text=race_u,
+            font=("Segoe UI", 18, "bold"),
+            text_color="#ffffff",
+            anchor="center",
+        ).pack(fill="x", padx=6, pady=(0, 6))
+
+        # Proper multi-offense summary (not the full statute dump)
+        crime_short = self._reports_summarize_crime(crime, max_len=140)
         crime_line = f"Crime: {crime_short}" if crime_short else "Crime: —"
         crime_box = ctk.CTkFrame(card, fg_color="transparent")
         crime_box.pack(fill="x", padx=8, pady=(2, 0))
@@ -1901,7 +1832,7 @@ class ReportsTabMixin:
                     mc.expected_race,
                     mc.likely_ethnicity,
                     f"{mc.confidence:.4f}",
-                    self._reports_crime_text(rec),
+                    self._reports_summarize_crime(self._reports_crime_text(rec), max_len=200),
                     _format_state_display(rec),
                     "; ".join(mc.matching_names or []),
                     rec.get("photo_path") or "",
@@ -2019,21 +1950,15 @@ class ReportsTabMixin:
             eth = _esc(mc.likely_ethnicity)
             conf = f"{float(mc.confidence or 0):.2f}"
             crime = self._reports_crime_text(rec)
-            if compact:
-                crime_short = self._reports_abbreviate_crime(
-                    crime, max_len=150, strip_dates=True
-                )
-            else:
-                crime_short = crime
+            # Reports HTML always uses summarized crime; full text only in Misclassify
+            crime_short = self._reports_summarize_crime(
+                crime, max_len=140 if compact else 180
+            )
             crime_html = (
                 f'<p class="crime" title="{_esc(crime)}">'
                 f'<span class="crime-label">Crime</span> {_esc(crime_short)}</p>'
                 if crime_short
-                else (
-                    '<p class="crime"><span class="crime-label">Crime</span> —</p>'
-                    if compact
-                    else ""
-                )
+                else '<p class="crime"><span class="crime-label">Crime</span> —</p>'
             )
             df = rec.get("_deepface") or {}
             face_bit = ""
