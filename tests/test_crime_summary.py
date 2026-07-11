@@ -19,11 +19,10 @@ class CrimeSummaryTests(unittest.TestCase):
             "molestation involving unclothed genitals.; s. 800.04(5)(d)"
         )
         out = summarize_crime(raw)
-        self.assertEqual(
-            out,
-            "Sexual battery · Lewd/lascivious (under 12/force) · "
-            "Lewd/lascivious (unclothed genitals)",
-        )
+        # Lewd/lascivious clauses omitted from report summaries
+        self.assertEqual(out, "Sexual battery")
+        self.assertNotIn("lewd", out.lower())
+        self.assertNotIn("lascivious", out.lower())
 
     def test_fl_short_codes(self):
         raw = (

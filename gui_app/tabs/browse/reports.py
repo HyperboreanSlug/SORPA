@@ -1144,14 +1144,14 @@ class ReportsTabMixin:
         if grid:
             host = ctk.CTkFrame(scroll, fg_color="transparent")
             host.pack(fill="both", expand=True, padx=4, pady=4)
-            # Compact tiles: more columns so two rows fit on a typical screen
+            # 1080p: ~2 rows (tile 332 + tight gaps). Prefer wider tiles / big photos.
             try:
                 w = int(scroll.winfo_width() or 0)
             except Exception:
                 w = 0
             if w < 200:
                 w = 1000
-            n_cols = max(3, min(7, w // 155))
+            n_cols = max(3, min(6, w // 182))
             for c in range(n_cols):
                 host.grid_columnconfigure(c, weight=1, uniform="rg")
             for i, mc in enumerate(items):
@@ -1162,8 +1162,8 @@ class ReportsTabMixin:
                     card.grid(
                         row=i // n_cols,
                         column=i % n_cols,
-                        padx=3,
-                        pady=3,
+                        padx=2,
+                        pady=2,
                         sticky="nsew",
                     )
             # Re-flow columns once the scroll area has a real width
@@ -1225,7 +1225,7 @@ class ReportsTabMixin:
             w = 0
         if w < 200:
             return
-        n_cols = max(3, min(7, w // 155))
+        n_cols = max(3, min(6, w // 182))
         try:
             kids = [c for c in host.winfo_children() if c.winfo_exists()]
         except Exception:
@@ -1242,8 +1242,8 @@ class ReportsTabMixin:
                 child.grid(
                     row=i // n_cols,
                     column=i % n_cols,
-                    padx=3,
-                    pady=3,
+                    padx=2,
+                    pady=2,
                     sticky="nsew",
                 )
             except Exception:
@@ -1653,40 +1653,45 @@ class ReportsTabMixin:
         border: str,
         index: int,
     ):
-        """Compact grid tile — two full rows should fit on a typical screen."""
-        # Fixed compact height so row density is predictable
+        """Grid tile: max photo, min chrome; 2 rows still fit on 1080p (~332px)."""
+        # Fixed height: 2×(332+4) ≈ 672 ≤ typical 1080p content area
+        # Non-photo chrome ~130px → photo ~200px
+        _W, _H = 180, 332
+        _PHOTO_H = 200
         card = ctk.CTkFrame(
             parent,
             fg_color=C["panel"],
             border_color=border,
             border_width=1,
-            corner_radius=6,
-            width=158,
-            height=292,
+            corner_radius=4,
+            width=_W,
+            height=_H,
         )
         card.grid_propagate(False)
         card.pack_propagate(False)
 
+        # Photo first — almost full width, minimal padding
         photo_wrap = ctk.CTkFrame(
-            card, fg_color=C["tree_bg"], corner_radius=4, height=88,
+            card, fg_color=C["tree_bg"], corner_radius=0, height=_PHOTO_H,
         )
-        photo_wrap.pack(fill="x", padx=4, pady=(4, 2))
+        photo_wrap.pack(fill="x", padx=1, pady=(1, 0))
         photo_wrap.pack_propagate(False)
         photo_lbl = ctk.CTkLabel(
             photo_wrap, text="—", font=FONT_SM, text_color=C["dim"],
         )
         photo_lbl.place(relx=0.5, rely=0.5, anchor="center")
         if has_photo:
-            thumb = self._reports_load_thumb(photo_path, (148, 86))
+            thumb = self._reports_load_thumb(photo_path, (_W - 4, _PHOTO_H - 2))
             if thumb is not None:
                 photo_lbl.configure(image=thumb, text="")
 
+        # Text chrome packed tight under photo
         display_name = self._reports_grid_display_name(
             first,
             middle,
             last,
             str(rec.get("full_name") or ""),
-            max_len=22,
+            max_len=28,
         )
         ctk.CTkLabel(
             card,
@@ -1695,31 +1700,24 @@ class ReportsTabMixin:
             text_color=C["text"],
             anchor="w",
             justify="left",
-            wraplength=146,
-        ).pack(fill="x", padx=5, pady=(0, 1))
+            wraplength=_W - 10,
+            height=16,
+        ).pack(fill="x", padx=3, pady=(1, 0))
 
-        # Compact high-contrast LISTED badge (still readable WHITE)
+        # Single solid label — nested Frame+place often draws blank/clipped in CTk
         race_u = str(race or "—").strip().upper() or "—"
-        listed_badge = ctk.CTkFrame(
-            card,
-            fg_color="#6b1a1a",
-            corner_radius=5,
-            border_width=1,
-            border_color="#e07a7a",
-            height=36,
-        )
-        listed_badge.pack(fill="x", padx=4, pady=(1, 2))
-        listed_badge.pack_propagate(False)
         ctk.CTkLabel(
-            listed_badge,
+            card,
             text=f"LISTED  {race_u}",
-            font=("Segoe UI", 13, "bold"),
+            font=("Segoe UI", 12, "bold"),
             text_color="#ffffff",
+            fg_color="#7a1f1f",
+            corner_radius=4,
+            height=28,
             anchor="center",
-        ).place(relx=0.5, rely=0.5, anchor="center")
+        ).pack(fill="x", padx=2, pady=(2, 1))
 
-        # Short crime summary — 1–2 lines max
-        crime_short = self._reports_summarize_crime(crime, max_len=72)
+        crime_short = self._reports_summarize_crime(crime, max_len=78)
         crime_line = f"Crime: {crime_short}" if crime_short else "Crime: —"
         ctk.CTkLabel(
             card,
@@ -1728,9 +1726,9 @@ class ReportsTabMixin:
             text_color=C["text"] if crime_short else C["dim"],
             anchor="nw",
             justify="left",
-            wraplength=146,
-            height=32,
-        ).pack(fill="x", padx=5, pady=(0, 1))
+            wraplength=_W - 10,
+            height=28,
+        ).pack(fill="x", padx=3, pady=(1, 0))
 
         face_bit = ""
         if df:
@@ -1741,26 +1739,28 @@ class ReportsTabMixin:
                     face_bit = f" · {flab}@{float(fconf):.0%}"
                 except (TypeError, ValueError):
                     face_bit = f" · {flab}"
-        meta_row = ctk.CTkFrame(card, fg_color="transparent")
-        meta_row.pack(fill="x", padx=5)
+        meta_row = ctk.CTkFrame(card, fg_color="transparent", height=14)
+        meta_row.pack(fill="x", padx=3, pady=(0, 0))
+        meta_row.pack_propagate(False)
         ctk.CTkLabel(
             meta_row,
             text=f"{conf:.2f} · {state}{face_bit}",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             text_color=C["muted"],
             anchor="w",
         ).pack(side="left")
         status_lbl = ctk.CTkLabel(
             meta_row,
             text=self._reports_verdict_label_short(verdict),
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             text_color=self._reports_verdict_color(verdict),
             anchor="e",
         )
         status_lbl.pack(side="right")
 
-        actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.pack(fill="x", padx=3, pady=(2, 3), side="bottom")
+        actions = ctk.CTkFrame(card, fg_color="transparent", height=24)
+        actions.pack(fill="x", padx=2, pady=(1, 2), side="bottom")
+        actions.pack_propagate(False)
 
         def _set(v: str, m=mc, card_widget=card, status=status_lbl):
             self._set_verdict_for_mc(m, v, save=True)
@@ -1789,13 +1789,13 @@ class ReportsTabMixin:
             self._reports_update_metrics()
 
         ctk.CTkButton(
-            actions, text="✗", width=32, height=22,
+            actions, text="✗", width=34, height=22,
             command=lambda: _set("confirmed"),
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
             font=("Segoe UI", 11),
         ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="✓", width=32, height=22,
+            actions, text="✓", width=34, height=22,
             command=lambda: _set("correct"),
             fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
             font=("Segoe UI", 11),

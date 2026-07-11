@@ -72,8 +72,8 @@ _CODE_MAP = [
     (re.compile(r"(?i)SEX\s*BAT\s*BY\s*ADULT\s*/?\s*VCTM\s*UNDER\s*12"), "Sexual battery (adult/victim under 12)"),
     (re.compile(r"(?i)SEX\s*BAT\s*BY\s*JUVEN\s*/?\s*VCTM\s*UNDER\s*12"), "Sexual battery (juvenile/victim under 12)"),
     (re.compile(r"(?i)SEX\s*BAT\s*/?\s*INJ\s*NOT\s*LIKELY"), "Sexual battery (injury not likely)"),
-    (re.compile(r"(?i)LEWD\s*ASLT\s*/?\s*SEX\s*BAT\s*VCTM\s*<?\s*16"), "Lewd assault / sex bat (victim <16)"),
-    (re.compile(r"(?i)LEWD,?\s*LASCIVIOUS\s*(?:CHILD\s*)?U/?16"), "Lewd/lascivious (child under 16)"),
+    # LEWD ASLT paired with sex bat → keep sexual-battery-style short label only
+    (re.compile(r"(?i)LEWD\s*ASLT\s*/?\s*SEX\s*BAT\s*VCTM\s*<?\s*16"), "Sex bat (victim <16)"),
     (re.compile(r"(?i)SEXUAL\s*BATTERY\s*BY\s*ADULT\s*ON\s*ADULT"), "Sexual battery (adult on adult)"),
     (re.compile(r"(?i)FAIL(?:URE)?\s*TO\s*REGIST|FAIL\s*COMPLY\s*REG|RE-?REGISTR"), "Fail to register"),
     (re.compile(r"(?i)TRAVELING\s+TO\s+MEET\s+MINOR"), "Traveling to meet minor"),
@@ -113,34 +113,6 @@ def _strip_statute_cites(s: str) -> str:
     return _norm(t)
 
 
-def _lewd_qualifier(clause: str) -> str:
-    """Compress long lewd/lascivious descriptions to a short qualifier."""
-    low = clause.lower()
-    parts: List[str] = []
-    if re.search(r"under\s*12|victim\s+is\s+under\s*12|u/?12|< ?12", low):
-        parts.append("under 12")
-    elif re.search(r"less\s+than\s*16|under\s*16|12-15|u/?16|< ?16", low):
-        parts.append("under 16")
-    if re.search(r"force|coercion", low):
-        parts.append("force")
-    if re.search(r"unclothed\s+genitals?", low):
-        parts.append("unclothed genitals")
-    if re.search(r"molest", low) and "unclothed" not in " ".join(parts):
-        parts.append("molestation")
-    if re.search(r"conduct", low) and not parts:
-        parts.append("conduct")
-    if re.search(r"battery|batt\b", low) and not parts:
-        parts.append("battery")
-    if not parts:
-        return "Lewd/lascivious"
-    # Prefer compact pairs used in the preferred example
-    if "under 12" in parts and "force" in parts:
-        return "Lewd/lascivious (under 12/force)"
-    if "unclothed genitals" in parts:
-        return "Lewd/lascivious (unclothed genitals)"
-    return "Lewd/lascivious (" + "/".join(parts) + ")"
-
-
 def _title_offense(s: str) -> str:
     s = s.strip()
     if not s:
@@ -174,7 +146,7 @@ def _extract_from_clause(clause: str) -> Optional[str]:
     if not c or _DROP_CLAUSE.match(c):
         return None
 
-    # Map short codes first (before general cleanup)
+    # Map short codes first (before dropping pure lewd clauses)
     src = clause + " " + c
     for rx, label in _CODE_MAP:
         if rx.search(src):
@@ -183,6 +155,10 @@ def _extract_from_clause(clause: str) -> Optional[str]:
     if m:
         return f"Child molestation {m.group(1)}"
 
+    # Drop lewd/lascivious entirely from report summaries (often duplicates)
+    if re.search(r"(?i)\blewd\b|\blascivious\b", src):
+        return None
+
     # "21 - 5510 (a3) — Sexual exploitation of a child..."
     m = re.search(r"—\s*(.+)$", c)
     if m and len(m.group(1)) > 8:
@@ -190,6 +166,10 @@ def _extract_from_clause(clause: str) -> Optional[str]:
     m = re.search(r"§\s*[\d\-.]+\s*[—-]\s*(.+)$", c)
     if m and len(m.group(1)) > 8:
         c = _norm(m.group(1))
+
+    # Re-check after em-dash extraction
+    if re.search(r"(?i)\blewd\b|\blascivious\b", c):
+        return None
 
     # Sexual battery (with optional exclusion noise already stripped)
     if re.search(r"(?i)sexual\s+battery", c):
@@ -202,10 +182,6 @@ def _extract_from_clause(clause: str) -> Optional[str]:
             extra.append("injury not likely")
         base = "Sexual battery"
         return f"{base} ({', '.join(extra)})" if extra else base
-
-    # Lewd / lascivious long form
-    if re.search(r"(?i)lewd|lascivious", c):
-        return _lewd_qualifier(c)
 
     # Rape / sodomy / molestation / exploitation
     for pat, lab in (
@@ -312,10 +288,12 @@ def summarize_crime(text: Optional[str], *, max_len: int = 140) -> str:
 
     labels = _dedupe_preserve(labels)
 
-    # Merge identical "Lewd/lascivious" with no qualifier if we already have qualified ones
-    lewd_qual = [x for x in labels if x.lower().startswith("lewd/lascivious (")]
-    if lewd_qual:
-        labels = [x for x in labels if x.casefold() != "lewd/lascivious"]
+    # Never show lewd/lascivious in report summaries
+    labels = [
+        x
+        for x in labels
+        if not re.search(r"(?i)\blewd\b|\blascivious\b", x)
+    ]
 
     # Prefer "Sexual battery (…)" over bare "Sexual battery" when both appear
     has_sb_qual = any(
