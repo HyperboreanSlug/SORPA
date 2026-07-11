@@ -51,16 +51,28 @@ def scan_gross_misclassifications(
     require_photo: bool = True,
     progress: Optional[Callable[[int, int], None]] = None,
     log: Optional[Callable[[str], None]] = None,
+    cancel: Optional[Callable[[], bool]] = None,
 ) -> List[GrossMisclassHit]:
     """
     Scan mugshots for high-confidence face ethnicity that grossly contradicts
     the registry race (default: Black / Indian / Asian face vs race=White).
 
     Does **not** use surname lists — pure vision filter for gross errors.
+
+    *cancel*: optional zero-arg callable returning True to stop mid-scan
+    (hits found so far are still returned).
     """
     def _log(msg: str) -> None:
         if log:
             log(msg)
+
+    def _cancelled() -> bool:
+        if not cancel:
+            return False
+        try:
+            return bool(cancel())
+        except Exception:
+            return False
 
     own_db = False
     if db is None:
@@ -122,6 +134,9 @@ def scan_gross_misclassifications(
     hits: List[GrossMisclassHit] = []
     total = len(candidates)
     for i, rec in enumerate(candidates):
+        if _cancelled():
+            _log(f"Mugshot gross-scan cancelled after {i}/{total} candidates ({len(hits)} hits)")
+            break
         if progress and (i % 10 == 0 or i + 1 == total):
             try:
                 progress(i + 1, total)

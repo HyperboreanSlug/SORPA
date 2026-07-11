@@ -1,6 +1,7 @@
-"""DeepFace tab: local face-race model install options and status."""
+"""DeepFace tab: Scan sub-tab (run mugshot scans) + Setup sub-tab (install/weights)."""
 from __future__ import annotations
 
+import csv
 import os
 import queue
 import sys
@@ -10,7 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import customtkinter as ctk
+from tkinter import filedialog, ttk
 
+from gui_app.lazy_tabs import LazyTabHost
 from gui_app.theme import (
     C,
     FONT_BOLD,
@@ -18,53 +21,580 @@ from gui_app.theme import (
     FONT_SM,
     FONT_TITLE,
 )
-from gui_app.widgets import _card, _muted, _section_label, _wire_wide_scroll
+from gui_app.widgets import (
+    _bind_tree_scroll_isolation,
+    _card,
+    _muted,
+    _section_label,
+    _stretch_columns,
+    _tree_frame,
+    _wire_wide_scroll,
+)
 from gui_app.paths import ROOT
 
 
 class DeepfaceTabMixin:
     def _build_deepface(self, tab):
-        """Show the tab immediately; build heavy widgets on the next idle tick.
-
-        Keras/TensorFlow must never be imported on the UI thread — that freezes
-        the whole app for many seconds. Status probes run in a worker thread.
-        """
+        """Nested sub-tabs: Scan (primary) and Setup (status / weights / install)."""
         tab.configure(fg_color=C["surface"])
-        self._df_tab = tab
-        self._df_built = False
         self._df_status_busy = False
+        self._df_setup_built = False
+        self._df_scan_running = False
+        self._df_scan_cancel = False
+        self._df_scan_hits: list = []
 
-        # Lightweight shell so CTk can switch tabs without blocking
-        shell = ctk.CTkFrame(tab, fg_color=C["surface"], corner_radius=0)
-        shell.pack(fill="both", expand=True)
-        self._df_shell = shell
-        ctk.CTkLabel(
-            shell,
-            text="Loading DeepFace options…",
-            font=FONT_SM,
+        sub = ctk.CTkTabview(
+            tab,
+            fg_color=C["surface"],
+            segmented_button_fg_color=C["elevated"],
+            segmented_button_selected_color=C["accent_dim"],
+            segmented_button_selected_hover_color=C["select"],
+            segmented_button_unselected_color=C["elevated"],
+            segmented_button_unselected_hover_color=C["panel"],
+            text_color=C["text"],
+            corner_radius=10,
+            border_width=0,
+        )
+        sub.pack(fill="both", expand=True, padx=6, pady=6)
+        self.deepface_tabs = sub
+
+        host = LazyTabHost(sub, on_change=self._on_deepface_subtab_change)
+        self._deepface_lazy = host
+        host.register("Scan", lambda p: self._build_deepface_scan(p) or True)
+        host.register("Setup", lambda p: self._build_deepface_setup(p) or True)
+
+        try:
+            sub.set("Scan")
+        except Exception:
+            pass
+        host.ensure("Scan")
+        return host
+
+    def _on_deepface_subtab_change(self, name: Optional[str] = None) -> None:
+        try:
+            name = name or self.deepface_tabs.get()
+        except Exception:
+            name = "Scan"
+        if name == "Setup" and hasattr(self, "_deepface_refresh_status"):
+            if getattr(self, "_df_setup_built", False):
+                try:
+                    self.after(30, self._deepface_refresh_status)
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Scan sub-tab
+    # ------------------------------------------------------------------
+    def _build_deepface_scan(self, tab) -> None:
+        """Scan options, start/stop, progress, and results monitor."""
+        tab.configure(fg_color=C["surface"])
+        sett = getattr(self, "app_settings", {}) or {}
+
+        # Fixed top: options + controls; bottom expands for results
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(tab, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 4))
+        top.grid_columnconfigure(0, weight=1)
+
+        opt = _card(top)
+        opt.pack(fill="x", padx=2, pady=2)
+        _section_label(opt, "Mugshot gross-misclass scan").pack(
+            anchor="w", padx=14, pady=(12, 4)
+        )
+        _muted(
+            opt,
+            "Score mugshots with the local Race model. Flags high-confidence face "
+            "ethnicity that contradicts the registry race (default: face Black/Indian/Asian "
+            "while race is White). Does not use surnames. Configure weights under Setup.",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        grid = ctk.CTkFrame(opt, fg_color="transparent")
+        grid.pack(fill="x", padx=14, pady=(0, 8))
+        for c in range(4):
+            grid.grid_columnconfigure(c, weight=1)
+
+        # Row 0: state, min conf, limit, backend note
+        ctk.CTkLabel(grid, text="State filter", font=FONT_SM, text_color=C["muted"]).grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=2
+        )
+        self.df_scan_state = ctk.CTkEntry(
+            grid, width=80, placeholder_text="All",
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        )
+        self.df_scan_state.grid(row=1, column=0, sticky="ew", padx=(0, 12), pady=(0, 6))
+        st0 = str(sett.get("deepface_scan_state") or "").strip()
+        if st0:
+            self.df_scan_state.insert(0, st0)
+
+        ctk.CTkLabel(grid, text="Min face confidence", font=FONT_SM, text_color=C["muted"]).grid(
+            row=0, column=1, sticky="w", padx=(0, 8), pady=2
+        )
+        self.df_scan_min_conf = ctk.CTkEntry(
+            grid, width=80, placeholder_text="0.85",
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        )
+        self.df_scan_min_conf.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 6))
+        self.df_scan_min_conf.insert(0, str(sett.get("deepface_scan_min_conf") or "0.85"))
+
+        ctk.CTkLabel(grid, text="Max candidates (0=all)", font=FONT_SM, text_color=C["muted"]).grid(
+            row=0, column=2, sticky="w", padx=(0, 8), pady=2
+        )
+        self.df_scan_limit = ctk.CTkEntry(
+            grid, width=80, placeholder_text="0",
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        )
+        self.df_scan_limit.grid(row=1, column=2, sticky="ew", padx=(0, 12), pady=(0, 6))
+        self.df_scan_limit.insert(0, str(sett.get("deepface_scan_limit") or "0"))
+
+        ctk.CTkLabel(grid, text="Recorded race filter", font=FONT_SM, text_color=C["muted"]).grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=2
+        )
+        self.df_scan_recorded = ctk.CTkEntry(
+            grid, placeholder_text="WHITE",
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        )
+        self.df_scan_recorded.grid(row=3, column=0, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 6))
+        self.df_scan_recorded.insert(
+            0, str(sett.get("deepface_scan_recorded") or "WHITE")
+        )
+
+        ctk.CTkLabel(grid, text="Face labels to flag", font=FONT_SM, text_color=C["muted"]).grid(
+            row=2, column=2, sticky="w", padx=(0, 8), pady=2
+        )
+        self.df_scan_faces = ctk.CTkEntry(
+            grid, placeholder_text="black,indian,asian",
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        )
+        self.df_scan_faces.grid(row=3, column=2, columnspan=2, sticky="ew", padx=(0, 0), pady=(0, 6))
+        self.df_scan_faces.insert(
+            0, str(sett.get("deepface_scan_faces") or "black,indian,asian")
+        )
+
+        # Controls
+        ctrl = ctk.CTkFrame(opt, fg_color="transparent")
+        ctrl.pack(fill="x", padx=14, pady=(4, 8))
+        self.df_scan_start_btn = ctk.CTkButton(
+            ctrl, text="Start scan", width=120,
+            command=self._deepface_scan_start,
+            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
+        )
+        self.df_scan_start_btn.pack(side="left", padx=(0, 8))
+        self.df_scan_stop_btn = ctk.CTkButton(
+            ctrl, text="Stop", width=90,
+            command=self._deepface_scan_stop,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"], state="disabled",
+        )
+        self.df_scan_stop_btn.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            ctrl, text="Export hits…", width=110,
+            command=self._deepface_scan_export,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            ctrl, text="Clear results", width=100,
+            command=self._deepface_scan_clear,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            ctrl, text="Open Setup →", width=110,
+            command=self._deepface_goto_setup,
+            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            border_width=1, border_color=C["border"],
+        ).pack(side="right")
+
+        self.df_scan_progress = ctk.CTkProgressBar(
+            opt, height=8, progress_color=C["accent"], fg_color=C["elevated"],
+        )
+        self.df_scan_progress.pack(fill="x", padx=14, pady=(0, 4))
+        self.df_scan_progress.set(0)
+        self.df_scan_status = ctk.CTkLabel(
+            opt, text="Ready — configure options and click Start scan",
+            font=FONT_SM, text_color=C["dim"], anchor="w",
+        )
+        self.df_scan_status.pack(fill="x", padx=14, pady=(0, 12))
+
+        # Bottom: results + activity
+        bottom = ctk.CTkFrame(tab, fg_color="transparent")
+        bottom.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        bottom.grid_columnconfigure(0, weight=3)
+        bottom.grid_columnconfigure(1, weight=2)
+        bottom.grid_rowconfigure(0, weight=1)
+
+        res_card = _card(bottom)
+        res_card.grid(row=0, column=0, sticky="nsew", padx=(2, 4), pady=2)
+        res_card.grid_columnconfigure(0, weight=1)
+        res_card.grid_rowconfigure(1, weight=1)
+        _section_label(res_card, "Hits").pack(anchor="w", padx=14, pady=(12, 4))
+        wrap, tree = _tree_frame(res_card)
+        wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        cols = ("name", "state", "race", "face", "conf", "severity", "id")
+        tree["columns"] = cols
+        tree["show"] = "headings"
+        widths = [160, 50, 90, 80, 60, 70, 60]
+        for c, w in zip(cols, widths):
+            tree.heading(c, text=c.upper())
+            tree.column(c, width=w, minwidth=40, stretch=(c == "name"))
+        _stretch_columns(tree, cols, widths)
+        self.df_scan_tree = tree
+        _bind_tree_scroll_isolation(tree, wrap)
+
+        log_card = _card(bottom)
+        log_card.grid(row=0, column=1, sticky="nsew", padx=(4, 2), pady=2)
+        _section_label(log_card, "Scan activity").pack(
+            anchor="w", padx=14, pady=(12, 4)
+        )
+        self.df_scan_log = ctk.CTkTextbox(
+            log_card,
+            font=FONT_MONO,
+            fg_color=C["bg"],
             text_color=C["muted"],
-        ).pack(expand=True, pady=40)
+            border_color=C["border"],
+            border_width=1,
+            corner_radius=8,
+        )
+        self.df_scan_log.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.df_scan_log.configure(state="disabled")
+        self._df_scan_log_queue: queue.Queue = queue.Queue()
+        self.after(120, self._deepface_poll_scan_log)
 
-        # After the tab paints, build the real UI (still no TF import here)
-        self.after(1, self._deepface_build_content)
+    def _deepface_goto_setup(self) -> None:
+        try:
+            self.deepface_tabs.set("Setup")
+            if hasattr(self, "_deepface_lazy"):
+                self._deepface_lazy.ensure("Setup")
+        except Exception:
+            pass
 
-    def _deepface_build_content(self) -> None:
-        """Build scrollable DeepFace UI (called after first paint)."""
-        if getattr(self, "_df_built", False):
+    def _deepface_scan_log_msg(self, msg: str) -> None:
+        try:
+            self._df_scan_log_queue.put(str(msg))
+        except Exception:
+            pass
+
+    def _deepface_poll_scan_log(self) -> None:
+        if not hasattr(self, "df_scan_log"):
             return
-        tab = getattr(self, "_df_tab", None)
-        if tab is None:
-            return
-        self._df_built = True
+        try:
+            while True:
+                msg = self._df_scan_log_queue.get_nowait()
+                self.df_scan_log.configure(state="normal")
+                ts = datetime.now().strftime("%H:%M:%S")
+                self.df_scan_log.insert("end", f"[{ts}] {msg}\n")
+                self.df_scan_log.see("end")
+                self.df_scan_log.configure(state="disabled")
+        except queue.Empty:
+            pass
+        except Exception:
+            pass
+        try:
+            self.after(200, self._deepface_poll_scan_log)
+        except Exception:
+            pass
 
-        # Clear loading shell
-        shell = getattr(self, "_df_shell", None)
-        if shell is not None:
+    def _deepface_scan_collect_options(self) -> Dict[str, Any]:
+        def _f(entry, default=""):
             try:
-                shell.destroy()
+                return (entry.get() or "").strip() or default
+            except Exception:
+                return default
+
+        try:
+            min_conf = float(_f(self.df_scan_min_conf, "0.85") or "0.85")
+        except ValueError:
+            min_conf = 0.85
+        try:
+            limit = int(float(_f(self.df_scan_limit, "0") or "0"))
+        except ValueError:
+            limit = 0
+        recorded = [
+            p.strip()
+            for p in _f(self.df_scan_recorded, "WHITE").split(",")
+            if p.strip()
+        ] or ["WHITE"]
+        faces = [
+            p.strip()
+            for p in _f(self.df_scan_faces, "black,indian,asian").split(",")
+            if p.strip()
+        ] or ["black", "indian", "asian"]
+        state = _f(self.df_scan_state, "") or None
+        return {
+            "min_confidence": min_conf,
+            "limit": max(0, limit),
+            "recorded_races": recorded,
+            "face_labels": faces,
+            "state": state,
+        }
+
+    def _deepface_scan_save_options(self) -> None:
+        try:
+            from scraper.app_settings import load_settings, save_settings, normalize_settings
+
+            opts = self._deepface_scan_collect_options()
+            raw = load_settings()
+            raw["deepface_scan_state"] = opts["state"] or ""
+            raw["deepface_scan_min_conf"] = str(opts["min_confidence"])
+            raw["deepface_scan_limit"] = str(opts["limit"])
+            raw["deepface_scan_recorded"] = ",".join(opts["recorded_races"])
+            raw["deepface_scan_faces"] = ",".join(opts["face_labels"])
+            save_settings(raw)
+            self.app_settings = normalize_settings(raw)
+        except Exception:
+            pass
+
+    def _deepface_scan_set_busy(self, busy: bool) -> None:
+        self._df_scan_running = busy
+        try:
+            self.df_scan_start_btn.configure(state="disabled" if busy else "normal")
+            self.df_scan_stop_btn.configure(state="normal" if busy else "disabled")
+        except Exception:
+            pass
+
+    def _deepface_scan_stop(self) -> None:
+        self._df_scan_cancel = True
+        self._deepface_scan_log_msg("Stop requested — finishing current photo…")
+        try:
+            self.df_scan_status.configure(
+                text="Stopping…", text_color=C["accent"]
+            )
+        except Exception:
+            pass
+
+    def _deepface_scan_clear(self) -> None:
+        self._df_scan_hits = []
+        try:
+            self.df_scan_tree.delete(*self.df_scan_tree.get_children())
+            self.df_scan_progress.set(0)
+            self.df_scan_status.configure(
+                text="Results cleared", text_color=C["dim"]
+            )
+        except Exception:
+            pass
+
+    def _deepface_scan_start(self) -> None:
+        if getattr(self, "_df_scan_running", False):
+            self._deepface_scan_log_msg("Scan already running")
+            return
+        self._deepface_scan_save_options()
+        opts = self._deepface_scan_collect_options()
+        self._df_scan_cancel = False
+        self._df_scan_hits = []
+        try:
+            self.df_scan_tree.delete(*self.df_scan_tree.get_children())
+            self.df_scan_progress.set(0)
+        except Exception:
+            pass
+        self._deepface_scan_set_busy(True)
+        self._deepface_scan_log_msg(
+            f"Starting scan: state={opts['state'] or 'ALL'} "
+            f"min_conf={opts['min_confidence']} limit={opts['limit'] or '∞'} "
+            f"recorded={opts['recorded_races']} faces={opts['face_labels']}"
+        )
+        try:
+            self.df_scan_status.configure(
+                text="Starting…", text_color=C["accent"]
+            )
+        except Exception:
+            pass
+
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+        detector = "retinaface"
+        try:
+            from scraper.app_settings import load_settings
+
+            detector = str(
+                (getattr(self, "app_settings", None) or load_settings()).get(
+                    "deepface_detector"
+                )
+                or "retinaface"
+            )
+        except Exception:
+            pass
+
+        def progress(done: int, total: int) -> None:
+            def ui():
+                try:
+                    frac = (done / total) if total else 0.0
+                    self.df_scan_progress.set(min(1.0, max(0.0, frac)))
+                    self.df_scan_status.configure(
+                        text=f"Scoring {done:,} / {total:,}  ·  hits {len(self._df_scan_hits)}",
+                        text_color=C["text"],
+                    )
+                except Exception:
+                    pass
+
+            try:
+                self.after(0, ui)
             except Exception:
                 pass
-            self._df_shell = None
+
+        def worker() -> None:
+            hits = []
+            err = None
+            try:
+                from scraper.mugshot_ethnicity.setup import (
+                    configure_tf_keras_env,
+                    ensure_deepface,
+                )
+                from scraper.mugshot_ethnicity.scorer import (
+                    BackendUnavailableError,
+                    MugshotEthnicityScorer,
+                )
+                from scraper.mugshot_ethnicity.scanner import scan_gross_misclassifications
+
+                configure_tf_keras_env()
+                ensure_deepface(
+                    auto_install=True,
+                    warm=True,
+                    log=self._deepface_scan_log_msg,
+                )
+                try:
+                    scorer = MugshotEthnicityScorer(
+                        backend="deepface",
+                        auto_install=False,
+                        log=self._deepface_scan_log_msg,
+                    )
+                except BackendUnavailableError as e:
+                    raise RuntimeError(str(e)) from e
+
+                # Detector is read by DeepFaceBackend from settings
+                hits = scan_gross_misclassifications(
+                    db_path=db_path,
+                    scorer=scorer,
+                    recorded_races=opts["recorded_races"],
+                    face_labels=opts["face_labels"],
+                    min_confidence=opts["min_confidence"],
+                    limit=opts["limit"],
+                    state=opts["state"],
+                    progress=progress,
+                    log=self._deepface_scan_log_msg,
+                    cancel=lambda: bool(getattr(self, "_df_scan_cancel", False)),
+                )
+            except Exception as e:
+                err = e
+                self._deepface_scan_log_msg(f"ERROR: {e}")
+
+            def done():
+                self._deepface_scan_set_busy(False)
+                self._df_scan_hits = list(hits or [])
+                try:
+                    self.df_scan_tree.delete(*self.df_scan_tree.get_children())
+                    for h in self._df_scan_hits:
+                        rec = h.record or {}
+                        name = (
+                            f"{rec.get('first_name') or ''} "
+                            f"{rec.get('last_name') or ''}"
+                        ).strip()
+                        self.df_scan_tree.insert(
+                            "",
+                            "end",
+                            values=(
+                                name,
+                                rec.get("state") or "—",
+                                (h.recorded_race or "—")[:20],
+                                h.predicted_label,
+                                f"{h.confidence:.2f}",
+                                h.severity,
+                                rec.get("id") or "",
+                            ),
+                        )
+                    n = len(self._df_scan_hits)
+                    if err:
+                        self.df_scan_status.configure(
+                            text=f"Failed: {err}",
+                            text_color=C["danger"],
+                        )
+                        self.df_scan_progress.set(0)
+                    elif getattr(self, "_df_scan_cancel", False):
+                        self.df_scan_status.configure(
+                            text=f"Stopped — {n:,} hits so far",
+                            text_color=C["accent"],
+                        )
+                    else:
+                        self.df_scan_progress.set(1.0)
+                        self.df_scan_status.configure(
+                            text=f"Done — {n:,} hits",
+                            text_color=C["success"],
+                        )
+                except Exception:
+                    pass
+                self._deepface_scan_log_msg(
+                    f"Scan finished: {len(self._df_scan_hits)} hits"
+                    + (f" (error: {err})" if err else "")
+                )
+
+            try:
+                self.after(0, done)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="deepface-scan", daemon=True).start()
+
+    def _deepface_scan_export(self) -> None:
+        hits = list(getattr(self, "_df_scan_hits", []) or [])
+        if not hits:
+            self._deepface_scan_log_msg("No hits to export")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export DeepFace scan hits",
+            defaultextension=".csv",
+            filetypes=[
+                ("CSV", "*.csv"),
+                ("JSON", "*.json"),
+                ("All", "*.*"),
+            ],
+            initialfile=f"deepface_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        )
+        if not path:
+            return
+        try:
+            p = Path(path)
+            if p.suffix.lower() == ".json":
+                import json
+
+                p.write_text(
+                    json.dumps([h.to_dict() for h in hits], indent=2),
+                    encoding="utf-8",
+                )
+            else:
+                with open(p, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow([
+                        "id", "name", "state", "recorded_race", "predicted_label",
+                        "confidence", "severity", "reason", "photo_path",
+                    ])
+                    for h in hits:
+                        rec = h.record or {}
+                        w.writerow([
+                            rec.get("id"),
+                            f"{rec.get('first_name') or ''} {rec.get('last_name') or ''}".strip(),
+                            rec.get("state"),
+                            h.recorded_race,
+                            h.predicted_label,
+                            f"{h.confidence:.4f}",
+                            h.severity,
+                            h.reason,
+                            getattr(h.face, "photo_path", None),
+                        ])
+            self._deepface_scan_log_msg(f"Exported {len(hits)} hits → {p}")
+        except Exception as e:
+            self._deepface_scan_log_msg(f"Export failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Setup sub-tab (status / install / weights)
+    # ------------------------------------------------------------------
+    def _build_deepface_setup(self, tab) -> None:
+        """Build scrollable status / options / weights UI (lazy, no TF import)."""
+        if getattr(self, "_df_setup_built", False):
+            return
+        self._df_setup_built = True
+        # Keep _df_built alias for shell refresh guards
+        self._df_built = True
+        self._df_tab = tab
 
         # Scrollable host fills the tab; mouse-wheel works over full area
         root = ctk.CTkScrollableFrame(

@@ -247,10 +247,12 @@ class ArchiverApp(
                 self._settings_refresh_status()
             except Exception:
                 pass
-        if name == "DeepFace" and hasattr(self, "_deepface_refresh_status"):
-            # Async status only (never import TF on this thread)
+        if name == "DeepFace":
+            # Refresh Setup status only if that sub-tab has been built
             try:
-                if getattr(self, "_df_built", False):
+                if getattr(self, "_df_setup_built", False) and hasattr(
+                    self, "_deepface_refresh_status"
+                ):
                     self.after(30, self._deepface_refresh_status)
             except Exception:
                 pass

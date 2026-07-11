@@ -30,6 +30,12 @@ DEFAULTS: Dict[str, Any] = {
     "deepface_detector": "retinaface",
     # Comma-separated DeepFace.build_model names (Race required for mugshots)
     "deepface_weight_models": "Race",
+    # DeepFace Scan sub-tab options
+    "deepface_scan_state": "",
+    "deepface_scan_min_conf": "0.85",
+    "deepface_scan_limit": "0",
+    "deepface_scan_recorded": "WHITE",
+    "deepface_scan_faces": "black,indian,asian",
 
     # Public database sync from GitHub Releases (no local user PII in archives)
     "db_sync_enabled": False,
