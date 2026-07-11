@@ -175,8 +175,8 @@ class ReportsTabMixin:
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
-            bar, text="Export HTML", width=100,
-            command=self._reports_export_html,
+            bar, text="Open HTML", width=100,
+            command=self._reports_open_html,
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
         ).pack(side="left", padx=(0, 6))
@@ -1688,17 +1688,17 @@ class ReportsTabMixin:
         )
         self.log_queue.put(f"Reports CSV: {n} rows (race: {races}) → {path}")
 
-    def _reports_export_html(self):
-        """Write a scrollable dark HTML gallery (list or compact grid)."""
+    def _reports_open_html(self):
+        """Build HTML gallery for the current report pool and open it in the browser."""
         source = self._reports_export_source()
         if not source:
-            messagebox.showinfo("Export", "Build a report list first.")
+            messagebox.showinfo("Open HTML", "Build a report list first.")
             return
 
         races = ", ".join(sorted(self._reports_race_buckets_allowed())) or "all"
         only = messagebox.askyesnocancel(
-            "Export HTML",
-            "Export only Confirmed incorrect rows?\n\n"
+            "Open HTML",
+            "Include only Confirmed incorrect rows?\n\n"
             f"Race filter: {races} · Show filter: "
             f"{(self.report_verdict_filter.get() or 'Unconfirmed').strip()}\n"
             "(full pool for that Show/race filter, not just this page)\n\n"
@@ -1710,28 +1710,31 @@ class ReportsTabMixin:
             return
         verdict_filter = {"confirmed"} if only else None
 
-        compact = messagebox.askyesno(
-            "HTML layout",
-            "Use compact photo grid?\n\n"
-            "Yes = multi-column grid (more people per screen)\n"
-            "No = full-width list cards (more detail)",
-        )
-
-        path = filedialog.asksaveasfilename(
-            defaultextension=".html",
-            filetypes=[("HTML", "*.html")],
-            initialfile=(
-                f"misclass_report_{'grid' if compact else 'list'}_"
-                f"{datetime.now().strftime('%Y%m%d_%H%M')}.html"
-            ),
-        )
-        if not path:
-            return
+        # Prefer current Grid view checkbox; otherwise ask once
+        if hasattr(self, "report_grid_view"):
+            compact = bool(self.report_grid_view.get())
+        else:
+            compact = messagebox.askyesno(
+                "HTML layout",
+                "Use compact photo grid?\n\n"
+                "Yes = multi-column grid\n"
+                "No = list cards",
+            )
 
         rows = list(self._reports_iter_export_rows(verdicts=verdict_filter))
         if not rows:
-            messagebox.showinfo("Export", "No rows to export for that selection.")
+            messagebox.showinfo("Open HTML", "No rows for that selection.")
             return
+
+        out_dir = Path("data") / "reports"
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            out_dir = Path(".")
+        path = out_dir / (
+            f"misclass_report_{'grid' if compact else 'list'}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        )
 
         meta = getattr(self, "_misclass_meta", {}) or {}
         eth_f = meta.get("eth_filter", "all")
@@ -2015,18 +2018,45 @@ class ReportsTabMixin:
 </body>
 </html>
 """
-        Path(path).write_text(html, encoding="utf-8")
-        messagebox.showinfo(
-            "Exported",
-            f"{len(rows)} cards ({layout}, race: {races}) → {path}",
-        )
-        self.log_queue.put(
-            f"Reports HTML ({layout}): {len(rows)} cards (race: {races}) → {path}"
-        )
         try:
-            self._open_path(Path(path))
+            Path(path).write_text(html, encoding="utf-8")
+        except OSError as e:
+            messagebox.showerror("Open HTML", f"Could not write report:\n{e}")
+            return
+
+        self.log_queue.put(
+            f"Reports HTML open ({layout}): {len(rows)} cards (race: {races}) → {path}"
+        )
+        if hasattr(self, "report_status"):
+            try:
+                self.report_status.configure(
+                    text=f"Opened HTML · {len(rows):,} cards · {path}"
+                )
+            except Exception:
+                pass
+
+        opened = False
+        try:
+            if hasattr(self, "_open_path"):
+                self._open_path(Path(path))
+                opened = True
         except Exception:
-            pass
+            opened = False
+        if not opened:
+            try:
+                webbrowser.open(Path(path).resolve().as_uri())
+                opened = True
+            except Exception:
+                pass
+        if not opened:
+            try:
+                os.startfile(str(Path(path).resolve()))  # type: ignore[attr-defined]
+                opened = True
+            except Exception as e:
+                messagebox.showerror(
+                    "Open HTML",
+                    f"Wrote {path} but could not open the browser:\n{e}",
+                )
 
     # -----------------------------------------------------------------------
     # NSOPW
