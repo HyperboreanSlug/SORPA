@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 # Schema version - increment when schema changes
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Strategies for find/remove_duplicates
 DUPLICATE_STRATEGIES = (
@@ -59,6 +59,10 @@ _MERGE_UNION_FIELDS = frozenset({
     "photo_url",
     "conviction_date",
     "registration_date",
+    # Race may legitimately differ across jurisdictions — keep both via sources_json;
+    # top-level race is rewritten by apply_sources_to_record after merges.
+    "race",
+    "ethnicity",
 })
 
 # Default database path (relative to project root)
@@ -75,6 +79,8 @@ _OFFENDER_INSERT_COLUMNS = (
     "report_html_path",
     "photo_path",
     "photo_url",
+    # JSON array of per-source field contributions (csv / nsopw / report HTML)
+    "sources_json",
 )
 _OFFENDER_INSERT_SQL = (
     "INSERT INTO offenders ("

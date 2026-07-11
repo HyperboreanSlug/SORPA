@@ -358,10 +358,26 @@ class DetailDrawerMixin:
             or record.get("offense_type")
             or "—"
         )
+        race_line = _format_race_display(record.get("race"))
+        try:
+            from scraper.database.sources import (
+                format_sources_detail,
+                multi_source_display,
+                parse_sources,
+            )
+
+            srcs = parse_sources(record.get("sources_json"))
+            if srcs:
+                multi_race = multi_source_display(srcs, "race")
+                if multi_race:
+                    race_line = multi_race
+        except Exception:
+            srcs = []
+
         lines = [
             f"Name: {name}",
             f"Middle: {mid or '—'}",
-            f"Race: {_format_race_display(record.get('race'))}",
+            f"Race: {race_line}",
             f"Ethnicity: {record.get('ethnicity') or '—'}",
             f"Gender: {record.get('gender') or '—'}",
             f"Age / DOB: {record.get('age') or '—'} / {record.get('date_of_birth') or '—'}",
@@ -375,6 +391,12 @@ class DetailDrawerMixin:
             f"HTML: {record.get('report_html_path') or '—'}",
             f"URL: {record.get('source_url') or '—'}",
         ]
+        try:
+            from scraper.database.sources import format_sources_detail, parse_sources
+
+            lines.extend(format_sources_detail(parse_sources(record.get("sources_json"))))
+        except Exception:
+            pass
         detail_text = "\n".join(lines)
         self._detail_set_body_visible(drawer, True)
         # Keep normal (not disabled) so text can be selected and copied

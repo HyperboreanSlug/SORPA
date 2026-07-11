@@ -134,18 +134,20 @@ class ReportsTabMixin:
         ctk.CTkLabel(bar, text="Show", font=FONT_SM, text_color=C["muted"]).pack(
             side="left", padx=(4, 4)
         )
-        # Work queue default: unconfirmed only — Correct labels drop off this sheet
+        # Work queue default: unconfirmed only
         self.report_verdict_filter = ctk.StringVar(value="Unconfirmed")
         ctk.CTkComboBox(
-            bar, variable=self.report_verdict_filter, width=160,
+            bar, variable=self.report_verdict_filter, width=170,
             values=[
                 "Unconfirmed",
                 "Confirmed incorrect",
                 "Confirmed correct",
+                "All",
             ],
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
             text_color=C["text"], dropdown_fg_color=C["panel"],
-            command=lambda _v: self._reports_on_filter_change(),
+            # Pass selection explicitly — StringVar can lag one tick behind command
+            command=lambda v: self._reports_on_filter_change(show_value=v),
         ).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
@@ -238,8 +240,8 @@ class ReportsTabMixin:
                 "1. Set ethnicity / min conf (shared with Misclassify)\n"
                 "2. Click Analyze & build\n"
                 "3. Review Unconfirmed — mark Confirmed incorrect or Confirmed correct\n"
-                "4. Confirmed correct drops off this sheet (use Show to reopen)\n"
-                "5. Switch Show → Confirmed incorrect · Export HTML"
+                "4. Confirmed cards leave Unconfirmed (use Show → Confirmed / All)\n"
+                "5. Show: Unconfirmed · Confirmed incorrect · Confirmed correct · All"
             ),
             font=FONT_SM, text_color=C["dim"], justify="left",
         )
@@ -278,17 +280,44 @@ class ReportsTabMixin:
     def _report_item_key(mc) -> str:
         rec = mc.record or {}
         rid = rec.get("id")
-        if rid is not None:
+        if rid is not None and str(rid).strip() != "":
             return f"id:{rid}"
         name = (
             f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
         ).strip() or (rec.get("full_name") or "")
         return f"n:{name}|{mc.expected_race}|{mc.likely_ethnicity}|{mc.confidence}"
 
+    def _report_verdict_lookup_keys(self, mc) -> List[str]:
+        """All keys that may hold a saved verdict for this row (stable + legacy)."""
+        keys: List[str] = []
+        primary = self._report_item_key(mc)
+        keys.append(primary)
+        rec = mc.record or {}
+        rid = rec.get("id")
+        if rid is not None and str(rid).strip() != "":
+            keys.append(f"id:{rid}")
+        try:
+            keys.append(self._report_person_key(mc))
+        except Exception:
+            pass
+        # de-dupe preserve order
+        seen = set()
+        out: List[str] = []
+        for k in keys:
+            if k and k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
+
     @staticmethod
     def _report_person_key(mc) -> str:
-        """Collapse near-duplicate listings of the same person for the report list."""
+        """Collapse near-duplicate listings of the same person for the report list.
+
+        Includes middle name + DOB so NIRAJ V PATEL and NIRAJ RASHMIBABU PATEL
+        do not collapse together.
+        """
         from scraper.database import Database
+        from scraper.database.identity import person_identity_key
 
         rec = mc.record or {}
         try:
@@ -303,25 +332,41 @@ class ReportsTabMixin:
                 return f"u:{norm}"
         except Exception:
             pass
+        try:
+            return f"idk:{person_identity_key(rec)}"
+        except Exception:
+            pass
         fn = (rec.get("first_name") or "").strip().casefold()
+        mn = (rec.get("middle_name") or "").strip().casefold()
         ln = (rec.get("last_name") or "").strip().casefold()
         st = (
             rec.get("state") or rec.get("source_state") or ""
         ).strip().upper()
         dob = (rec.get("date_of_birth") or "").strip().casefold()
-        if fn and ln and st:
-            return f"n:{fn}|{ln}|{st}|{dob}"
-        return ArchiverApp._report_item_key(mc)
+        if fn and ln:
+            return f"n:{fn}|{mn}|{ln}|{st}|{dob}"
+        return ReportsTabMixin._report_item_key(mc)
 
     def _verdict_for_mc(self, mc) -> str:
-        return self._report_verdicts.get(self._report_item_key(mc), "unreviewed")
+        """Resolve verdict; prefer non-unreviewed if any alias key has a decision."""
+        found = "unreviewed"
+        for k in self._report_verdict_lookup_keys(mc):
+            v = (self._report_verdicts.get(k) or "").strip()
+            if v in ("confirmed", "correct", "skip"):
+                return v
+            if v == "unreviewed":
+                found = "unreviewed"
+        return found
 
     def _set_verdict_for_mc(self, mc, verdict: str, *, save: bool = True) -> None:
-        key = self._report_item_key(mc)
+        keys = self._report_verdict_lookup_keys(mc)
         if verdict == "unreviewed":
-            self._report_verdicts.pop(key, None)
+            for key in keys:
+                self._report_verdicts.pop(key, None)
         else:
-            self._report_verdicts[key] = verdict
+            # Write primary + id alias so later key shape changes still resolve
+            for key in keys:
+                self._report_verdicts[key] = verdict
         if save:
             self._save_report_verdicts()
 
@@ -359,6 +404,7 @@ class ReportsTabMixin:
                 _is_compatible(
                     mc.likely_ethnicity or "",
                     (rec.get("race") or mc.expected_race or "").strip(),
+                    recorded_ethnicity=(rec.get("ethnicity") or "").strip() or None,
                 )
             )
         except Exception:
@@ -379,10 +425,38 @@ class ReportsTabMixin:
         "all": "all",
     }
 
-    def _reports_verdict_filter_key(self) -> str:
-        """Normalize Show dropdown → unreviewed|confirmed|correct|all."""
-        raw = (self.report_verdict_filter.get() or "Unconfirmed").strip().lower()
-        return self._REPORT_SHOW_TO_VERDICT.get(raw, "unreviewed")
+    def _reports_verdict_filter_key(self, show_value: Optional[str] = None) -> str:
+        """Normalize Show dropdown → unreviewed|confirmed|correct|skip|all."""
+        raw = (
+            show_value
+            if show_value is not None
+            else (self.report_verdict_filter.get() or "Unconfirmed")
+        )
+        raw = str(raw or "Unconfirmed").strip().lower()
+        # Tolerate partial / truncated combo text
+        if raw in self._REPORT_SHOW_TO_VERDICT:
+            return self._REPORT_SHOW_TO_VERDICT[raw]
+        if "unconfirm" in raw or raw == "pending":
+            return "unreviewed"
+        if "incorrect" in raw or raw == "misclass":
+            return "confirmed"
+        if "correct" in raw:
+            return "correct"
+        if raw == "all" or raw.startswith("all "):
+            return "all"
+        return "unreviewed"
+
+    @staticmethod
+    def _reports_verdict_passes_filter(verdict: str, vfilter: str) -> bool:
+        """Strict Show filter: Unconfirmed never includes confirmed/correct/skip."""
+        v = (verdict or "unreviewed").strip() or "unreviewed"
+        f = (vfilter or "unreviewed").strip() or "unreviewed"
+        if f == "all":
+            return True
+        if f == "unreviewed":
+            # Only never-reviewed cards — not confirmed incorrect/correct/skip
+            return v == "unreviewed"
+        return v == f
 
     def _results_excluding_correct(self, results: Optional[list] = None) -> list:
         """Misclass results with Correct-label verdicts removed (for Statistics)."""
@@ -473,10 +547,15 @@ class ReportsTabMixin:
             n = 40
         return max(1, min(n if n > 0 else 40, 500))
 
-    def _reports_on_filter_change(self) -> None:
+    def _reports_on_filter_change(self, show_value: Optional[str] = None) -> None:
         """Race/verdict/photos filter changed — rebuild pool from page 0."""
+        if show_value is not None:
+            try:
+                self.report_verdict_filter.set(str(show_value))
+            except Exception:
+                pass
         self._report_page = 0
-        self._reports_rebuild_cards()
+        self._reports_rebuild_cards(refilter=True)
 
     def _reports_apply_page(self) -> list:
         """Slice _report_pool into current page; update page label."""
@@ -536,6 +615,12 @@ class ReportsTabMixin:
         photos_only = bool(self.report_photos_only.get())
         vfilter = self._reports_verdict_filter_key()
         race_allow = self._reports_race_buckets_allowed()
+        # Ensure verdicts file is loaded (first open / new session)
+        if not getattr(self, "_report_verdicts_loaded", False):
+            if not hasattr(self, "_report_verdicts") or self._report_verdicts is None:
+                self._report_verdicts = {}
+            self._load_report_verdicts()
+            self._report_verdicts_loaded = True
 
         # Prefetch photo paths when missing
         need_ids: List[int] = []
@@ -615,11 +700,7 @@ class ReportsTabMixin:
         out = []
         for mc in best_by_person.values():
             verdict = self._verdict_for_mc(mc)
-            # Default work sheet excludes confirmed-correct; Show picks one bucket
-            if vfilter == "all":
-                if verdict == "correct":
-                    continue  # never mix correct into the active sheet
-            elif verdict != vfilter:
+            if not self._reports_verdict_passes_filter(verdict, vfilter):
                 continue
             out.append(mc)
 
@@ -760,7 +841,7 @@ class ReportsTabMixin:
         if hasattr(self, "report_status"):
             conf = sum(
                 1 for mc in (getattr(self, "_report_pool", None) or items)
-                if self._report_verdicts.get(self._report_item_key(mc)) == "confirmed"
+                if self._verdict_for_mc(mc) == "confirmed"
             )
             show = (self.report_verdict_filter.get() or "Unconfirmed").strip()
             self.report_status.configure(
@@ -801,7 +882,7 @@ class ReportsTabMixin:
         """One presentation card: photo + name + race mismatch + verdict."""
         rec = dict(mc.record or {})
         key = self._report_item_key(mc)
-        verdict = self._report_verdicts.get(key, "unreviewed")
+        verdict = self._verdict_for_mc(mc)
 
         first = (rec.get("first_name") or "").strip()
         middle = (rec.get("middle_name") or "").strip()
@@ -811,7 +892,8 @@ class ReportsTabMixin:
             or (rec.get("full_name") or "—")
         )
         state = _format_state_display(rec)
-        race = (mc.expected_race or rec.get("race") or "—")
+        race_raw = (mc.expected_race or rec.get("race") or "—")
+        race = _format_race_display(race_raw) or str(race_raw)
         eth = mc.likely_ethnicity or "—"
         conf = float(mc.confidence or 0.0)
         photo_path = (rec.get("photo_path") or "").strip()
@@ -871,27 +953,35 @@ class ReportsTabMixin:
             head, text=f"  #{index} / {total}", font=FONT_SM, text_color=C["dim"],
         ).pack(side="left", padx=(8, 0))
 
-        # Race transition chips
-        chips = ctk.CTkFrame(body, fg_color="transparent")
-        chips.pack(fill="x", pady=(8, 4))
-
-        def _pill(parent, label: str, value: str, accent: bool = False):
-            f = ctk.CTkFrame(
-                parent,
-                fg_color=C["accent_dim"] if accent else C["elevated"],
-                corner_radius=8,
-                border_width=1,
-                border_color=C["border"],
-            )
-            f.pack(side="left", padx=(0, 8))
-            ctk.CTkLabel(
-                f, text=f"{label}  {value}",
-                font=FONT_SM, text_color=C["accent"] if accent else C["text"],
-            ).pack(padx=10, pady=4)
-
-        _pill(chips, "Recorded", str(race), accent=True)
+        # Primary callout: registry-listed race (the shareable error signal)
+        race_banner = ctk.CTkFrame(
+            body,
+            fg_color="#5c1f1f",
+            corner_radius=10,
+            border_width=2,
+            border_color=C["danger"],
+        )
+        race_banner.pack(fill="x", pady=(10, 6))
         ctk.CTkLabel(
-            chips, text="→", font=FONT_BOLD, text_color=C["muted"],
+            race_banner,
+            text="LISTED AS",
+            font=("Segoe UI", 11, "bold"),
+            text_color="#f0b0b0",
+            anchor="w",
+        ).pack(fill="x", padx=14, pady=(8, 0))
+        ctk.CTkLabel(
+            race_banner,
+            text=str(race).upper(),
+            font=("Segoe UI", 28, "bold"),
+            text_color="#ffffff",
+            anchor="w",
+        ).pack(fill="x", padx=14, pady=(0, 10))
+
+        # Secondary: surname-based ethnicity (smaller)
+        chips = ctk.CTkFrame(body, fg_color="transparent")
+        chips.pack(fill="x", pady=(2, 4))
+        ctk.CTkLabel(
+            chips, text="vs surname", font=FONT_SM, text_color=C["dim"],
         ).pack(side="left", padx=(0, 8))
         eth_pill = ctk.CTkFrame(
             chips,
@@ -903,11 +993,11 @@ class ReportsTabMixin:
         eth_pill.pack(side="left", padx=(0, 8))
         eth_pill_lbl = ctk.CTkLabel(
             eth_pill,
-            text=f"Surname  {eth}",
-            font=FONT_SM,
+            text=str(eth),
+            font=FONT_BOLD,
             text_color=C["text"],
         )
-        eth_pill_lbl.pack(padx=10, pady=4)
+        eth_pill_lbl.pack(padx=12, pady=5)
 
         # Manual ethnicity correction (in-place; does not rebuild page)
         eth_row = ctk.CTkFrame(body, fg_color="transparent")
@@ -970,12 +1060,12 @@ class ReportsTabMixin:
             # Stats: Correct drops from pie immediately
             self._refresh_stats_from_verdicts()
             want = self._reports_verdict_filter_key()
-            # Confirmed correct (and any verdict that leaves the Show filter):
-            # destroy only this card — do not rebuild the whole page.
-            if want != "all" and v != want:
+            # Leave this sheet when new verdict is outside current Show filter
+            # (e.g. Unconfirmed → Confirmed incorrect must drop off Unconfirmed).
+            if not self._reports_verdict_passes_filter(v, want):
                 self._reports_drop_card(card_widget, m)
                 return
-            # Still on this sheet: update this card in place
+            # Still on this sheet (e.g. Show=All): update this card in place
             border = {
                 "confirmed": C["danger"],
                 "correct": C["success"],
@@ -1002,7 +1092,7 @@ class ReportsTabMixin:
             new_eth = (choice or eth_var.get() or "").strip() or "Unknown"
             self._set_ethnicity_for_mc(m, new_eth)
             try:
-                pill.configure(text=f"Surname  {new_eth}")
+                pill.configure(text=str(new_eth))
             except Exception:
                 pass
             if matches_lbl is not None:
@@ -1054,7 +1144,7 @@ class ReportsTabMixin:
 
         # Selectable summary line + copy
         copy_blob = (
-            f"{name}\nRecorded: {race} → Surname: {eth}\n"
+            f"{name}\nLISTED AS: {race}\nSurname ethnicity: {eth}\n"
             f"{meta}\nMatched: {matches or '—'}\n"
             f"State: {state}\nURL: {rec.get('source_url') or '—'}"
         )
@@ -1141,7 +1231,7 @@ class ReportsTabMixin:
             p = (rec.get("photo_path") or "").strip()
             if p and Path(p).is_file():
                 n_photo += 1
-            v = self._report_verdicts.get(self._report_item_key(mc), "unreviewed")
+            v = self._verdict_for_mc(mc)
             if v == "confirmed":
                 n_conf += 1
             elif v == "correct":
@@ -1171,8 +1261,7 @@ class ReportsTabMixin:
     def _reports_iter_export_rows(self, *, verdicts: Optional[set] = None):
         """Yield (mc, verdict, rec) for export from full race-filtered pool."""
         for mc in self._reports_export_source():
-            key = self._report_item_key(mc)
-            verdict = self._report_verdicts.get(key, "unreviewed")
+            verdict = self._verdict_for_mc(mc)
             if verdicts is not None and verdict not in verdicts:
                 continue
             yield mc, verdict, dict(mc.record or {})
@@ -1317,7 +1406,8 @@ class ReportsTabMixin:
                 if url else ""
             )
             vclass = _esc(verdict)
-            race = _esc(mc.expected_race)
+            race_disp = _format_race_display(mc.expected_race) or (mc.expected_race or "—")
+            race = _esc(str(race_disp).upper())
             eth = _esc(mc.likely_ethnicity)
             conf = f"{mc.confidence:.3f}"
             if compact:
@@ -1327,11 +1417,11 @@ class ReportsTabMixin:
   <div class="photo">{img_html}</div>
   <div class="body">
     <h2 title="{_esc(name)}">{_esc(name)}</h2>
-    <div class="transition">
-      <span class="pill race">{race}</span>
-      <span class="arrow">→</span>
-      <span class="pill eth">{eth}</span>
+    <div class="listed-as" title="Registry-listed race">
+      <span class="listed-label">LISTED AS</span>
+      <span class="listed-race">{race}</span>
     </div>
+    <p class="vs-eth">vs surname <strong>{eth}</strong></p>
     <p class="meta">{_esc(state)} · {conf} · #{i}</p>
     {link}
   </div>
@@ -1348,11 +1438,11 @@ class ReportsTabMixin:
       <span class="idx">#{i} / {len(rows)}</span>
       <span class="badge">{_esc(verdict)}</span>
     </header>
-    <div class="transition">
-      <span class="pill race">{race}</span>
-      <span class="arrow">→</span>
-      <span class="pill eth">{eth}</span>
+    <div class="listed-as" title="Registry-listed race">
+      <span class="listed-label">LISTED AS</span>
+      <span class="listed-race">{race}</span>
     </div>
+    <p class="vs-eth">vs surname ethnicity: <strong>{eth}</strong></p>
     <p class="meta">Confidence {conf} · State {_esc(state)}{(' · Middle: ' + _esc(middle)) if middle else ''}</p>
     <p class="names">Matched: {_esc('; '.join(mc.matching_names[:5]) if mc.matching_names else '—')}</p>
     {link}
@@ -1392,18 +1482,26 @@ class ReportsTabMixin:
     margin: 0; font-size: .88rem; font-weight: 650; line-height: 1.25;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .transition {
-    display: flex; align-items: center; gap: .25rem; margin: .15rem 0;
-    flex-wrap: wrap;
+  .listed-as {
+    margin: .35rem 0 .2rem; padding: .4rem .5rem .45rem;
+    background: #5c1f1f; border: 2px solid var(--danger);
+    border-radius: 8px; text-align: center;
   }
-  .pill {
-    background: var(--elev); border: 1px solid var(--border);
-    border-radius: 6px; padding: .12rem .4rem; font-size: .72rem;
-    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .listed-label {
+    display: block; font-size: .62rem; font-weight: 700;
+    letter-spacing: .08em; color: #f0b0b0; margin-bottom: .1rem;
   }
-  .pill.race { color: var(--accent); border-color: #3d2e24; background: #3d2e24; }
-  .arrow { color: var(--muted); font-size: .75rem; }
-  .meta { margin: 0; color: var(--dim); font-size: .72rem; }
+  .listed-race {
+    display: block; font-size: 1.15rem; font-weight: 800;
+    line-height: 1.15; color: #fff; letter-spacing: .02em;
+    word-break: break-word;
+  }
+  .vs-eth {
+    margin: .15rem 0 0; color: var(--muted); font-size: .72rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .vs-eth strong { color: var(--text); font-weight: 650; }
+  .meta { margin: .2rem 0 0; color: var(--dim); font-size: .72rem; }
   a.ext { color: var(--accent); font-size: .72rem; }
   @media (max-width: 520px) {
     main { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .5rem; }
@@ -1412,6 +1510,7 @@ class ReportsTabMixin:
     header.page { position: static; }
     main { grid-template-columns: repeat(4, 1fr); gap: .4rem; }
     .card { break-inside: avoid; }
+    .listed-as { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 """
             if compact
@@ -1446,18 +1545,29 @@ class ReportsTabMixin:
   }
   .v-confirmed .badge { color: var(--danger); border-color: #8a4040; }
   .v-correct .badge { color: var(--success); border-color: #3a6a50; }
-  .transition { display: flex; align-items: center; gap: .5rem; margin: .75rem 0 .4rem; flex-wrap: wrap; }
-  .pill {
-    background: var(--elev); border: 1px solid var(--border);
-    border-radius: 8px; padding: .3rem .7rem; font-size: .9rem;
+  .listed-as {
+    margin: .85rem 0 .45rem; padding: .65rem 1rem .75rem;
+    background: #5c1f1f; border: 2px solid var(--danger);
+    border-radius: 12px;
   }
-  .pill.race { color: var(--accent); border-color: #3d2e24; background: #3d2e24; }
-  .arrow { color: var(--muted); }
+  .listed-label {
+    display: block; font-size: .78rem; font-weight: 700;
+    letter-spacing: .1em; color: #f0b0b0; margin-bottom: .15rem;
+  }
+  .listed-race {
+    display: block; font-size: 2rem; font-weight: 800;
+    line-height: 1.1; color: #fff; letter-spacing: .03em;
+  }
+  .vs-eth {
+    margin: .15rem 0 .35rem; color: var(--muted); font-size: .95rem;
+  }
+  .vs-eth strong { color: var(--text); font-weight: 650; }
   .meta, .names { margin: .2rem 0; color: var(--muted); font-size: .9rem; }
   a.ext { color: var(--accent); font-size: .88rem; }
   @media print {
     header.page { position: static; }
     .card { break-inside: avoid; }
+    .listed-as { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 """
         )

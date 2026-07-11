@@ -155,6 +155,7 @@ class SchemaMixin:
             "raw_data_json": "TEXT",
             "external_id": "TEXT",
             "middle_name": "TEXT",
+            "sources_json": "TEXT",
         }
         for name, typ in additions.items():
             if name not in cols:
@@ -194,6 +195,9 @@ class SchemaMixin:
             pass
         if from_version < 5:
             # middle_name column via _ensure_offender_columns
+            pass
+        if from_version < 6:
+            # sources_json multi-source provenance via _ensure_offender_columns
             pass
 
     def close(self):

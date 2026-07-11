@@ -56,8 +56,14 @@ class QueryMixin:
             query = self._append_state_filter(query, params, state)
 
         if race:
-            query += " AND UPPER(COALESCE(race, '')) = UPPER(?)"
-            params.append(race)
+            # Multi-source race may look like ``W [FL·csv] | Asian [CO·html]``
+            query += (
+                " AND (UPPER(COALESCE(race, '')) = UPPER(?) "
+                "OR UPPER(COALESCE(race, '')) LIKE ? ESCAPE '\\' "
+                "OR UPPER(COALESCE(sources_json, '')) LIKE ? ESCAPE '\\')"
+            )
+            like = f"%{_escape_like((race or '').upper())}%"
+            params.extend([race, like, like])
 
         query += " ORDER BY last_name ASC, first_name ASC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -76,6 +82,9 @@ class QueryMixin:
 
         Special token ``INDIAN`` matches race/ethnicity/likely_ethnicity fields
         that look South Asian / Indian (not only exact race = INDIAN).
+
+        Multi-source rows (``W [FL·csv] | Asian [CO·html]``) match via LIKE on
+        race and sources_json.
         """
         limit = max(0, int(limit))
         offset = max(0, int(offset))
@@ -90,12 +99,20 @@ class QueryMixin:
                     OR UPPER(COALESCE(ethnicity, '')) LIKE '%INDIAN%'
                     OR UPPER(COALESCE(ethnicity, '')) LIKE '%SOUTH ASIAN%'
                     OR UPPER(COALESCE(likely_ethnicity, '')) LIKE '%INDIAN%'
+                    OR UPPER(COALESCE(sources_json, '')) LIKE '%INDIAN%'
                 )
             """
             params: List[Any] = []
         else:
-            query = "SELECT * FROM offenders WHERE UPPER(COALESCE(race, '')) = UPPER(?)"
-            params = [race]
+            like = f"%{_escape_like(race_key)}%"
+            query = """
+                SELECT * FROM offenders WHERE (
+                    UPPER(COALESCE(race, '')) = UPPER(?)
+                    OR UPPER(COALESCE(race, '')) LIKE ? ESCAPE '\\'
+                    OR UPPER(COALESCE(sources_json, '')) LIKE ? ESCAPE '\\'
+                )
+            """
+            params = [race, like, like]
 
         if state and state.upper() != "ALL":
             query = self._append_state_filter(query, params, state)

@@ -57,6 +57,17 @@ if errorlevel 1 (
   exit /b 1
 )
 
+REM DeepFace / vision stack (non-fatal — GUI still starts if this fails)
+if exist "%~dp0requirements-vision.txt" (
+  echo Setting up DeepFace (local face race model^) — first run can take several minutes...
+  "%PYEXE%" -m pip install --user -q -r "%~dp0requirements-vision.txt" 2>nul
+  if errorlevel 1 (
+    "%PYEXE%" -m pip install -q -r "%~dp0requirements-vision.txt" 2>nul
+  )
+  REM Warm race model weights into %%USERPROFILE%%\.deepface\weights
+  "%PYEXE%" -c "from scraper.mugshot_ethnicity.setup import ensure_deepface; ensure_deepface(auto_install=True, warm=True, log=print)" 2>nul
+)
+
 REM Detach GUI so this console can exit immediately (no lingering CMD)
 start "" "%PYWEXE%" "%~dp0gui.py"
 endlocal

@@ -1,5 +1,6 @@
 """Search and filter engine for sex offender records."""
 
+import re
 import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
@@ -31,16 +32,13 @@ class Misclassification:
 # (i.e. not a misclassification when the recorded race is one of these).
 # Keys are *canonical* race codes from _canonical_race_key().
 #
-# Hispanic: US registries usually record race (White/Black/…) and ethnicity
-# separately. Most states put Hispanic offenders as race=White with little or
-# no ethnicity field filled — that is normal OMB practice, not a mismatch.
-# Only non-White, non-Hispanic race codes count as potential mislabels.
+# Hispanic: race codes that *are* the ethnicity (Hispanic/Latino/White Hispanic).
+# Race=White alone is NOT enough — that is only compatible when the separate
+# ethnicity field is also marked Hispanic (see _is_compatible / _has_hispanic_ethnicity).
 _ETHNICITY_COMPATIBLE_RACES = {
     "hispanic": {
         "HISPANIC", "LATINO", "LATINA", "LATINX", "H",
         "WHITE HISPANIC", "HISPANIC OR LATINO", "LATINO OR HISPANIC",
-        # Standard race when ethnicity is not in the race field:
-        "WHITE", "W", "CAUCASIAN", "CAUCASION",
     },
     "asian": {
         "ASIAN", "ASIAN / PACIFIC ISLANDER", "ASIAN/PACIFIC ISLANDER",
@@ -197,8 +195,36 @@ def _is_other_or_other_asian(race_key: str) -> bool:
     return False
 
 
-def _is_compatible(likely_ethnicity: str, recorded_race: str) -> bool:
-    """Return True if recorded race is consistent with the name-based ethnicity."""
+def _has_hispanic_ethnicity(recorded_ethnicity: Optional[str]) -> bool:
+    """True when the registry ethnicity field marks Hispanic / Latino."""
+    eth = (recorded_ethnicity or "").strip().upper()
+    if not eth:
+        return False
+    # Explicit non-Hispanic markers first
+    if re.search(r"\bNON[\s\-]?HISPANIC\b", eth) or "NOT HISPANIC" in eth:
+        return False
+    markers = (
+        "HISPANIC", "LATINO", "LATINA", "LATINX",
+        "HISPANIC OR LATINO", "LATINO OR HISPANIC",
+    )
+    if any(m in eth for m in markers):
+        return True
+    # Single-letter ethnicity codes used by some bulk feeds
+    if eth in ("H", "HIS", "HISP"):
+        return True
+    return False
+
+
+def _is_compatible(
+    likely_ethnicity: str,
+    recorded_race: str,
+    recorded_ethnicity: Optional[str] = None,
+) -> bool:
+    """Return True if recorded race/ethnicity is consistent with the name-based ethnicity.
+
+    Hispanic + race White: only compatible when *recorded_ethnicity* is also
+    Hispanic/Latino. White with blank/non-Hispanic ethnicity is a mismatch.
+    """
     if not recorded_race or not likely_ethnicity or likely_ethnicity == "Unknown":
         return True
     family = _ethnicity_family(likely_ethnicity)
@@ -209,9 +235,12 @@ def _is_compatible(likely_ethnicity: str, recorded_race: str) -> bool:
         return True
 
     # Hispanic surnames: empty / unknown race are not useful mismatch signals
-    # (registries often omit race; White is handled via compatible set).
     if family == "hispanic" and race in ("UNKNOWN", "OTHER"):
         return True
+
+    # Hispanic + White/Caucasian: require ethnicity field = Hispanic
+    if family == "hispanic" and race == "WHITE":
+        return _has_hispanic_ethnicity(recorded_ethnicity)
 
     compatible = _ETHNICITY_COMPATIBLE_RACES.get(family)
     if not compatible:
@@ -427,6 +456,15 @@ class SexOffenderSearcher:
             first_name = _first_name_from_record(record)
             middle_name = _middle_name_from_record(record)
             recorded_race = (record.get("race") or "").strip()
+            recorded_ethnicity = (
+                record.get("ethnicity")
+                or record.get("Ethnicity")
+                or ""
+            )
+            if isinstance(recorded_ethnicity, str):
+                recorded_ethnicity = recorded_ethnicity.strip()
+            else:
+                recorded_ethnicity = str(recorded_ethnicity or "").strip()
 
             if not last_name:
                 continue
@@ -450,7 +488,9 @@ class SexOffenderSearcher:
             # Matched selected ethnicity at threshold
             base_count += 1
 
-            if _is_compatible(likely_eth, recorded_race):
+            if _is_compatible(
+                likely_eth, recorded_race, recorded_ethnicity=recorded_ethnicity or None
+            ):
                 continue
 
             misclassifications.append(Misclassification(

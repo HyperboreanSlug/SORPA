@@ -120,8 +120,10 @@ python -m scraper → cli → same domain packages
 | Module | Function |
 |--------|----------|
 | `scraper/database/*` | Schema, insert, query, dedupe, CSV, backup |
+| `scraper/database/identity.py` | Multi-id person match (middle, DOB, hard rejects) |
 | `scraper/searcher.py` | Search + misclassification analysis |
 | `scraper/ethnic_names.py` | Surname → ethnicity |
+| `scraper/mugshot_ethnicity/*` | Mugshot face ethnicity: verify (name+face) + gross scan |
 | `scraper/nsopw/client.py` | NSOPW HTTP search |
 | `scraper/nsopw/search_plan.py` | Compact query planning |
 | `scraper/nsopw/builder.py` | Build / requeue / enrich orchestration |
@@ -160,6 +162,7 @@ from scraper.reports import ReportFetcher
 | Browse Search UI | `gui_app/tabs/browse/search.py`, `shared/detail_drawer.py`, `scraper/searcher.py` | NSOPW, Scrape |
 | Integrity / dedupe UI | `gui_app/tabs/browse/integrity.py`, `scraper/database/dedupe.py`, `queries.py` | builder |
 | Misclassify UI | `gui_app/tabs/browse/misclassify.py`, `searcher.py`, `ethnic_names.py` | reports |
+| Mugshot ethnicity | `scraper/mugshot_ethnicity/*`, `cli.py` mugshot-verify/scan | gui (until wired) |
 | Statistics | `gui_app/tabs/browse/statistics.py`, `widgets.py` (charts) | — |
 | Reports / verdicts | `gui_app/tabs/browse/reports.py` | scrape |
 | NSOPW UI | `gui_app/tabs/nsopw.py` | database dedupe |

@@ -327,6 +327,30 @@ class DedupeMixin:
         updates: Dict[str, Any] = {}
         all_rows = [keep] + list(losers)
 
+        # 0) Merge multi-source provenance (must run before race rewrite)
+        try:
+            from scraper.database.sources import (
+                apply_sources_to_record,
+                dumps_sources,
+                merge_sources_lists,
+            )
+
+            merged_sources = merge_sources_lists(
+                *(r.get("sources_json") for r in all_rows)
+            )
+            if merged_sources:
+                temp = dict(keep)
+                temp["sources_json"] = dumps_sources(merged_sources)
+                apply_sources_to_record(temp)
+                if temp.get("sources_json") != keep.get("sources_json"):
+                    updates["sources_json"] = temp["sources_json"]
+                if temp.get("race") and temp.get("race") != keep.get("race"):
+                    updates["race"] = temp["race"]
+                if temp.get("flags") and temp.get("flags") != keep.get("flags"):
+                    updates["flags"] = temp["flags"]
+        except Exception:
+            pass
+
         # 1) Union multi-value / multi-listing fields
         for col in _MERGE_UNION_FIELDS:
             merged = cls._union_field_values(*(r.get(col) for r in all_rows))
@@ -350,6 +374,12 @@ class DedupeMixin:
                     if alt is not None and str(alt).strip():
                         updates[col] = alt
                         break
+                continue
+            if col == "sources_json":
+                # Already merged above
+                continue
+            if col == "race" and "race" in updates:
+                # Multi-source race already set
                 continue
             if col in ("photo_path", "report_html_path"):
                 # Keep existing file path; only fill if blank

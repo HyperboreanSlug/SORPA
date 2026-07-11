@@ -18,6 +18,10 @@ Usage:
     # Find misclassifications (Hispanic names marked as White)
     python -m scraper.cli misclassify --ethnicity hispanic
 
+    # Mugshot verify (name + face) / gross scan (face only)
+    python -m scraper.cli mugshot-verify --ethnicity indian --limit 200
+    python -m scraper.cli mugshot-scan --min-conf 0.85 --limit 500
+
     # Export results to CSV
     python -m scraper.cli export --output results.csv
 """
@@ -330,6 +334,246 @@ def cmd_misclassify(args: argparse.Namespace) -> None:
         searcher.close()
 
 
+def _ensure_mugshot_backend(backend: str) -> None:
+    """Auto-install DeepFace when using auto/deepface backends."""
+    b = (backend or "auto").strip().lower()
+    if b not in ("auto", "deepface"):
+        return
+    from .mugshot_ethnicity import ensure_deepface
+
+    print("  Ensuring DeepFace is installed (local race model)…", flush=True)
+    ok = ensure_deepface(auto_install=True, warm=True, log=print)
+    if not ok:
+        print("  WARNING: DeepFace setup incomplete — scoring may fail.", flush=True)
+
+
+def cmd_mugshot_verify(args: argparse.Namespace) -> None:
+    """Verify name-based misclass hits with mugshot ethnicity scores."""
+    import csv
+    import json
+    from .searcher import SexOffenderSearcher
+    from .mugshot_ethnicity import (
+        BackendUnavailableError,
+        MugshotEthnicityScorer,
+        get_available_backends,
+        verify_misclassifications,
+    )
+
+    print(f"\n{'='*60}")
+    print("  Mugshot Verify (name + face)")
+    print(f"{'='*60}")
+    _ensure_mugshot_backend(args.backend)
+    print(f"  Backends available: {get_available_backends()}")
+    print(f"  Backend: {args.backend}")
+    print(f"  Ethnicity filter: {args.ethnicity}")
+    print(f"  Face min conf: {args.face_conf}  name min: {args.confidence}")
+    print()
+
+    db_path = args.database or "data/offenders.db"
+    searcher = SexOffenderSearcher(db_path=db_path)
+    try:
+        eth = (args.ethnicity or "all").strip().lower()
+        if eth == "all":
+            mcs = searcher.analyze_ethnicities(
+                min_confidence=args.confidence, limit=args.limit
+            )
+        else:
+            mcs = searcher.analyze_ethnicities(
+                min_confidence=args.confidence,
+                limit=args.limit,
+                ethnicity_filter=eth,
+            )
+        # Prefer rows that already have photos
+        with_photo = [
+            m for m in mcs
+            if (m.record or {}).get("photo_path")
+        ]
+        print(f"  Name misclass candidates: {len(mcs)} ({len(with_photo)} with photo path)")
+        try:
+            scorer = MugshotEthnicityScorer(
+                backend=args.backend, auto_install=True, log=print
+            )
+        except BackendUnavailableError as e:
+            print(f"  ERROR: {e}")
+            return
+        print(f"  Using backend: {scorer.backend_name}")
+
+        results = verify_misclassifications(
+            with_photo if not args.include_no_photo else mcs,
+            scorer=scorer,
+            face_min_conf=args.face_conf,
+            name_min_conf=args.confidence,
+            combined_min_conf=args.combined_conf,
+            only_with_photo=not args.include_no_photo,
+            progress=lambda d, t: print(f"  … {d}/{t}", flush=True) if d % 50 == 0 else None,
+        )
+        confirmed = [r for r in results if r.confirms_misclass]
+        disagree = [r for r in results if r.verdict == "disagree"]
+        print(f"\n  Scored: {len(results)}")
+        print(f"  Confirms misclass (name+face): {len(confirmed)}")
+        print(f"  Face disagree: {len(disagree)}")
+        print(f"\n  {'Name':<30} {'Race':<12} {'Name eth':<14} {'Face':<10} {'Comb':>6} {'Verdict'}")
+        print(f"  {'-'*90}")
+        for r in results[: args.max_display]:
+            name = (
+                f"{r.record.get('first_name') or ''} {r.record.get('last_name') or ''}"
+            ).strip()
+            face_s = (
+                f"{r.face.top_label}@{r.face.top_confidence:.2f}"
+                if r.face and r.face.ok
+                else "—"
+            )
+            flag = "★" if r.confirms_misclass else " "
+            print(
+                f" {flag}{name:<29} {(r.recorded_race or '—')[:12]:<12} "
+                f"{(r.name_ethnicity or '—')[:14]:<14} {face_s:<10} "
+                f"{r.combined_confidence:>6.2f} {r.verdict}"
+            )
+
+        if args.export:
+            path = Path(args.export)
+            if path.suffix.lower() == ".json":
+                path.write_text(
+                    json.dumps([r.to_dict() for r in results], indent=2),
+                    encoding="utf-8",
+                )
+            else:
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow([
+                        "id", "name", "recorded_race", "name_ethnicity",
+                        "name_confidence", "face_label", "face_confidence",
+                        "verdict", "combined_confidence", "confirms_misclass",
+                        "photo_path", "reasons",
+                    ])
+                    for r in results:
+                        w.writerow([
+                            r.record.get("id"),
+                            f"{r.record.get('first_name') or ''} {r.record.get('last_name') or ''}".strip(),
+                            r.recorded_race,
+                            r.name_ethnicity,
+                            f"{r.name_confidence:.4f}",
+                            r.face.top_label if r.face else "",
+                            f"{r.face.top_confidence:.4f}" if r.face else "",
+                            r.verdict,
+                            f"{r.combined_confidence:.4f}",
+                            r.confirms_misclass,
+                            r.face.photo_path if r.face else r.record.get("photo_path"),
+                            "; ".join(r.reasons),
+                        ])
+            print(f"\n  Exported {len(results)} → {path}")
+        print(f"\n{'='*60}\n")
+    finally:
+        searcher.close()
+
+
+def cmd_mugshot_scan(args: argparse.Namespace) -> None:
+    """Scan mugshots for gross face-vs-race mismatches (no name filter)."""
+    import csv
+    import json
+    from .mugshot_ethnicity import (
+        BackendUnavailableError,
+        MugshotEthnicityScorer,
+        get_available_backends,
+        scan_gross_misclassifications,
+    )
+
+    print(f"\n{'='*60}")
+    print("  Mugshot Gross Misclass Scan")
+    print(f"{'='*60}")
+    _ensure_mugshot_backend(args.backend)
+    print(f"  Backends available: {get_available_backends()}")
+    print(f"  Backend: {args.backend}  min face conf: {args.min_conf}")
+    print(f"  Recorded races: {args.recorded_race}")
+    print(f"  Face labels: {args.face_labels}")
+    print()
+
+    try:
+        scorer = MugshotEthnicityScorer(
+            backend=args.backend, auto_install=True, log=print
+        )
+    except BackendUnavailableError as e:
+        print(f"  ERROR: {e}")
+        return
+    print(f"  Using backend: {scorer.backend_name}")
+
+    recorded = [x.strip() for x in (args.recorded_race or "WHITE").split(",") if x.strip()]
+    faces = [x.strip() for x in (args.face_labels or "black,indian,asian").split(",") if x.strip()]
+
+    hits = scan_gross_misclassifications(
+        db_path=args.database or "data/offenders.db",
+        scorer=scorer,
+        recorded_races=recorded,
+        face_labels=faces,
+        min_confidence=args.min_conf,
+        limit=args.limit,
+        state=args.state,
+        log=print,
+        progress=lambda d, t: print(f"  … scored {d}/{t}", flush=True) if d % 50 == 0 else None,
+    )
+    print(f"\n  Hits: {len(hits)}")
+    print(f"  {'Name':<30} {'Race':<12} {'Face':<10} {'Conf':>6} {'State'}")
+    print(f"  {'-'*70}")
+    for h in hits[: args.max_display]:
+        name = (
+            f"{h.record.get('first_name') or ''} {h.record.get('last_name') or ''}"
+        ).strip()
+        print(
+            f"  {name:<30} {(h.recorded_race or '—')[:12]:<12} "
+            f"{h.predicted_label:<10} {h.confidence:>6.2f} {h.record.get('state') or '—'}"
+        )
+
+    if args.export:
+        path = Path(args.export)
+        if path.suffix.lower() == ".json":
+            path.write_text(
+                json.dumps([h.to_dict() for h in hits], indent=2),
+                encoding="utf-8",
+            )
+        else:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow([
+                    "id", "name", "state", "recorded_race", "predicted_label",
+                    "confidence", "severity", "reason", "photo_path",
+                ])
+                for h in hits:
+                    w.writerow([
+                        h.record.get("id"),
+                        f"{h.record.get('first_name') or ''} {h.record.get('last_name') or ''}".strip(),
+                        h.record.get("state"),
+                        h.recorded_race,
+                        h.predicted_label,
+                        f"{h.confidence:.4f}",
+                        h.severity,
+                        h.reason,
+                        h.face.photo_path,
+                    ])
+        print(f"\n  Exported {len(hits)} → {path}")
+    print(f"\n{'='*60}\n")
+
+
+def cmd_mugshot_setup(args: argparse.Namespace) -> None:
+    """Install DeepFace into this interpreter and warm the race model."""
+    from .mugshot_ethnicity import ensure_deepface, get_available_backends
+
+    print(f"\n{'='*60}")
+    print("  DeepFace auto-setup (local)")
+    print(f"{'='*60}")
+    print(f"  Interpreter: {__import__('sys').executable}")
+    ok = ensure_deepface(
+        auto_install=True,
+        warm=not getattr(args, "no_warm", False),
+        log=print,
+        force_reinstall=False,
+    )
+    print(f"  Backends: {get_available_backends()}")
+    print(f"  Result: {'OK' if ok else 'FAILED'}")
+    print(f"{'='*60}\n")
+    if not ok:
+        raise SystemExit(1)
+
+
 def cmd_export(args: argparse.Namespace) -> None:
     """Export filtered data from the database."""
     from .searcher import SexOffenderSearcher
@@ -466,20 +710,28 @@ def cmd_import(args: argparse.Namespace) -> None:
         db.close()
         return
 
+    merge_sources = not getattr(args, "no_merge_sources", False)
     total_imported = 0
     total_skipped = 0
+    total_merged = 0
     try:
         for csv_file in csv_files:
             print(f"\nImporting {csv_file.name}...")
-            result = db.import_csv(str(csv_file), state=args.state)
+            result = db.import_csv(
+                str(csv_file),
+                state=args.state,
+                merge_sources=merge_sources,
+            )
             if isinstance(result, dict):
                 print(
                     f"  Imported {result.get('imported', 0)} "
-                    f"(skipped {result.get('skipped', 0)} existing URLs, "
+                    f"(merged sources into {result.get('merged', 0)} existing, "
+                    f"skipped {result.get('skipped', 0)}, "
                     f"{result.get('total_rows', 0)} rows)."
                 )
                 total_imported += int(result.get("imported") or 0)
                 total_skipped += int(result.get("skipped") or 0)
+                total_merged += int(result.get("merged") or 0)
             else:
                 print(f"  Imported {result} records.")
                 total_imported += int(result or 0)
@@ -488,8 +740,41 @@ def cmd_import(args: argparse.Namespace) -> None:
 
     print(
         f"\nTotal imported: {total_imported} records to {db_path}"
+        + (f" ({total_merged} source-merged)" if total_merged else "")
         + (f" ({total_skipped} skipped)" if total_skipped else "")
     )
+
+
+def cmd_tag_sources(args: argparse.Namespace) -> None:
+    """Backfill sources_json provenance on existing rows; optional HTML verify."""
+    from .database import Database
+
+    db_path = args.database or "data/offenders.db"
+    db = Database(db_path)
+    try:
+        print(f"Backfilling sources on {db_path}…")
+        result = db.backfill_sources(
+            limit=getattr(args, "limit", None) or None,
+            only_missing=not getattr(args, "retags", False),
+            log=print,
+        )
+        print(
+            f"Backfill: scanned={result.get('scanned')} "
+            f"updated={result.get('updated')}"
+        )
+        if getattr(args, "verify_html", False):
+            from .nsopw_builder import NSOPWEthnicDatabaseBuilder
+
+            builder = NSOPWEthnicDatabaseBuilder(db=db)
+            v = builder.verify_all_sources(
+                limit=int(getattr(args, "verify_limit", 0) or 0) or 500,
+                state=getattr(args, "state", None),
+                only_unverified=True,
+                log=print,
+            )
+            print(f"HTML verify: {v}")
+    finally:
+        db.close()
 
 
 def cmd_dedupe(args: argparse.Namespace) -> None:
@@ -699,8 +984,68 @@ Examples:
     p_misclassify.add_argument("--export", type=str, help="Export misclassifications to CSV file")
     _add_database_arg(p_misclassify)
 
+    # Mugshot ethnicity verify / scan
+    p_mv = subparsers.add_parser(
+        "mugshot-verify",
+        help="Verify name-based misclass hits using mugshot ethnicity scores",
+    )
+    p_mv.add_argument(
+        "--ethnicity",
+        default="indian",
+        help="Name ethnicity filter (default indian; use all for every family)",
+    )
+    p_mv.add_argument("--confidence", type=float, default=0.5, help="Min name confidence")
+    p_mv.add_argument("--face-conf", type=float, default=0.75, help="Min face confidence")
+    p_mv.add_argument(
+        "--combined-conf", type=float, default=0.8,
+        help="Min combined confidence to mark confirms_misclass",
+    )
+    p_mv.add_argument("--limit", type=int, default=500, help="Max name-misclass rows to consider")
+    p_mv.add_argument("--max-display", type=int, default=30)
+    p_mv.add_argument(
+        "--backend", default="auto",
+        choices=["auto", "deepface", "clip", "mock"],
+        help="Vision backend (auto prefers deepface, then clip)",
+    )
+    p_mv.add_argument("--include-no-photo", action="store_true")
+    p_mv.add_argument("--export", type=str, help="Export CSV or JSON path")
+    _add_database_arg(p_mv)
+
+    p_ms = subparsers.add_parser(
+        "mugshot-scan",
+        help="Scan mugshots for gross face-vs-race mismatches (e.g. Black face / White race)",
+    )
+    p_ms.add_argument(
+        "--recorded-race", default="WHITE",
+        help="Comma-separated registry races to scan (default WHITE)",
+    )
+    p_ms.add_argument(
+        "--face-labels", default="black,indian,asian",
+        help="Comma-separated face labels that flag a hit",
+    )
+    p_ms.add_argument("--min-conf", type=float, default=0.85, help="Min face confidence (high bar)")
+    p_ms.add_argument("--limit", type=int, default=500, help="Max candidates with photos")
+    p_ms.add_argument("--state", type=str, help="Limit to state")
+    p_ms.add_argument("--max-display", type=int, default=40)
+    p_ms.add_argument(
+        "--backend", default="auto",
+        choices=["auto", "deepface", "clip", "mock"],
+    )
+    p_ms.add_argument("--export", type=str, help="Export CSV or JSON path")
+    _add_database_arg(p_ms)
+
+    p_mds = subparsers.add_parser(
+        "mugshot-setup",
+        help="Install DeepFace + download race model weights (local, offline after)",
+    )
+    p_mds.add_argument(
+        "--no-warm", action="store_true",
+        help="Only pip-install packages; skip model weight download",
+    )
+
     # Export command
     p_export = subparsers.add_parser("export", help="Export filtered data from database")
+
     p_export.add_argument("--output", "-o", default="data/export.csv", help="Output file path")
     p_export.add_argument("--state", type=str, help="Filter by state")
     p_export.add_argument("--race", type=str, help="Filter by race")
@@ -712,7 +1057,36 @@ Examples:
     p_import = subparsers.add_parser("import", help="Import CSV files into database")
     p_import.add_argument("--input", "-i", default="data/downloads", help="Input directory or CSV file")
     p_import.add_argument("--state", type=str, help="Default state for imported records")
+    p_import.add_argument(
+        "--no-merge-sources",
+        action="store_true",
+        help="Do not merge CSV rows into existing same-person records (always insert)",
+    )
     _add_database_arg(p_import)
+
+    # Multi-source provenance tagging
+    p_tag = subparsers.add_parser(
+        "tag-sources",
+        help="Tag existing rows with sources_json provenance (prevent silent race overwrites)",
+    )
+    p_tag.add_argument(
+        "--limit", type=int, default=0,
+        help="Max rows to tag (0 = all missing sources_json)",
+    )
+    p_tag.add_argument(
+        "--retag", action="store_true", dest="retags",
+        help="Retag rows even if sources_json already present",
+    )
+    p_tag.add_argument(
+        "--verify-html", action="store_true",
+        help="After tagging, fetch report HTML for each source URL",
+    )
+    p_tag.add_argument(
+        "--verify-limit", type=int, default=500,
+        help="Max rows for HTML verification (default 500)",
+    )
+    p_tag.add_argument("--state", type=str, help="Limit HTML verify to one state")
+    _add_database_arg(p_tag)
 
     # Dedupe command
     p_dedupe = subparsers.add_parser(
@@ -886,8 +1260,12 @@ Examples:
         "scrape": cmd_scrape,
         "search": cmd_search,
         "misclassify": cmd_misclassify,
+        "mugshot-verify": cmd_mugshot_verify,
+        "mugshot-scan": cmd_mugshot_scan,
+        "mugshot-setup": cmd_mugshot_setup,
         "export": cmd_export,
         "import": cmd_import,
+        "tag-sources": cmd_tag_sources,
         "dedupe": cmd_dedupe,
         "status": cmd_status,
         "nsopw": cmd_nsopw,

@@ -737,8 +737,13 @@ class EthnicAndSearchTests(unittest.TestCase):
         s = SexOffenderSearcher(db_path=":memory:")
         try:
             s.db.insert_offenders_batch([
-                # White + Hispanic surname = normal registry coding (not a mismatch)
+                # White + Hispanic surname, no ethnicity field → mismatch
                 {"first_name": "Juan", "last_name": "Garcia", "race": "WHITE", "state": "FL"},
+                # White + ethnicity Hispanic → OK
+                {
+                    "first_name": "Sofia", "last_name": "Lopez", "race": "WHITE",
+                    "ethnicity": "Hispanic", "state": "FL",
+                },
                 {"first_name": "Maria", "last_name": "Rodriguez", "race": "HISPANIC", "state": "TX"},
                 # Black + Hispanic surname = potential mismatch
                 {"first_name": "Carlos", "last_name": "Martinez", "race": "BLACK", "state": "TX"},
@@ -746,32 +751,54 @@ class EthnicAndSearchTests(unittest.TestCase):
                 {"first_name": "John", "last_name": "Smith", "race": "WHITE", "state": "NY"},
             ])
             h = s.find_hispanic_misclassifications()
-            self.assertEqual(len(h), 1)
-            self.assertEqual(h[0].record["last_name"], "Martinez")
-            self.assertEqual(h[0].expected_race, "Black")
-            # White + Hispanic name must not flag as misclass
-            self.assertFalse(any(m.record["last_name"] == "Garcia" for m in h))
+            hisp_names = {(m.record.get("last_name") or "") for m in h}
+            self.assertIn("Garcia", hisp_names)
+            self.assertIn("Martinez", hisp_names)
+            self.assertNotIn("Lopez", hisp_names)  # White + ethnicity Hispanic
+            self.assertNotIn("Rodriguez", hisp_names)  # race Hispanic
+            martinez = next(m for m in h if m.record["last_name"] == "Martinez")
+            self.assertEqual(martinez.expected_race, "Black")
             a = s.find_asian_misclassifications()
             self.assertEqual(len(a), 1)
             self.assertEqual(a[0].record["last_name"], "Chen")
             # Correctly labeled Hispanic is not a misclassification
             all_mc = s.analyze_ethnicities()
             self.assertFalse(any(m.record["last_name"] == "Rodriguez" for m in all_mc))
-            self.assertFalse(any(m.record["last_name"] == "Garcia" for m in all_mc))
+            self.assertFalse(any(m.record["last_name"] == "Lopez" for m in all_mc))
+            self.assertTrue(any(m.record["last_name"] == "Garcia" for m in all_mc))
             names = {r["last_name"] for r in s.filter_by_hispanic_names()}
-            self.assertEqual(names, {"Garcia", "Rodriguez", "Martinez"})
+            self.assertEqual(names, {"Garcia", "Lopez", "Rodriguez", "Martinez"})
         finally:
             s.close()
 
-    def test_hispanic_white_is_compatible(self):
-        """US registries put most Hispanics as race=White — not a mismatch."""
+    def test_hispanic_white_needs_ethnicity_field(self):
+        """White alone is a mismatch; White + ethnicity Hispanic is OK."""
         from scraper.searcher import _is_compatible, _canonical_race_key
 
-        self.assertTrue(_is_compatible("Hispanic", "White"))
-        self.assertTrue(_is_compatible("Hispanic", "WHITE"))
-        self.assertTrue(_is_compatible("Hispanic", "Caucasian"))
+        # No ethnicity tag → incorrectly reported
+        self.assertFalse(_is_compatible("Hispanic", "White"))
+        self.assertFalse(_is_compatible("Hispanic", "WHITE"))
+        self.assertFalse(_is_compatible("Hispanic", "Caucasian"))
+        self.assertFalse(
+            _is_compatible("Hispanic", "White", recorded_ethnicity="")
+        )
+        self.assertFalse(
+            _is_compatible("Hispanic", "White", recorded_ethnicity="Non-Hispanic")
+        )
+        # Ethnicity field marks Hispanic → compatible
+        self.assertTrue(
+            _is_compatible("Hispanic", "White", recorded_ethnicity="Hispanic")
+        )
+        self.assertTrue(
+            _is_compatible("Hispanic", "WHITE", recorded_ethnicity="Hispanic or Latino")
+        )
+        self.assertTrue(
+            _is_compatible("Hispanic", "Caucasian", recorded_ethnicity="Latino")
+        )
+        # Race itself is Hispanic / White Hispanic
         self.assertTrue(_is_compatible("Hispanic", "Hispanic"))
         self.assertTrue(_is_compatible("Hispanic", "Hispanic or Latino"))
+        self.assertTrue(_is_compatible("Hispanic", "White Hispanic"))
         self.assertTrue(_is_compatible("Hispanic", "Unknown"))
         self.assertTrue(_is_compatible("Hispanic", ""))
         # Non-White / non-Hispanic race codes remain potential mismatches

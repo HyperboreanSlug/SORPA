@@ -998,6 +998,29 @@ class NSOPWEthnicDatabaseBuilder:
                 ]
                 record["flags"] = json.dumps(flags)
 
+                # Tag NSOPW search hit as a source (race usually empty until report HTML)
+                try:
+                    from scraper.database.sources import (
+                        attach_source_to_record,
+                        extract_tracked_fields,
+                        make_source,
+                    )
+
+                    nsopw_src = make_source(
+                        source_type="nsopw",
+                        jurisdiction=st,
+                        origin="nsopw_search",
+                        label=f"NSOPW ({st})",
+                        external_id=str(record.get("external_id") or ""),
+                        source_url=str(url or record.get("source_url") or ""),
+                        fields=extract_tracked_fields(record),
+                        html_verified=False,
+                        html_status="pending" if url else "no_url",
+                    )
+                    attach_source_to_record(record, nsopw_src, prefer_new_fields=False)
+                except Exception:
+                    pass
+
                 if skip_existing_urls and url and self._url_exists(url):
                     self.stats.skipped_existing += 1
                     continue
@@ -1290,12 +1313,22 @@ class NSOPWEthnicDatabaseBuilder:
                 "eye_color", "hair_color", "crime", "offense_type",
                 "offense_description", "report_html_path", "photo_path", "photo_url",
                 "county", "city", "address", "risk_level",
+                "sources_json", "flags",
             ):
                 new_v = record.get(key)
                 old_v = rec.get(key)
-                if new_v and (not old_v or (key in ("race", "crime") and new_v != old_v)):
-                    # Fill empty; for race/crime prefer newly scraped non-empty
-                    if not old_v or key in ("race", "ethnicity", "crime", "photo_path", "report_html_path"):
+                if new_v is None or new_v == "":
+                    continue
+                if key in ("sources_json", "flags", "race"):
+                    # Always persist multi-source rewrites
+                    if new_v != old_v:
+                        patch[key] = new_v
+                    continue
+                if new_v and (not old_v or (key in ("crime",) and new_v != old_v)):
+                    # Fill empty; crime may update; race handled above via sources
+                    if not old_v or key in (
+                        "ethnicity", "crime", "photo_path", "report_html_path"
+                    ):
                         if new_v != old_v:
                             patch[key] = new_v
 
@@ -1343,6 +1376,204 @@ class NSOPWEthnicDatabaseBuilder:
         _log(
             f"Requeue done: attempted={summary['attempted']} updated={summary['updated']} "
             f"errors={summary['errors']}"
+        )
+        return summary
+
+    def verify_all_sources(
+        self,
+        *,
+        limit: int = 100,
+        state: Optional[str] = None,
+        only_unverified: bool = True,
+        save_html: bool = True,
+        log: Optional[Callable[[str], None]] = None,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        For each offender, attempt HTML verification of every source that has a URL.
+
+        Updates sources_json html_verified / html_status / fields from the live
+        (or archived) report page so bulk CSV values stay tagged separately from
+        jurisdiction HTML values.
+        """
+        from scraper.database.sources import (
+            dumps_sources,
+            jurisdiction_from_url,
+            make_source,
+            parse_sources,
+            apply_sources_to_record,
+        )
+
+        def _log(msg: str) -> None:
+            if log:
+                log(msg)
+            else:
+                print(msg)
+
+        def _split_urls(raw: str) -> List[str]:
+            try:
+                from scraper.public_links import split_source_urls as _split
+
+                parts = _split(raw or "")
+                if parts:
+                    return list(parts)
+            except Exception:
+                pass
+            return [u.strip() for u in str(raw or "").split(" | ") if u.strip()]
+
+        sql = "SELECT * FROM offenders WHERE 1=1"
+        params: List[Any] = []
+        if state:
+            sql = self.db._append_state_filter(sql, params, state)  # type: ignore[attr-defined]
+        sql += " ORDER BY id ASC"
+        if limit and int(limit) > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+
+        rows = [dict(r) for r in self.db._conn.execute(sql, params).fetchall()]
+        summary = {
+            "rows": len(rows),
+            "sources_attempted": 0,
+            "sources_verified": 0,
+            "sources_failed": 0,
+            "rows_updated": 0,
+            "errors": 0,
+        }
+        total = len(rows)
+        _log(
+            f"Verify sources HTML: {total} rows "
+            f"(only_unverified={only_unverified})"
+        )
+        if on_progress:
+            try:
+                on_progress(0, total or 1)
+            except Exception:
+                pass
+
+        for i, rec in enumerate(rows):
+            if self.cancel_check():
+                _log("Verify sources cancelled.")
+                break
+
+            sources = parse_sources(rec.get("sources_json"))
+            urls = _split_urls(str(rec.get("source_url") or ""))
+
+            existing_urls = {
+                str(s.get("source_url") or "").strip().lower()
+                for s in sources
+                if s.get("source_url")
+            }
+            for u in urls:
+                if u.strip().lower() not in existing_urls:
+                    j = jurisdiction_from_url(u) or str(rec.get("state") or "")
+                    sources.append(
+                        make_source(
+                            source_type="report_html",
+                            jurisdiction=j,
+                            origin="source_url",
+                            source_url=u,
+                            fields={},
+                            html_verified=False,
+                            html_status="pending",
+                        )
+                    )
+
+            if not sources:
+                if on_progress:
+                    try:
+                        on_progress(i + 1, total or 1)
+                    except Exception:
+                        pass
+                continue
+
+            record = dict(rec)
+            record["sources_json"] = dumps_sources(sources)
+            changed = False
+
+            for src in list(sources):
+                if self.cancel_check():
+                    break
+                surl = str(src.get("source_url") or "").strip()
+                if not surl:
+                    if src.get("html_status") != "no_url":
+                        src["html_status"] = "no_url"
+                        changed = True
+                    continue
+                if only_unverified and src.get("html_verified"):
+                    continue
+
+                st = (
+                    str(src.get("jurisdiction") or rec.get("state") or "UNK")
+                    .split(" | ")[0]
+                    .strip()
+                    .upper()
+                )
+                summary["sources_attempted"] += 1
+                if self.report_limiter.wait(self.cancel_check):
+                    break
+                _log(
+                    f"  [{i+1}/{total}] verify [{st}] "
+                    f"{(rec.get('first_name') or '')} {(rec.get('last_name') or '')} "
+                    f"← {surl[:80]}"
+                )
+                try:
+                    demo = self.reports.fetch_demographics(
+                        surl,
+                        save_html=save_html,
+                        html_dir=self.html_dir,
+                        jurisdiction=st,
+                    )
+                except Exception as e:
+                    summary["errors"] += 1
+                    summary["sources_failed"] += 1
+                    src["html_status"] = f"error:{e}"
+                    src["html_verified"] = False
+                    changed = True
+                    _log(f"    ↳ error: {e}")
+                    continue
+
+                self._merge_demographics(record, demo)
+                # _merge_demographics already attached report source; refresh flags
+                changed = True
+                if demo.get("report_fetch_ok"):
+                    summary["sources_verified"] += 1
+                    _log(
+                        f"    ↳ ok race={demo.get('race') or '—'} "
+                        f"html={demo.get('report_html_path') or '—'}"
+                    )
+                else:
+                    summary["sources_failed"] += 1
+                    _log(
+                        f"    ↳ fail status={demo.get('report_fetch_status')} "
+                        f"{demo.get('report_block_reason') or ''}"
+                    )
+
+            if changed:
+                apply_sources_to_record(record)
+                patch = {
+                    k: record.get(k)
+                    for k in (
+                        "sources_json", "race", "flags", "report_html_path",
+                        "photo_path", "photo_url", "crime", "ethnicity",
+                        "gender", "height", "weight", "eye_color", "hair_color",
+                        "county", "city", "address",
+                    )
+                    if record.get(k) is not None and record.get(k) != rec.get(k)
+                }
+                if patch and rec.get("id") is not None:
+                    if self.db.update_offender(int(rec["id"]), patch):
+                        summary["rows_updated"] += 1
+
+            if on_progress:
+                try:
+                    on_progress(i + 1, total or 1)
+                except Exception:
+                    pass
+
+        _log(
+            f"Verify sources done: attempted={summary['sources_attempted']} "
+            f"verified={summary['sources_verified']} failed={summary['sources_failed']} "
+            f"rows_updated={summary['rows_updated']}"
         )
         return summary
 
@@ -1708,8 +1939,78 @@ class NSOPWEthnicDatabaseBuilder:
             self._known_urls.add(u)
 
     def _merge_demographics(self, record: Dict[str, Any], demo: Dict[str, Any]) -> None:
+        """
+        Merge report-page demographics into *record* without erasing other sources.
+
+        Race/ethnicity from HTML are stored as a separate sources_json entry so
+        a bulk CSV value (e.g. FL ``W``) coexists with a jurisdiction value
+        (e.g. CO ``Asian``). Top-level race is rewritten to a multi-source
+        display when they disagree.
+        """
+        from scraper.database.sources import (
+            TRACKED_FIELDS,
+            attach_source_to_record,
+            extract_tracked_fields,
+            jurisdiction_from_url,
+            make_source,
+        )
+
+        report_ok = bool(demo.get("report_fetch_ok"))
+        url = (
+            (demo.get("report_final_url") or demo.get("report_url") or record.get("source_url") or "")
+            .strip()
+        )
+        if " | " in url:
+            url = url.split(" | ", 1)[0].strip()
+        jur = (
+            (record.get("state") or record.get("source_state") or "")
+            or jurisdiction_from_url(url)
+        )
+        if isinstance(jur, str) and " | " in jur:
+            jur = jur.split(" | ", 1)[0].strip()
+        jur = str(jur or "").strip().upper()
+
+        # Field values observed on this report fetch (only non-empty)
+        demo_fields: Dict[str, Any] = {}
+        for key in TRACKED_FIELDS:
+            val = demo.get(key)
+            if val is None or val == "":
+                continue
+            demo_fields[key] = val if not isinstance(val, str) else val.strip()
+        # Also pull crime aliases
+        if not demo_fields.get("crime"):
+            for k in ("offense_description", "offense_type"):
+                if demo.get(k):
+                    demo_fields["crime"] = str(demo.get(k)).strip()
+                    break
+
+        html_status = "ok" if report_ok else "empty"
+        if demo.get("report_block_reason"):
+            html_status = f"blocked:{demo.get('report_block_reason')}"
+        elif str(demo.get("report_fetch_status") or "").startswith("error"):
+            html_status = str(demo.get("report_fetch_status"))
+        elif str(demo.get("report_fetch_status") or "").startswith("blocked"):
+            html_status = str(demo.get("report_fetch_status"))
+
+        report_src = make_source(
+            source_type="report_html" if report_ok else "nsopw_report",
+            jurisdiction=jur,
+            origin="report_fetch",
+            label=f"{jur or 'Registry'} report HTML",
+            external_id=str(record.get("external_id") or ""),
+            source_url=url,
+            fields=demo_fields,
+            html_path=(demo.get("report_html_path") or record.get("report_html_path") or None),
+            html_verified=report_ok and bool(demo_fields.get("race") or demo_fields.get("crime")),
+            html_status=html_status,
+        )
+        # Preserve any pre-existing sources (e.g. FL CSV) and add/update this one
+        attach_source_to_record(record, report_src, prefer_new_fields=True)
+
+        # Top-level fill: never overwrite a different source's race with blank;
+        # multi-source display already applied. Fill blanks for other fields.
         for key in (
-            "race", "ethnicity", "gender", "height", "weight",
+            "ethnicity", "gender", "height", "weight",
             "eye_color", "hair_color", "skin_tone", "build", "age",
             "date_of_birth", "county", "city", "address", "risk_level",
             "offense_type", "offense_description", "crime",
@@ -1718,11 +2019,15 @@ class NSOPWEthnicDatabaseBuilder:
             val = demo.get(key)
             if val is None or val == "":
                 continue
-            if key in ("race", "ethnicity", "crime"):
-                # Prefer report-page crime/race over empty search hits
-                record[key] = val
+            if key in ("crime", "offense_type", "offense_description"):
+                if not record.get(key):
+                    record[key] = val
             elif not record.get(key):
                 record[key] = val
+            elif key in ("photo_path", "photo_url", "report_html_path"):
+                if not record.get(key):
+                    record[key] = val
+
         # Keep crime in sync with offense fields if only one side was set
         if not record.get("crime"):
             odesc = (record.get("offense_description") or "").strip()
@@ -1732,8 +2037,11 @@ class NSOPWEthnicDatabaseBuilder:
 
         try:
             raw = json.loads(record.get("raw_data_json") or "{}")
+            if not isinstance(raw, dict):
+                raw = {}
         except json.JSONDecodeError:
             raw = {}
+        # Preserve original NSOPW payload if present; nest enrichment
         raw["report_enrichment"] = {
             k: demo.get(k)
             for k in (
@@ -1749,21 +2057,44 @@ class NSOPWEthnicDatabaseBuilder:
 
         try:
             flags = json.loads(record.get("flags") or "[]")
-            if not isinstance(flags, list):
-                flags = [str(flags)]
+            if isinstance(flags, dict):
+                tags = [str(t) for t in (flags.get("tags") or [])]
+                flag_mode = "dict"
+                flag_dict = flags
+            elif isinstance(flags, list):
+                tags = [str(t) for t in flags]
+                flag_mode = "list"
+                flag_dict = {}
+            else:
+                tags = [str(flags)]
+                flag_mode = "list"
+                flag_dict = {}
         except json.JSONDecodeError:
-            flags = []
+            tags = []
+            flag_mode = "list"
+            flag_dict = {}
+
+        def _tag(t: str) -> None:
+            if t not in tags:
+                tags.append(t)
+
         if demo.get("report_html_path"):
-            flags.append("html_archived")
+            _tag("html_archived")
         if demo.get("photo_path"):
-            flags.append("photo_archived")
+            _tag("photo_archived")
         if demo.get("report_fetch_ok"):
-            flags.append("report_enriched")
+            _tag("report_enriched")
         else:
-            flags.append("report_link_saved")
+            _tag("report_link_saved")
             if demo.get("report_block_reason"):
-                flags.append(f"blocked:{demo['report_block_reason']}")
-        record["flags"] = json.dumps(flags)
+                _tag(f"blocked:{demo['report_block_reason']}")
+        _tag("multi_source")
+
+        if flag_mode == "dict":
+            flag_dict["tags"] = tags
+            record["flags"] = json.dumps(flag_dict, ensure_ascii=False)
+        else:
+            record["flags"] = json.dumps(tags)
 
     def _ensure_photo(self, record: Dict[str, Any], hit: Any, jurisdiction: str) -> None:
         """Download / attach a local offender photo when possible.

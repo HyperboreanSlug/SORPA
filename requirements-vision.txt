@@ -1,0 +1,17 @@
+# Local face / race analysis for scraper.mugshot_ethnicity
+# Fully offline after first model download (weights under ~/.deepface/).
+#
+#   pip install -r requirements-vision.txt
+#
+# Primary stack — DeepFace (https://github.com/serengil/deepface)
+# Open-source face attribute pipeline with built-in race model
+# (White, Black, Asian, Indian, Middle Eastern, Latino Hispanic).
+deepface>=0.0.93
+tensorflow>=2.13.0
+tf-keras>=2.15.0
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+
+# Optional fallback (not required if deepface works):
+# torch>=2.0.0
+# transformers>=4.36.0
