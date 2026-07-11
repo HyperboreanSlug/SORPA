@@ -100,6 +100,16 @@ class ReportsTabMixin:
             command=lambda: self._reports_on_filter_change(),
         ).pack(side="left", padx=(0, 8))
 
+        # Include stored DeepFace mugshot hits (from DeepFace → Scan)
+        self.report_include_deepface = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            bar, text="DeepFace hits", variable=self.report_include_deepface,
+            font=FONT_SM, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_hover"],
+            border_color=C["border"], checkmark_color=C["bg"],
+            command=lambda: self._reports_on_filter_change(),
+        ).pack(side="left", padx=(0, 8))
+
         # Separate race toggles for list + export (misclassified-as buckets)
         self.report_race_white = ctk.BooleanVar(value=True)
         self.report_race_black = ctk.BooleanVar(value=True)
@@ -606,9 +616,77 @@ class ReportsTabMixin:
         self._report_page = cur - 1
         self._reports_rebuild_cards(refilter=False)
 
+    def _reports_load_deepface_hits(self) -> list:
+        """Load stored DeepFace gross-misclass hits as Misclassification rows."""
+        try:
+            from scraper.mugshot_ethnicity.scanner import load_deepface_hits_as_misclass
+
+            return load_deepface_hits_as_misclass(
+                db_path=str(getattr(self, "db_path", None) or "data/offenders.db"),
+                min_confidence=0.0,
+            )
+        except Exception:
+            return []
+
+    def _reports_merge_sources(self, surname_results: list, deepface_results: list) -> list:
+        """Merge surname misclass + DeepFace hits; attach face data onto surname rows."""
+        from scraper.database import Database
+
+        by_id: Dict[Any, Any] = {}
+        # Index deepface by offender id
+        df_by_id: Dict[int, Any] = {}
+        for mc in deepface_results or []:
+            rec = mc.record or {}
+            try:
+                oid = int(rec["id"]) if rec.get("id") is not None else None
+            except (TypeError, ValueError):
+                oid = None
+            if oid is not None:
+                df_by_id[oid] = mc
+
+        for mc in surname_results or []:
+            rec = dict(mc.record or {})
+            try:
+                oid = int(rec["id"]) if rec.get("id") is not None else None
+            except (TypeError, ValueError):
+                oid = None
+            # Attach DeepFace face info when available for the same person
+            if oid is not None and oid in df_by_id:
+                df_mc = df_by_id[oid]
+                df_payload = (df_mc.record or {}).get("_deepface") or {}
+                rec["_deepface"] = df_payload
+                rec["_deepface_is_hit"] = True
+                names = list(mc.matching_names or [])
+                for n in (df_mc.matching_names or []):
+                    if n not in names:
+                        names.append(n)
+                mc.matching_names = names
+                # Prefer higher of name-conf vs face-conf for sort; keep name ethnicity
+                try:
+                    face_c = float(df_payload.get("top_confidence") or 0)
+                    if face_c > float(mc.confidence or 0):
+                        # Keep surname ethnicity as primary label; conf reflects stronger signal
+                        mc.confidence = max(float(mc.confidence or 0), face_c)
+                except (TypeError, ValueError):
+                    pass
+                mc.record = rec
+                del df_by_id[oid]
+            key = oid if oid is not None else id(mc)
+            by_id[key] = mc
+
+        # Remaining pure DeepFace hits (no surname misclass row)
+        for oid, mc in df_by_id.items():
+            by_id[oid] = mc
+
+        return list(by_id.values())
+
     def _reports_filtered_source(self) -> list:
-        """Apply report filters to current misclassification results (full pool)."""
-        results = list(self._misclass_results or [])
+        """Apply report filters to surname + DeepFace results (full pool)."""
+        surname = list(self._misclass_results or [])
+        deepface: list = []
+        if bool(getattr(self, "report_include_deepface", None) and self.report_include_deepface.get()):
+            deepface = self._reports_load_deepface_hits()
+        results = self._reports_merge_sources(surname, deepface)
         if not results:
             return []
 
@@ -682,14 +760,16 @@ class ReportsTabMixin:
             if prev is None:
                 best_by_person[person] = mc
                 continue
-            # Prefer richer record / higher confidence
+            # Prefer richer record / higher confidence / deepface attachment
             prev_rec = prev.record or {}
             score_new = (
+                1 if (rec.get("_deepface") or {}).get("is_hit") else 0,
                 Database._row_richness(rec),
                 float(mc.confidence or 0),
                 1 if has_photo else 0,
             )
             score_old = (
+                1 if (prev_rec.get("_deepface") or {}).get("is_hit") else 0,
                 Database._row_richness(prev_rec),
                 float(prev.confidence or 0),
                 1 if (prev_rec.get("photo_path") or "").strip() else 0,
@@ -768,24 +848,25 @@ class ReportsTabMixin:
             )
 
     def _reports_build_list(self):
-        """Run Analyze (shared filters), then filter and render photo cards."""
+        """Run Analyze (shared filters), merge DeepFace hits, render photo cards."""
         try:
             self._run_misclassification()
         except Exception as e:
             messagebox.showerror("Analyze & build", str(e))
             return
-        if not self._misclass_results:
-            messagebox.showinfo(
-                "Reports",
-                "Analyze finished with no mismatches for the current filters.\n"
-                "Try lower min conf. or another ethnicity.",
-            )
-            self._report_items = []
-            self._reports_rebuild_cards()
-            self._reports_update_metrics()
-            return
         self._report_page = 0
         self._report_pool = self._reports_filtered_source()
+        if not self._report_pool:
+            messagebox.showinfo(
+                "Reports",
+                "No mismatches for the current filters.\n"
+                "• Run surname Analyze with lower min conf., or\n"
+                "• Run DeepFace → Scan first (hits appear when “DeepFace hits” is checked).",
+            )
+            self._report_items = []
+            self._reports_rebuild_cards(refilter=False)
+            self._reports_update_metrics()
+            return
         self._reports_rebuild_cards(refilter=False)
         self._reports_update_metrics()
 
@@ -795,7 +876,13 @@ class ReportsTabMixin:
         if scroll is None:
             return
 
-        if refilter and self._misclass_results:
+        if refilter and (
+            self._misclass_results
+            or bool(
+                getattr(self, "report_include_deepface", None)
+                and self.report_include_deepface.get()
+            )
+        ):
             self._report_pool = self._reports_filtered_source()
             # Keep page in range after refilter
             page_size = self._reports_page_size()
@@ -1031,6 +1118,18 @@ class ReportsTabMixin:
             meta_parts.append(str(rec.get("gender")))
         if rec.get("date_of_birth"):
             meta_parts.append(f"DOB {rec.get('date_of_birth')}")
+        df = rec.get("_deepface") or {}
+        if df:
+            flab = df.get("predicted_label") or df.get("top_label") or ""
+            fconf = df.get("top_confidence")
+            try:
+                fconf_s = f"{float(fconf):.0%}" if fconf is not None else "—"
+            except (TypeError, ValueError):
+                fconf_s = "—"
+            if flab:
+                meta_parts.append(f"DeepFace face={flab}@{fconf_s}")
+            if df.get("severity"):
+                meta_parts.append(f"sev {df.get('severity')}")
         meta = "  ·  ".join(meta_parts)
         ctk.CTkLabel(
             body, text=meta, font=FONT_SM, text_color=C["muted"], anchor="w",
@@ -1039,8 +1138,10 @@ class ReportsTabMixin:
         matches = "; ".join(mc.matching_names[:4]) if mc.matching_names else ""
         matches_lbl = None
         if matches:
+            is_df = bool(rec.get("_deepface_is_hit") or "deepface" in (mc.matching_names or []))
+            prefix = "DeepFace / matches: " if is_df else "Matched names: "
             matches_lbl = ctk.CTkLabel(
-                body, text=f"Matched names: {matches}",
+                body, text=f"{prefix}{matches}",
                 font=FONT_SM, text_color=C["dim"], anchor="w",
             )
             matches_lbl.pack(fill="x", pady=(2, 0))
@@ -1143,9 +1244,16 @@ class ReportsTabMixin:
         ).pack(side="left", padx=(0, 6))
 
         # Selectable summary line + copy
+        df_line = ""
+        if df:
+            df_line = (
+                f"\nDeepFace: face={df.get('predicted_label') or df.get('top_label')} "
+                f"conf={df.get('top_confidence')} sev={df.get('severity') or '—'}"
+                f"\nReason: {df.get('reason') or '—'}"
+            )
         copy_blob = (
             f"{name}\nLISTED AS: {race}\nSurname ethnicity: {eth}\n"
-            f"{meta}\nMatched: {matches or '—'}\n"
+            f"{meta}\nMatched: {matches or '—'}{df_line}\n"
             f"State: {state}\nURL: {rec.get('source_url') or '—'}"
         )
         ctk.CTkButton(

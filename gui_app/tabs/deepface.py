@@ -172,6 +172,28 @@ class DeepfaceTabMixin:
             0, str(sett.get("deepface_scan_faces") or "black,indian,asian")
         )
 
+        skip_row = ctk.CTkFrame(opt, fg_color="transparent")
+        skip_row.pack(fill="x", padx=14, pady=(0, 4))
+        self.df_scan_rescan = ctk.BooleanVar(
+            value=bool(sett.get("deepface_scan_force_rescan", False))
+        )
+        ctk.CTkCheckBox(
+            skip_row,
+            text="Rescan already-scored mugshots (ignore stored DeepFace results)",
+            variable=self.df_scan_rescan,
+            font=FONT_SM,
+            text_color=C["text"],
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            border_color=C["border"],
+            checkmark_color=C["bg"],
+        ).pack(side="left")
+        self.df_scan_db_stats = ctk.CTkLabel(
+            skip_row, text="", font=FONT_SM, text_color=C["dim"], anchor="e",
+        )
+        self.df_scan_db_stats.pack(side="right")
+        self.after(80, self._deepface_scan_refresh_db_stats)
+
         # Controls
         ctrl = ctk.CTkFrame(opt, fg_color="transparent")
         ctrl.pack(fill="x", padx=14, pady=(4, 8))
@@ -322,13 +344,39 @@ class DeepfaceTabMixin:
             if p.strip()
         ] or ["black", "indian", "asian"]
         state = _f(self.df_scan_state, "") or None
+        force = False
+        try:
+            force = bool(self.df_scan_rescan.get())
+        except Exception:
+            force = False
         return {
             "min_confidence": min_conf,
             "limit": max(0, limit),
             "recorded_races": recorded,
             "face_labels": faces,
             "state": state,
+            "force_rescan": force,
         }
+
+    def _deepface_scan_refresh_db_stats(self) -> None:
+        if not hasattr(self, "df_scan_db_stats"):
+            return
+        try:
+            from scraper.database import Database
+
+            db = Database(str(getattr(self, "db_path", None) or "data/offenders.db"))
+            try:
+                st = db.count_deepface_scans()
+            finally:
+                db.close()
+            self.df_scan_db_stats.configure(
+                text=f"Stored: {st.get('total', 0):,} scanned · {st.get('hits', 0):,} hits"
+            )
+        except Exception:
+            try:
+                self.df_scan_db_stats.configure(text="Stored: —")
+            except Exception:
+                pass
 
     def _deepface_scan_save_options(self) -> None:
         try:
@@ -341,6 +389,7 @@ class DeepfaceTabMixin:
             raw["deepface_scan_limit"] = str(opts["limit"])
             raw["deepface_scan_recorded"] = ",".join(opts["recorded_races"])
             raw["deepface_scan_faces"] = ",".join(opts["face_labels"])
+            raw["deepface_scan_force_rescan"] = bool(opts.get("force_rescan"))
             save_settings(raw)
             self.app_settings = normalize_settings(raw)
         except Exception:
@@ -393,6 +442,7 @@ class DeepfaceTabMixin:
             f"Starting scan: state={opts['state'] or 'ALL'} "
             f"min_conf={opts['min_confidence']} limit={opts['limit'] or '∞'} "
             f"recorded={opts['recorded_races']} faces={opts['face_labels']}"
+            f"{' · FORCE RESCAN' if opts.get('force_rescan') else ' · skip already scanned'}"
         )
         try:
             self.df_scan_status.configure(
@@ -473,6 +523,10 @@ class DeepfaceTabMixin:
                     progress=progress,
                     log=self._deepface_scan_log_msg,
                     cancel=lambda: bool(getattr(self, "_df_scan_cancel", False)),
+                    skip_scanned=not bool(opts.get("force_rescan")),
+                    force_rescan=bool(opts.get("force_rescan")),
+                    persist=True,
+                    detector=detector,
                 )
             except Exception as e:
                 err = e
@@ -525,7 +579,12 @@ class DeepfaceTabMixin:
                 self._deepface_scan_log_msg(
                     f"Scan finished: {len(self._df_scan_hits)} hits"
                     + (f" (error: {err})" if err else "")
+                    + " — results stored; skipped photos stay skipped next run"
                 )
+                try:
+                    self._deepface_scan_refresh_db_stats()
+                except Exception:
+                    pass
 
             try:
                 self.after(0, done)

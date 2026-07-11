@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 # Schema version - increment when schema changes
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Strategies for find/remove_duplicates
 DUPLICATE_STRATEGIES = (

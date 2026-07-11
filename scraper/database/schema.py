@@ -135,6 +135,13 @@ class SchemaMixin:
         # Indexes after columns exist (old DBs upgrade first)
         self._ensure_indexes(cursor)
 
+        # DeepFace scan persistence (skip already-scored mugshots)
+        try:
+            self._ensure_deepface_scans_table(cursor)
+        except Exception:
+            # Mixin may not be on class during partial imports; table created lazily
+            pass
+
         # Note: FTS5 was previously created but never queried and had no sync
         # triggers — removed to avoid a false sense of full-text search and
         # avoid extra schema work on every open.
@@ -199,6 +206,12 @@ class SchemaMixin:
         if from_version < 6:
             # sources_json multi-source provenance via _ensure_offender_columns
             pass
+        if from_version < 7:
+            # deepface_scans table for mugshot scan persistence
+            try:
+                self._ensure_deepface_scans_table(cursor)
+            except Exception:
+                pass
 
     def close(self):
         """Close the database connection."""

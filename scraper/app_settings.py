@@ -36,6 +36,7 @@ DEFAULTS: Dict[str, Any] = {
     "deepface_scan_limit": "0",
     "deepface_scan_recorded": "WHITE",
     "deepface_scan_faces": "black,indian,asian",
+    "deepface_scan_force_rescan": False,
 
     # Public database sync from GitHub Releases (no local user PII in archives)
     "db_sync_enabled": False,
@@ -85,6 +86,7 @@ def normalize_settings(s: Dict[str, Any]) -> Dict[str, Any]:
     out["nsopw_compact_prefixes"] = bool(out.get("nsopw_compact_prefixes", True))
     out["deepface_auto_setup"] = bool(out.get("deepface_auto_setup", True))
     out["deepface_auto_warm"] = bool(out.get("deepface_auto_warm", True))
+    out["deepface_scan_force_rescan"] = bool(out.get("deepface_scan_force_rescan", False))
     det = str(out.get("deepface_detector") or "retinaface").strip().lower()
     allowed_det = {
         "retinaface", "opencv", "ssd", "mtcnn", "yunet", "mediapipe", "centerface",
