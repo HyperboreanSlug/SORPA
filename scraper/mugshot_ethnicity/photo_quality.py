@@ -22,7 +22,7 @@ KNOWN_PLACEHOLDER_MD5: Set[str] = {
 KNOWN_CHROME_MD5: Set[str] = {
     # NV "Seal" img that is actually a 1×1 transparent GIF (~3 KB)
     "5241a2d8ac75f34e0373765f6249194f",
-    # Tiny multi-state stub 59×78 (~1.6 KB)
+    # Tiny multi-state stub 59×78 (~1.6 KB) — FL CallImage?imgID= empty silhouette
     "0a668c6c65c40b293dff33a81c6849ae",
     # KS 16×16 icon
     "3085230ce03a9a93a074669e4c194432",
@@ -32,6 +32,8 @@ KNOWN_CHROME_MD5: Set[str] = {
     "8404669e8feb8303f78d34008ab4eab5",
     # CO banner strip (278×61)
     "d8c95963fee283a4ad2a87bb1b5620f7",
+    # SC HTML chrome: blue/green speech-bubble "?" help icon (108×109)
+    "a94c8c8a42da56b64bdf75a7a47bbd49",
 }
 
 # Silhouette heuristic thresholds (white bg + dark outline).
@@ -45,7 +47,14 @@ _STUB_SIZE_MAX = 25_000
 _CHROME_URL_RE = re.compile(
     r"(?:logo|icon|sprite|pixel|tracking|1x1|spacer|banner|button|"
     r"header|footer|nav|seal|badge|favicon|clear\.gif|blank\.gif|"
+    r"help|question|chat|speech|tooltip|info\.gif|info\.png|"
     r"/offices/|app_themes|webresource\.axd)",
+    re.I,
+)
+
+# Empty / zero image-id query params (FL CallImage?imgID=& …)
+_EMPTY_IMAGE_ID_RE = re.compile(
+    r"(?:[?&](?:imgid|imageid|image_id|photoid|photo_id)=)(?:&|#|$)",
     re.I,
 )
 
@@ -70,6 +79,16 @@ def md5_bytes(data: bytes) -> str:
     return hashlib.md5(data).hexdigest()
 
 
+def url_has_empty_image_id(url: str) -> bool:
+    """True when the URL's image id query param is empty or zero (no mugshot)."""
+    low = (url or "").strip().lower()
+    if not low:
+        return False  # missing URL is not an empty-id stub
+    if "imgid=0" in low or "imageid=0" in low or "image_id=0" in low:
+        return True
+    return bool(_EMPTY_IMAGE_ID_RE.search(low))
+
+
 def url_looks_like_chrome(url: str) -> bool:
     """True when a remote image URL is almost certainly site chrome."""
     u = (url or "").strip()
@@ -77,6 +96,9 @@ def url_looks_like_chrome(url: str) -> bool:
         return True
     low = u.lower()
     if low.startswith("data:"):
+        return True
+    # Empty image id → registry "no photo" stub (never a real mugshot)
+    if url_has_empty_image_id(low):
         return True
     if _CHROME_URL_RE.search(low):
         # Dedicated mugshot endpoints still win even if path is noisy
@@ -94,11 +116,57 @@ def url_looks_like_chrome(url: str) -> bool:
             )
         ):
             # DisplayImage is fine; seal/spacer paths are not
-            if any(k in low for k in ("seal", "spacer", "logo", "1x1", "pixel", "favicon")):
+            if any(
+                k in low
+                for k in (
+                    "seal",
+                    "spacer",
+                    "logo",
+                    "1x1",
+                    "pixel",
+                    "favicon",
+                    "help",
+                    "question",
+                )
+            ):
                 return True
             return False
         return True
     return False
+
+
+def _dominant_color_icon(path: Path) -> bool:
+    """True for small UI icons where one color covers a large fraction of pixels."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size < 800 or size > 20_000:
+        return False
+    try:
+        from PIL import Image
+    except Exception:
+        return False
+    try:
+        with Image.open(path) as im:
+            rgb = im.convert("RGB")
+            w, h = rgb.size
+            if max(w, h) > 160 or min(w, h) < 40:
+                return False
+            small = rgb.resize((64, 64))
+            try:
+                q = small.quantize(colors=32, method=Image.Quantize.MEDIANCUT)
+            except AttributeError:
+                q = small.quantize(colors=32, method=0)  # MEDIANCUT
+            colors = q.getcolors() or []
+            if not colors:
+                return False
+            top = max(c for c, _ in colors)
+            frac = top / float(64 * 64)
+            # Help icons / seals: one color dominates
+            return frac >= 0.38
+    except Exception:
+        return False
 
 
 def _heuristic_silhouette(path: Path) -> bool:
@@ -194,6 +262,8 @@ def _classify_cached(resolved: str, mtime_ns: int, size: int) -> Optional[str]:
         return "site chrome (known non-mugshot)"
     if _heuristic_silhouette(path):
         return "registry silhouette placeholder (white bg + outline)"
+    if _dominant_color_icon(path):
+        return "UI icon / help chrome (dominant color)"
     dims = _image_dims(path)
     if dims is None:
         return None

@@ -9,6 +9,8 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+import threading
+
 from scraper.database import Database
 from scraper.ethnic_names import get_ethnic_database
 from scraper.report_fetcher import ReportFetcher
@@ -18,7 +20,14 @@ from scraper.nsopw.client import (
     NSOPWOffender,
     normalize_jurisdiction_code,
 )
+from scraper.nsopw.parallel import JurisdictionReportPool, ReportJob
 from scraper.nsopw.search_plan import *  # noqa: F403
+
+# Report fetching can run on multiple worker threads. Default 1 keeps the
+# original sequential behavior; >1 fetches state report pages in parallel
+# while never hitting the same state website from two threads at once.
+DEFAULT_REPORT_THREADS = 1
+MAX_REPORT_THREADS = 16
 
 
 @dataclass
@@ -115,6 +124,10 @@ class NSOPWEthnicDatabaseBuilder:
         cancel_check: Optional[Callable[[], bool]] = None,
         # Clients sleep themselves only if >0; builder RateLimiters are primary.
         client_owned_delay: bool = False,
+        # Number of parallel report-fetch worker threads. 1 = sequential (old
+        # behavior). Each worker gets its own HTTP session and no two workers
+        # ever fetch from the same state website at the same time.
+        report_threads: int = DEFAULT_REPORT_THREADS,
     ):
         self.db = Database(db_path)
         self.ethnic_db = get_ethnic_database()
@@ -122,6 +135,12 @@ class NSOPWEthnicDatabaseBuilder:
         report_delay = max(DEFAULT_MIN_REPORT_INTERVAL, float(report_delay))
         self.search_delay = search_delay
         self.report_delay = report_delay
+        try:
+            self.report_threads = max(1, min(int(report_threads), MAX_REPORT_THREADS))
+        except (TypeError, ValueError):
+            self.report_threads = DEFAULT_REPORT_THREADS
+        # Guards BuildStats mutations made from report worker threads.
+        self._stats_lock = threading.Lock()
         # Avoid double-delay: either builder limiter OR client sleep, not both.
         client_search_sleep = search_delay if client_owned_delay else 0.0
         client_report_sleep = report_delay if client_owned_delay else 0.0
@@ -150,6 +169,99 @@ class NSOPWEthnicDatabaseBuilder:
         self.client.close()
         self.reports.close()
         self.db.close()
+
+    def _make_report_fetcher(self) -> ReportFetcher:
+        """Build a report fetcher with its own HTTP session for a worker thread.
+
+        Workers share the cookie jar / captcha queue (thread-safe) but must not
+        share a session. delay=0 because the pool owns per-state pacing.
+        """
+        return ReportFetcher(
+            delay=0.0,
+            cookie_store=self.cookie_store,
+            captcha_queue=self.captcha_queue,
+            use_saved_cookies=True,
+        )
+
+    def _worker_fetch(self, job: ReportJob, fetcher: ReportFetcher) -> None:
+        """Fetch one offender's report + photo (runs on a report worker thread).
+
+        Only performs network + file I/O and mutates ``job.record`` (owned by
+        this job). Never touches sqlite or aggregate counters other than the
+        lock-guarded ``photos_saved``. Per-jurisdiction serialization guarantees
+        no two workers hit the same state website at once.
+        """
+        record = job.record
+        demo = fetcher.fetch_demographics(
+            job.url,
+            save_html=job.save_html,
+            html_dir=self.html_dir,
+            jurisdiction=job.jurisdiction,
+        )
+        self._merge_demographics(record, demo)
+        if demo.get("report_html_path"):
+            record["report_html_path"] = demo["report_html_path"]
+        if demo.get("photo_path"):
+            record["photo_path"] = demo["photo_path"]
+        if demo.get("photo_url") and not record.get("photo_url"):
+            record["photo_url"] = demo["photo_url"]
+        record["source_url"] = demo.get("report_final_url") or job.url
+        # Photo download uses this worker's own session so it stays inside the
+        # jurisdiction lock (never a second concurrent hit to the same state).
+        self._ensure_photo(record, job.hit, job.jurisdiction, fetcher=fetcher)
+        job.demo = demo
+
+    def _apply_report_result_stats(
+        self,
+        record: Dict[str, Any],
+        demo: Dict[str, Any],
+        st: str,
+        log: Callable[[str], None],
+    ) -> None:
+        """Fold a completed report fetch into aggregate stats + logs.
+
+        Runs on the calling (main) thread — never in a worker — so BuildStats
+        and per-state counters stay single-threaded.
+        """
+        sst = self._state_stats(st)
+        if demo.get("report_fetch_ok"):
+            sst.reports_ok += 1
+        if demo.get("race"):
+            self.stats.reports_with_race += 1
+            sst.with_race += 1
+        if demo.get("race") or demo.get("ethnicity"):
+            self.stats.reports_with_demographics += 1
+        if demo.get("report_html_path"):
+            self.stats.html_saved += 1
+            sst.html_saved += 1
+        block = demo.get("report_block_reason") or ""
+        status = str(demo.get("report_fetch_status") or "")
+        if block or status.startswith("blocked:") or status.startswith("error:"):
+            reason = block or status
+            sst.blocks[reason] = sst.blocks.get(reason, 0) + 1
+            if status.startswith("error:"):
+                sst.errors += 1
+        if demo.get("needs_manual_captcha"):
+            log(
+                "    ↳ CAPTCHA/WAF wall — queued for manual browser solve "
+                "(Settings → Access assistance: open URL, complete challenge, "
+                "import cookies, re-run / requeue)"
+            )
+        if not demo.get("report_fetch_ok"):
+            log(
+                f"    ↳ no demographics "
+                f"(status={demo.get('report_fetch_status')}"
+                f"{', ' + block if block else ''})"
+            )
+        else:
+            crime_snip = (record.get("crime") or demo.get("crime") or "")[:40]
+            log(
+                f"    ↳ race={demo.get('race') or '—'} "
+                f"eth={demo.get('ethnicity') or '—'} "
+                f"gender={demo.get('gender') or '—'}"
+                f"{' · crime=' + crime_snip if crime_snip else ''}"
+                f"{' · photo' if record.get('photo_path') else ''}"
+            )
 
     def _load_known_urls(self) -> None:
         """Cache existing source_url values for O(1) skip-existing checks."""
@@ -399,6 +511,7 @@ class NSOPWEthnicDatabaseBuilder:
         skip_completed_searches: bool = True,
         new_files_only: bool = True,
         enrich_reports: bool = True,
+        enrich_scope: str = "all",
         save_html: bool = True,
         use_compact_prefixes: bool = True,
         min_combined_len: int = MIN_COMBINED_NAME_LEN,
@@ -409,6 +522,12 @@ class NSOPWEthnicDatabaseBuilder:
     ) -> BuildStats:
         """
         Run the ethnic-name NSOPW search pipeline.
+
+        enrich_scope (when enrich_reports is True):
+          - ``all``: fetch report pages for every hit (default)
+          - ``ethnicity_match``: only fetch reports for hits whose surname is
+            on the selected ethnicity list; other surnames from the same search
+            are still inserted but not report-enriched.
 
         first_mode:
           - "initials" (default): full A–Z firsts + all list surname digraphs
@@ -484,6 +603,7 @@ class NSOPWEthnicDatabaseBuilder:
         skip_completed_searches = bool(skip_completed_searches)
         new_files_only = bool(new_files_only)
         enrich_reports = bool(enrich_reports)
+        enrich_scope = (enrich_scope or "all").strip().lower()
         save_html = bool(save_html)
         _live_last_sig: Optional[str] = None
 
@@ -491,7 +611,7 @@ class NSOPWEthnicDatabaseBuilder:
             """Refresh delays/caps/flags from live_options callback (GUI mid-run)."""
             nonlocal search_cap, names_cap
             nonlocal skip_existing_urls, skip_completed_searches, new_files_only
-            nonlocal enrich_reports, save_html, _live_last_sig
+            nonlocal enrich_reports, enrich_scope, save_html, _live_last_sig
             if not live_options:
                 return
             try:
@@ -516,6 +636,8 @@ class NSOPWEthnicDatabaseBuilder:
                 new_files_only = bool(opts.get("new_files_only"))
             if "enrich_reports" in opts:
                 enrich_reports = bool(opts.get("enrich_reports"))
+            if "enrich_scope" in opts and opts.get("enrich_scope") is not None:
+                enrich_scope = str(opts.get("enrich_scope") or "all").strip().lower()
             if "save_html" in opts:
                 save_html = bool(opts.get("save_html"))
 
@@ -542,7 +664,7 @@ class NSOPWEthnicDatabaseBuilder:
                 f"sc={search_cap}|nc={names_cap}|sd={self.search_delay:.2f}|"
                 f"rd={self.report_delay:.2f}|se={int(skip_existing_urls)}|"
                 f"sk={int(skip_completed_searches)}|nf={int(new_files_only)}|"
-                f"en={int(enrich_reports)}|sh={int(save_html)}"
+                f"en={int(enrich_reports)}|es={enrich_scope}|sh={int(save_html)}"
             )
             if announce and sig != _live_last_sig and _live_last_sig is not None:
                 _log(
@@ -554,7 +676,8 @@ class NSOPWEthnicDatabaseBuilder:
                     f"skip_urls={skip_existing_urls}, "
                     f"skip_done={skip_completed_searches}, "
                     f"new_html_only={new_files_only}, "
-                    f"enrich={enrich_reports}, save_html={save_html}"
+                    f"enrich={enrich_reports}, enrich_scope={enrich_scope}, "
+                    f"save_html={save_html}"
                 )
             _live_last_sig = sig
 
@@ -680,7 +803,9 @@ class NSOPWEthnicDatabaseBuilder:
         _log(f"Skip known URLs in DB: {skip_existing_urls}")
         _log(f"New report files only (no re-download): {new_files_only}")
         _log(f"Save report HTML: {save_html} → {self.html_dir}")
-        _log(f"Enrich demographics: {enrich_reports}")
+        _log(f"Enrich demographics: {enrich_reports}" + (
+            f" (scope={enrich_scope})" if enrich_reports else ""
+        ))
         if skip_existing_urls:
             self._load_known_urls()
             _log(f"Known URLs cached for skip: {len(self._known_urls):,}")
@@ -792,6 +917,76 @@ class NSOPWEthnicDatabaseBuilder:
             _apply_live_options(announce=False)
 
         _progress(plan_i=0, plan_total=plan_total, current="starting…", phase="start")
+
+        # ---- report finalize + optional parallel report-fetch pool ----
+        def _finalize_record(record, hit, st, is_eth_match, url, *, ensure_photo):
+            """Main-thread: photo (if not already fetched), DB insert, notify."""
+            if url:
+                record["source_url"] = record.get("source_url") or url
+            if ensure_photo:
+                self._ensure_photo(record, hit, st)
+            try:
+                self.db.insert_offender(record)
+                self.stats.inserted += 1
+                if is_eth_match:
+                    self.stats.inserted_matched += 1
+                else:
+                    self.stats.inserted_other += 1
+                # Keep skip-cache in sync so same-run duplicates are skipped
+                self._remember_url(record.get("source_url") or url)
+                if on_insert:
+                    try:
+                        on_insert(dict(record))
+                    except Exception:
+                        pass
+            except Exception as e:
+                msg = f"  Insert error: {e}"
+                self.stats.errors.append(msg)
+                _log(msg)
+
+        report_pool: Optional[JurisdictionReportPool] = None
+        if self.report_threads > 1:
+            report_pool = JurisdictionReportPool(
+                num_threads=self.report_threads,
+                make_fetcher=self._make_report_fetcher,
+                worker_fn=self._worker_fetch,
+                report_delay=self.report_delay,
+                cancel_check=self.cancel_check,
+                log=_log,
+            )
+            _log(
+                f"Parallel report fetch: {self.report_threads} worker threads "
+                "(per-state serialized — no two threads ever hit the same "
+                "state website at once)"
+            )
+
+        def _drain_report_jobs(jobs: List[ReportJob]) -> bool:
+            """Fetch queued report jobs in parallel; finalize here. True=cancelled."""
+            if not jobs or report_pool is None:
+                return False
+            for j in jobs:
+                report_pool.submit(j)
+            for done in report_pool.collect(len(jobs)):
+                _apply_live_options(announce=False)
+                report_pool.set_report_delay(self.report_delay)
+                if self.cancel_check():
+                    return True
+                if done.error:
+                    self.stats.errors.append(done.error)
+                    _log(f"  {done.error}")
+                if done.demo is not None:
+                    self._apply_report_result_stats(
+                        done.record, done.demo, done.jurisdiction, _log
+                    )
+                _finalize_record(
+                    done.record,
+                    done.hit,
+                    done.jurisdiction,
+                    done.is_eth_match,
+                    done.url,
+                    ensure_photo=False,
+                )
+            return self.cancel_check()
 
         last_plan_i = 0
         for plan_i, (first, last_token, eth_label, covered_surnames) in enumerate(
@@ -950,6 +1145,9 @@ class NSOPWEthnicDatabaseBuilder:
             ] + [(h, False) for h in other_hits]
 
             cancelled = False
+            # Parallel mode: report fetches for this search's hits are queued and
+            # run across worker threads (serialized per state) after the loop.
+            report_jobs: List[ReportJob] = []
             for hit, is_eth_match in ordered_hits:
                 _apply_live_options(announce=False)
                 if self.cancel_check():
@@ -1025,7 +1223,13 @@ class NSOPWEthnicDatabaseBuilder:
                     self.stats.skipped_existing += 1
                     continue
 
-                if enrich_reports and url:
+                do_enrich = bool(enrich_reports)
+                if do_enrich and enrich_scope in (
+                    "ethnicity_match", "matched", "ethnicity"
+                ) and not is_eth_match:
+                    do_enrich = False
+
+                if do_enrich and url:
                     existing_html = (
                         self._existing_html_path(url, st) if new_files_only else None
                     )
@@ -1036,106 +1240,75 @@ class NSOPWEthnicDatabaseBuilder:
                         flags_list.append("html_cached")
                         record["flags"] = json.dumps(flags_list)
                         _log(f"  Report skip (local HTML): {existing_html}")
-                    else:
-                        if self.cancel_check():
-                            cancelled = True
-                            break
-                        report_count += 1
-                        self.stats.reports_fetched = report_count
-                        sst = self._state_stats(st)
-                        sst.reports_attempted += 1
-                        if self.report_limiter.wait(self.cancel_check):
-                            cancelled = True
-                            break
-                        if self.cancel_check():
-                            cancelled = True
-                            break
+                        _finalize_record(
+                            record, hit, st, is_eth_match, url, ensure_photo=True
+                        )
+                        continue
+                    if self.cancel_check():
+                        cancelled = True
+                        break
+                    report_count += 1
+                    self.stats.reports_fetched = report_count
+                    sst = self._state_stats(st)
+                    sst.reports_attempted += 1
+                    if report_pool is not None:
+                        # Parallel: queue for a per-state worker; finalized after loop.
                         _log(
                             f"  Name ({names_processed}/{ncap_label}) "
-                            f"report [{st}]: {url[:90]}"
+                            f"report [{st}] queued: {url[:90]}"
                         )
-                        demo = self.reports.fetch_demographics(
-                            url,
-                            save_html=save_html,
-                            html_dir=self.html_dir,
-                            jurisdiction=st,
+                        report_jobs.append(
+                            ReportJob(
+                                jurisdiction=st,
+                                url=url,
+                                record=record,
+                                hit=hit,
+                                is_eth_match=is_eth_match,
+                                save_html=save_html,
+                            )
                         )
-                        self._merge_demographics(record, demo)
-                        if demo.get("report_fetch_ok"):
-                            sst.reports_ok += 1
-                        if demo.get("race"):
-                            self.stats.reports_with_race += 1
-                            sst.with_race += 1
-                        if demo.get("race") or demo.get("ethnicity"):
-                            self.stats.reports_with_demographics += 1
-                        if demo.get("report_html_path"):
-                            record["report_html_path"] = demo["report_html_path"]
-                            self.stats.html_saved += 1
-                            sst.html_saved += 1
-                        if demo.get("photo_path"):
-                            record["photo_path"] = demo["photo_path"]
-                        if demo.get("photo_url") and not record.get("photo_url"):
-                            record["photo_url"] = demo["photo_url"]
-                        block = demo.get("report_block_reason") or ""
-                        status = str(demo.get("report_fetch_status") or "")
-                        if block or status.startswith("blocked:") or status.startswith("error:"):
-                            reason = block or status
-                            sst.blocks[reason] = sst.blocks.get(reason, 0) + 1
-                            if status.startswith("error:"):
-                                sst.errors += 1
-                        if demo.get("needs_manual_captcha"):
-                            _log(
-                                "    ↳ CAPTCHA/WAF wall — queued for manual browser solve "
-                                "(Settings → Access assistance: open URL, complete challenge, "
-                                "import cookies, re-run / requeue)"
-                            )
-                        if not demo.get("report_fetch_ok"):
-                            _log(
-                                f"    ↳ no demographics "
-                                f"(status={demo.get('report_fetch_status')}"
-                                f"{', ' + block if block else ''})"
-                            )
-                        else:
-                            crime_snip = (record.get("crime") or demo.get("crime") or "")[:40]
-                            _log(
-                                f"    ↳ race={demo.get('race') or '—'} "
-                                f"eth={demo.get('ethnicity') or '—'} "
-                                f"gender={demo.get('gender') or '—'}"
-                                f"{' · crime=' + crime_snip if crime_snip else ''}"
-                                f"{' · photo' if record.get('photo_path') else ''}"
-                            )
-                        record["source_url"] = demo.get("report_final_url") or url
-                elif save_html and url and not enrich_reports:
-                    pass
+                        continue
+                    # Sequential path (report_threads == 1): fetch inline.
+                    if self.report_limiter.wait(self.cancel_check):
+                        cancelled = True
+                        break
+                    if self.cancel_check():
+                        cancelled = True
+                        break
+                    _log(
+                        f"  Name ({names_processed}/{ncap_label}) "
+                        f"report [{st}]: {url[:90]}"
+                    )
+                    demo = self.reports.fetch_demographics(
+                        url,
+                        save_html=save_html,
+                        html_dir=self.html_dir,
+                        jurisdiction=st,
+                    )
+                    self._merge_demographics(record, demo)
+                    if demo.get("report_html_path"):
+                        record["report_html_path"] = demo["report_html_path"]
+                    if demo.get("photo_path"):
+                        record["photo_path"] = demo["photo_path"]
+                    if demo.get("photo_url") and not record.get("photo_url"):
+                        record["photo_url"] = demo["photo_url"]
+                    record["source_url"] = demo.get("report_final_url") or url
+                    self._apply_report_result_stats(record, demo, st, _log)
+                    if self.cancel_check():
+                        cancelled = True
+                        break
+                    _finalize_record(
+                        record, hit, st, is_eth_match, url, ensure_photo=True
+                    )
+                    continue
 
-                if url:
-                    record["source_url"] = record.get("source_url") or url
+                # No enrichment (or no URL): attach photo + insert directly.
+                _finalize_record(record, hit, st, is_eth_match, url, ensure_photo=True)
 
-                # Save offender photo (NSOPW imageUri and/or report-page assets)
-                self._ensure_photo(record, hit, st)
-
-                if self.cancel_check():
+            # Run this search's queued report jobs in parallel (per-state serial).
+            if not cancelled and report_jobs:
+                if _drain_report_jobs(report_jobs):
                     cancelled = True
-                    break
-
-                try:
-                    self.db.insert_offender(record)
-                    self.stats.inserted += 1
-                    if is_eth_match:
-                        self.stats.inserted_matched += 1
-                    else:
-                        self.stats.inserted_other += 1
-                    # Keep skip-cache in sync so same-run duplicates are skipped
-                    self._remember_url(record.get("source_url") or url)
-                    if on_insert:
-                        try:
-                            on_insert(dict(record))
-                        except Exception:
-                            pass
-                except Exception as e:
-                    msg = f"  Insert error: {e}"
-                    self.stats.errors.append(msg)
-                    _log(msg)
 
             if cancelled:
                 _log("Cancelled by user.")
@@ -1146,6 +1319,9 @@ class NSOPWEthnicDatabaseBuilder:
                     phase="cancelled",
                 )
                 break
+
+        if report_pool is not None:
+            report_pool.close()
 
         was_cancelled = bool(self.cancel_check())
         _progress(
@@ -1214,6 +1390,9 @@ class NSOPWEthnicDatabaseBuilder:
         need_html: bool = False,
         limit: int = 100,
         state: Optional[str] = None,
+        source_scope: str = "all",
+        ethnicity_filter: Optional[str] = None,
+        min_confidence: float = 0.5,
         save_html: bool = True,
         log: Optional[Callable[[str], None]] = None,
         on_update: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -1224,12 +1403,32 @@ class NSOPWEthnicDatabaseBuilder:
 
         Updates existing offender rows in place (does not insert duplicates).
         on_progress(done, total) is called after each attempt when provided.
+
+        source_scope:
+          - ``all`` (default): any record with a source URL
+          - ``external_imports``: bulk/direct CSV imports only
+          - ``nsopw``: NSOPW-scraped rows only
+
+        ethnicity_filter:
+          When set (e.g. ``hispanic``, ``indian``), only rows whose surname
+          classifies into that family at *min_confidence* are processed.
         """
+        from scraper.database.enrich_scope import filter_records_for_enrich
+
         def _log(msg: str) -> None:
             if log:
                 log(msg)
             else:
                 print(msg)
+
+        fetch_limit = max(int(limit), 1)
+        scope = (source_scope or "all").strip().lower()
+        eth_filt = (ethnicity_filter or "").strip().lower() or None
+        if eth_filt == "all":
+            eth_filt = None
+        if scope != "all" or eth_filt:
+            # Over-fetch then filter so the final batch still reaches *limit*.
+            fetch_limit = min(max(fetch_limit * 8, fetch_limit), 5000)
 
         rows = self.db.find_incomplete_reports(
             need_race=need_race,
@@ -1237,11 +1436,22 @@ class NSOPWEthnicDatabaseBuilder:
             need_photo=need_photo,
             need_html=need_html,
             require_url=True,
-            limit=limit,
+            limit=fetch_limit,
             state=state,
         )
+        filtered, skipped_scope = filter_records_for_enrich(
+            rows,
+            source_scope=scope,
+            ethnicity_filter=eth_filt,
+            min_confidence=min_confidence,
+            ethnic_db=self.ethnic_db,
+        )
+        if int(limit) > 0:
+            filtered = filtered[: int(limit)]
+
         summary = {
-            "queued": len(rows),
+            "queued": len(filtered),
+            "skipped_scope": skipped_scope,
             "attempted": 0,
             "updated": 0,
             "with_race": 0,
@@ -1250,17 +1460,25 @@ class NSOPWEthnicDatabaseBuilder:
             "with_html": 0,
             "errors": 0,
         }
-        total_q = len(rows)
+        total_q = len(filtered)
+        scope_note = ""
+        if scope != "all" or eth_filt:
+            scope_note = (
+                f" scope={scope}"
+                + (f" ethnicity={eth_filt}" if eth_filt else "")
+                + f" (skipped {skipped_scope} by filter)"
+            )
         _log(
-            f"Requeue incomplete reports: {len(rows)} candidates "
+            f"Requeue incomplete reports: {len(filtered)} candidates "
             f"(need race={need_race} crime={need_crime} photo={need_photo} html={need_html})"
+            f"{scope_note}"
         )
         if on_progress:
             try:
                 on_progress(0, total_q or 1)
             except Exception:
                 pass
-        for rec in rows:
+        for rec in filtered:
             if self.cancel_check():
                 _log("Requeue cancelled.")
                 break
@@ -1281,10 +1499,15 @@ class NSOPWEthnicDatabaseBuilder:
                 or f"{rec.get('first_name') or ''} {rec.get('last_name') or ''}".strip()
                 or f"id={rid}"
             )
-            _log(f"  [{summary['attempted']}/{len(rows)}] Re-fetch [{st}] {name[:50]}")
+            fetch_url = self._primary_fetch_url(url, st)
+            if not fetch_url:
+                summary["errors"] += 1
+                _log(f"  [{summary['attempted']}/{total_q}] skip [{st}] {name[:50]} — bad URL")
+                continue
+            _log(f"  [{summary['attempted']}/{total_q}] Re-fetch [{st}] {name[:50]}")
             try:
                 demo = self.reports.fetch_demographics(
-                    url,
+                    fetch_url,
                     save_html=save_html,
                     html_dir=self.html_dir,
                     jurisdiction=st,
@@ -1605,6 +1828,9 @@ class NSOPWEthnicDatabaseBuilder:
         prefer_missing_photo: bool = True,
         only_missing_data: bool = True,
         enrich_reports: bool = True,
+        source_scope: str = "all",
+        ethnicity_filter: Optional[str] = None,
+        min_confidence: float = 0.5,
         save_html: bool = True,
         log: Optional[Callable[[str], None]] = None,
         on_progress: Optional[Callable[[int, int], None]] = None,
@@ -1616,6 +1842,11 @@ class NSOPWEthnicDatabaseBuilder:
         By default only rows **missing** photo, race, crime, or source URL are
         processed (complete rows are skipped).
 
+        source_scope / ethnicity_filter:
+          Same semantics as ``requeue_incomplete``. Use ``external_imports``
+          to enrich only bulk/direct CSV imports; set ``ethnicity_filter`` to
+          the Misclassify ethnicity combo (e.g. ``hispanic``, ``indian``).
+
         For each person still needing data:
           1. If they already have a source_url → re-fetch report (photo/race/crime).
           2. Else search NSOPW by first+last, pick best matching hit, attach URL
@@ -1623,11 +1854,18 @@ class NSOPWEthnicDatabaseBuilder:
 
         Does not insert new rows (avoids duplicates).
         """
+        from scraper.database.enrich_scope import filter_records_for_enrich
+
         def _log(msg: str) -> None:
             if log:
                 log(msg)
             else:
                 print(msg)
+
+        scope = (source_scope or "all").strip().lower()
+        eth_filt = (ethnicity_filter or "").strip().lower() or None
+        if eth_filt == "all":
+            eth_filt = None
 
         # Deduplicate by id
         by_id: Dict[int, Dict[str, Any]] = {}
@@ -1651,6 +1889,14 @@ class NSOPWEthnicDatabaseBuilder:
                     skipped_complete += 1
             queue = incomplete
 
+        queue, skipped_scope = filter_records_for_enrich(
+            queue,
+            source_scope=scope,
+            ethnicity_filter=eth_filt,
+            min_confidence=min_confidence,
+            ethnic_db=self.ethnic_db,
+        )
+
         if prefer_missing_photo:
             queue.sort(
                 key=lambda r: (
@@ -1666,6 +1912,7 @@ class NSOPWEthnicDatabaseBuilder:
         summary: Dict[str, Any] = {
             "queued": len(queue),
             "skipped_complete": skipped_complete,
+            "skipped_scope": skipped_scope,
             "attempted": 0,
             "updated": 0,
             "nsopw_searched": 0,
@@ -1677,10 +1924,18 @@ class NSOPWEthnicDatabaseBuilder:
             "skipped_no_name": 0,
         }
         total_q = len(queue)
+        scope_note = ""
+        if scope != "all" or eth_filt:
+            scope_note = (
+                f" scope={scope}"
+                + (f" ethnicity={eth_filt}" if eth_filt else "")
+                + f" (skipped {skipped_scope} by filter)"
+            )
         _log(
             f"NSOPW enrich misclassified: {total_q} incomplete "
             f"(skipped complete={skipped_complete}, "
             f"only_missing={only_missing_data}, reports={enrich_reports})"
+            f"{scope_note}"
         )
         if on_progress:
             try:
@@ -1715,7 +1970,10 @@ class NSOPWEthnicDatabaseBuilder:
             working = dict(rec)
 
             # --- Path A: already have URL → report re-fetch ---
-            if url and enrich_reports:
+            path_a_ok = False
+            had_url = bool(url)
+            fetch_url = self._primary_fetch_url(url, st) if url else ""
+            if fetch_url and enrich_reports:
                 if self.report_limiter.wait(self.cancel_check):
                     _log("Enrich cancelled (during delay).")
                     break
@@ -1723,7 +1981,7 @@ class NSOPWEthnicDatabaseBuilder:
                     break
                 try:
                     demo = self.reports.fetch_demographics(
-                        url,
+                        fetch_url,
                         save_html=save_html,
                         html_dir=self.html_dir,
                         jurisdiction=st if st != "UNK" else None,
@@ -1734,12 +1992,17 @@ class NSOPWEthnicDatabaseBuilder:
                         image_uri = working.get("photo_url") or rec.get("photo_url") or ""
 
                     self._ensure_photo(working, _Hit(), st)
+                    path_a_ok = bool(demo.get("report_fetch_ok", True))
                 except Exception as e:
                     summary["errors"] += 1
                     _log(f"    ↳ report error: {e}")
 
-            # --- Path B: no URL → NSOPW name search ---
-            elif first and last:
+            # --- Path B: NSOPW name search ONLY when no existing URL ---
+            # Never replace an existing source_url after a transient fetch failure —
+            # weak name matches can attach the wrong person permanently.
+            run_path_b = bool(first and last) and not had_url
+
+            if run_path_b:
                 if self.search_limiter.wait(self.cancel_check):
                     _log("Enrich cancelled (during delay).")
                     break
@@ -1755,7 +2018,10 @@ class NSOPWEthnicDatabaseBuilder:
 
                 best = self._pick_nsopw_hit_for_person(rec, hits)
                 if best is None:
-                    _log(f"    ↳ no NSOPW match among {len(hits)} hit(s)")
+                    _log(
+                        f"    ↳ no confident NSOPW match among {len(hits)} hit(s) "
+                        "(need exact last + first/DOB; ties rejected)"
+                    )
                 else:
                     summary["nsopw_matched"] += 1
                     hit_rec = best.to_record()
@@ -1765,23 +2031,18 @@ class NSOPWEthnicDatabaseBuilder:
                         "latitude", "longitude", "gender", "date_of_birth", "age",
                     ):
                         val = hit_rec.get(key)
+                        # Fill blanks only — never overwrite existing identity fields
                         if val and not working.get(key):
                             working[key] = val
                             patch[key] = val
-                    # Prefer NSOPW URL even if we had a weak one
-                    if hit_rec.get("source_url"):
-                        working["source_url"] = hit_rec["source_url"]
-                        patch["source_url"] = hit_rec["source_url"]
-                    if hit_rec.get("photo_url"):
-                        working["photo_url"] = hit_rec["photo_url"]
-                        patch["photo_url"] = hit_rec["photo_url"]
                     url = (working.get("source_url") or "").strip()
                     hit_st = (
                         (hit_rec.get("state") or hit_rec.get("source_state") or st) or "UNK"
                     ).upper()
-                    _log(f"    ↳ matched NSOPW url={url[:80]}")
+                    _log(f"    ↳ matched NSOPW url={(url or '')[:80]}")
 
-                    if enrich_reports and url:
+                    fetch_url = self._primary_fetch_url(url, hit_st) if url else ""
+                    if enrich_reports and fetch_url:
                         if self.report_limiter.wait(self.cancel_check):
                             _log("Enrich cancelled (during delay).")
                             break
@@ -1789,7 +2050,7 @@ class NSOPWEthnicDatabaseBuilder:
                             break
                         try:
                             demo = self.reports.fetch_demographics(
-                                url,
+                                fetch_url,
                                 save_html=save_html,
                                 html_dir=self.html_dir,
                                 jurisdiction=hit_st if hit_st != "UNK" else None,
@@ -1805,30 +2066,42 @@ class NSOPWEthnicDatabaseBuilder:
                             self._ensure_photo(working, best, hit_st)
                         except Exception:
                             pass
-            else:
+            elif had_url and not path_a_ok and enrich_reports:
+                _log(
+                    "    ↳ kept existing URL after report failure "
+                    "(no NSOPW re-match — avoids wrong-person overwrite)"
+                )
+            elif not had_url and (not first or not last):
                 summary["skipped_no_name"] += 1
                 _log("    ↳ skip (need first+last or existing URL)")
 
-            # Build DB patch from filled fields
+            # Build DB patch — align with requeue: persist sources_json; fill blanks
             for key in (
                 "source_url", "external_id", "photo_url", "photo_path",
                 "report_html_path", "race", "ethnicity", "gender", "height",
                 "weight", "eye_color", "hair_color", "crime", "offense_type",
                 "offense_description", "county", "city", "address", "risk_level",
                 "state", "source_state", "date_of_birth", "age", "zip_code",
-                "latitude", "longitude", "flags", "raw_data_json",
+                "latitude", "longitude", "flags", "sources_json", "raw_data_json",
             ):
                 new_v = working.get(key)
                 old_v = rec.get(key)
-                if not new_v:
+                if new_v is None or new_v == "":
                     continue
+                if key in ("sources_json", "flags", "race"):
+                    if new_v != old_v:
+                        patch[key] = new_v
+                    continue
+                # Fill empty fields; allow crime/html/photo updates from verified report
                 if not old_v or (
-                    key in (
-                        "race", "ethnicity", "crime", "photo_path",
-                        "report_html_path", "source_url", "photo_url",
-                    )
+                    key in ("crime", "photo_path", "report_html_path", "ethnicity")
                     and str(new_v) != str(old_v or "")
                 ):
+                    if key == "source_url" and old_v:
+                        # Never replace an existing source_url via enrich
+                        continue
+                    if key == "photo_url" and old_v:
+                        continue
                     patch[key] = new_v
 
             if patch and rid is not None:
@@ -1877,46 +2150,178 @@ class NSOPWEthnicDatabaseBuilder:
         return summary
 
     @staticmethod
+    def _normalize_dob_key(raw: Optional[str]) -> str:
+        """Normalize DOB strings to YYYYMMDD digits for equality checks."""
+        s = (raw or "").strip()
+        if not s:
+            return ""
+        digits = re.sub(r"\D", "", s)
+        if len(digits) == 8:
+            # Prefer YYYYMMDD when year looks plausible
+            y_first = int(digits[:4])
+            if 1900 <= y_first <= 2100:
+                return digits
+            # MMDDYYYY
+            return digits[4:8] + digits[:2] + digits[2:4]
+        if len(digits) == 6:
+            # YYMMDD — ambiguous; keep as-is for exact compare only
+            return digits
+        return digits
+
+    @staticmethod
     def _pick_nsopw_hit_for_person(
         rec: Dict[str, Any],
         hits: List[Any],
     ) -> Optional[Any]:
-        """Choose the best NSOPW hit for an existing DB person."""
+        """Choose the best NSOPW hit for an existing DB person.
+
+        Safety rules (wrong-person attachment is worse than a miss):
+        - Exact last-name token match required (no substring-in-fullname).
+        - First name must match exactly or as a clear prefix (≥3 chars).
+        - State must match when both sides have a state.
+        - DOB must match when both sides have DOB; conflict → reject.
+        - Ambiguous ties (same top score) → return None (do not guess).
+        """
         if not hits:
             return None
-        want_first = (rec.get("first_name") or "").strip().lower().split()[0:1]
+
+        def _tok(s: Any) -> str:
+            return (str(s or "").strip().lower())
+
+        want_first = _tok(rec.get("first_name")).split()[:1]
         want_first_s = want_first[0] if want_first else ""
-        want_last = (rec.get("last_name") or "").strip().lower()
+        want_last = _tok(rec.get("last_name"))
+        want_middle = _tok(rec.get("middle_name")).split()[:1]
+        want_middle_s = want_middle[0] if want_middle else ""
         want_state = (
             rec.get("state") or rec.get("source_state") or ""
         ).strip().upper()
+        if want_state in ("", "UNK", "US", "YY", "XX"):
+            want_state = ""
+        want_dob = NSOPWEthnicDatabaseBuilder._normalize_dob_key(
+            rec.get("date_of_birth")
+        )
+        try:
+            want_age = int(rec.get("age")) if rec.get("age") not in (None, "") else None
+        except (TypeError, ValueError):
+            want_age = None
 
-        def score(hit: Any) -> tuple:
-            hf = (getattr(hit, "first_name", None) or "").strip().lower()
-            hl = (getattr(hit, "last_name", None) or "").strip().lower()
-            full = (getattr(hit, "full_name", None) or "").strip().lower()
+        if not want_last:
+            return None
+
+        scored: List[tuple] = []
+        for hit in hits:
+            hf = _tok(getattr(hit, "first_name", None))
+            hl = _tok(getattr(hit, "last_name", None))
+            hm = _tok(getattr(hit, "middle_name", None))
             st = (
                 getattr(hit, "state", None)
                 or getattr(hit, "jurisdiction_id", None)
                 or ""
             ).strip().upper()
-            s = 0
-            if want_last and (hl == want_last or want_last in full):
-                s += 5
-            if want_first_s and (hf.startswith(want_first_s) or want_first_s in full):
-                s += 3
+            if st in ("", "UNK", "US"):
+                st = ""
+            hit_dob = NSOPWEthnicDatabaseBuilder._normalize_dob_key(
+                getattr(hit, "date_of_birth", None)
+            )
+            try:
+                hit_age = (
+                    int(getattr(hit, "age", None))
+                    if getattr(hit, "age", None) not in (None, "")
+                    else None
+                )
+            except (TypeError, ValueError):
+                hit_age = None
+
+            # Exact last name only — never substring (Hall ≠ Marshall)
+            if not hl or hl != want_last:
+                continue
+
+            # DOB conflict rejects
+            if want_dob and hit_dob and want_dob != hit_dob:
+                continue
+            # Age conflict when no DOB (allow ±1)
+            if (
+                want_age is not None
+                and hit_age is not None
+                and not want_dob
+                and not hit_dob
+                and abs(want_age - hit_age) > 1
+            ):
+                continue
+            # State conflict rejects when both known
+            if want_state and st and want_state != st and want_state not in st:
+                continue
+
+            s = 5  # last-name exact
+            first_ok = False
+            if want_first_s and hf:
+                if hf == want_first_s:
+                    s += 4
+                    first_ok = True
+                elif len(want_first_s) >= 3 and (
+                    hf.startswith(want_first_s) or want_first_s.startswith(hf)
+                ):
+                    s += 2
+                    first_ok = True
+            elif not want_first_s:
+                # No first name on record — allow last+state+DOB only
+                first_ok = bool(want_dob and hit_dob and want_dob == hit_dob)
+
+            if not first_ok and not (want_dob and hit_dob and want_dob == hit_dob):
+                # Need first-name evidence OR matching DOB
+                continue
+
             if want_state and st and (st == want_state or want_state in st):
-                s += 2
+                s += 3
+            elif want_state and not st:
+                pass  # unknown hit state — no bonus, not rejected
+            elif want_state and st:
+                continue  # already handled above; keep for clarity
+
+            if want_dob and hit_dob and want_dob == hit_dob:
+                s += 5
+            if want_middle_s and hm and (
+                hm == want_middle_s or hm.startswith(want_middle_s)
+            ):
+                s += 1
             if getattr(hit, "image_uri", None) or getattr(hit, "offender_uri", None):
                 s += 1
-            return (s, 1 if getattr(hit, "image_uri", None) else 0)
 
-        ranked = sorted(hits, key=score, reverse=True)
-        best = ranked[0]
-        if score(best)[0] < 5:
-            # Require at least last-name match
+            # Minimum: last(5)+first prefix(2)=7, or last+DOB(5)=10
+            if s < 7:
+                continue
+            scored.append((s, hit))
+
+        if not scored:
             return None
-        return best
+        scored.sort(key=lambda t: t[0], reverse=True)
+        top = scored[0][0]
+        tops = [h for s, h in scored if s == top]
+        # Ambiguous homonyms — do not guess
+        if len(tops) > 1:
+            return None
+        return tops[0]
+
+    def _primary_fetch_url(self, url: str, state: str = "") -> str:
+        """Pick a single openable http(s) URL from a possibly merged source_url."""
+        raw = (url or "").strip()
+        if not raw:
+            return ""
+        try:
+            from scraper.public_links import resolve_public_source_url, split_source_urls
+
+            resolved = resolve_public_source_url(raw, state=state or None)
+            if resolved and resolved.lower().startswith("http"):
+                return resolved
+            parts = split_source_urls(raw)
+            if parts:
+                return parts[0]
+        except Exception:
+            pass
+        if " | " in raw:
+            raw = raw.split(" | ", 1)[0].strip()
+        return raw if raw.lower().startswith("http") else ""
 
     def _url_exists(self, url: str) -> bool:
         u = (url or "").strip()
@@ -2096,7 +2501,13 @@ class NSOPWEthnicDatabaseBuilder:
         else:
             record["flags"] = json.dumps(tags)
 
-    def _ensure_photo(self, record: Dict[str, Any], hit: Any, jurisdiction: str) -> None:
+    def _ensure_photo(
+        self,
+        record: Dict[str, Any],
+        hit: Any,
+        jurisdiction: str,
+        fetcher: Optional[ReportFetcher] = None,
+    ) -> None:
         """Download / attach a local offender photo when possible.
 
         Priority:
@@ -2106,9 +2517,14 @@ class NSOPWEthnicDatabaseBuilder:
 
         HTML assets often include large site chrome GIFs (FL FDLE banners ~30KB).
         Those must never block a dedicated CallImage / imageUri download.
+
+        ``fetcher`` lets a parallel report worker download through its own HTTP
+        session (defaults to the builder's shared fetcher for the sequential
+        path).
         """
-        min_primary = int(getattr(self.reports, "MIN_PRIMARY_PHOTO_BYTES", 2000) or 2000)
-        min_any = int(getattr(self.reports, "MIN_PHOTO_BYTES", 80) or 80)
+        fetcher = fetcher or self.reports
+        min_primary = int(getattr(fetcher, "MIN_PRIMARY_PHOTO_BYTES", 2000) or 2000)
+        min_any = int(getattr(fetcher, "MIN_PHOTO_BYTES", 80) or 80)
 
         def _file_ok(path: str, min_bytes: int) -> bool:
             try:
@@ -2167,7 +2583,8 @@ class NSOPWEthnicDatabaseBuilder:
             except Exception:
                 pass
             record["photo_path"] = path
-            self.stats.photos_saved += 1
+            with self._stats_lock:
+                self.stats.photos_saved += 1
             if not from_url:
                 return
             try:
@@ -2217,7 +2634,7 @@ class NSOPWEthnicDatabaseBuilder:
                 referer = "https://www.icrimewatch.net/"
             if not referer:
                 referer = "https://www.nsopw.gov/"
-            return self.reports.download_photo(
+            return fetcher.download_photo(
                 url,
                 photo_dir,
                 referer=referer,
@@ -2240,6 +2657,27 @@ class NSOPWEthnicDatabaseBuilder:
                     photo_url = dedicated[0]
             except Exception:
                 pass
+
+        if photo_url:
+            try:
+                from scraper.mugshot_ethnicity.photo_quality import (
+                    url_has_empty_image_id,
+                    url_looks_like_chrome,
+                )
+
+                if url_has_empty_image_id(photo_url) or url_looks_like_chrome(photo_url):
+                    # FL CallImage?imgID= / SC ImageId=0 — never download or keep
+                    record["photo_url"] = None
+                    photo_url = ""
+                    if existing and not existing_in_photos:
+                        record["photo_path"] = None
+                        existing = ""
+                        existing_is_mugshot = False
+            except Exception:
+                low = photo_url.lower()
+                if "imgid=0" in low or "imageid=0" in low or "imgid=&" in low or low.endswith("imgid="):
+                    record["photo_url"] = None
+                    photo_url = ""
 
         if photo_url:
             record["photo_url"] = photo_url
@@ -2336,6 +2774,7 @@ class NSOPWEthnicDatabaseBuilder:
             for bad in (
                 "logo", "icon", "sprite", "pixel", "spacer", "banner", "button",
                 "header", "footer", "nav", "seal", "badge", "map",
+                "help", "question", "chat", "tooltip", "info",
             ):
                 if bad in name:
                     score -= 25
@@ -2355,6 +2794,9 @@ class NSOPWEthnicDatabaseBuilder:
                 if w > 0 and h > 0:
                     if min(w, h) < 40:
                         score -= 25
+                    # SC speech-bubble help icons are ~108×109 solid-color PNGs
+                    if max(w, h) <= 128 and sz < 15_000:
+                        score -= 20
                     ratio = max(w, h) / float(min(w, h))
                     if ratio >= 2.4:
                         score -= 30

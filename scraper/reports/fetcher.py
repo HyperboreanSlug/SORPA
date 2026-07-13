@@ -699,17 +699,18 @@ class ReportFetcher:
         if not base.lower().startswith(("http://", "https://")):
             return None
         low_u = base.lower()
-        # No photo on record (SC/others use ImageId=0 as placeholder)
-        if "imgid=0" in low_u or "imageid=0" in low_u or "image_id=0" in low_u:
-            return None
-        # Never fetch seals / spacers / tracking pixels as mugshots
+        # No photo on record (SC ImageId=0; FL empty CallImage?imgID=)
         try:
-            from scraper.mugshot_ethnicity.photo_quality import url_looks_like_chrome
+            from scraper.mugshot_ethnicity.photo_quality import (
+                url_has_empty_image_id,
+                url_looks_like_chrome,
+            )
 
-            if url_looks_like_chrome(base):
+            if url_has_empty_image_id(base) or url_looks_like_chrome(base):
                 return None
         except Exception:
-            pass
+            if "imgid=0" in low_u or "imageid=0" in low_u or "image_id=0" in low_u:
+                return None
         min_sz = self.MIN_PHOTO_BYTES if min_bytes is None else int(min_bytes)
         try:
             photo_dir = Path(photo_dir)
@@ -1036,6 +1037,7 @@ class ReportFetcher:
             for bad in (
                 "logo", "icon", "sprite", "pixel", "tracking", "1x1", "spacer",
                 "banner", "button", "header", "footer", "seal", "badge", "map",
+                "help", "question", "chat", "tooltip",
             ):
                 if bad in low:
                     score -= 8

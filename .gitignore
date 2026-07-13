@@ -62,6 +62,7 @@ SOR_Archives/
 # Local scrubbed copies used when publishing (release assets live on GitHub Releases)
 releases/*.db
 releases/*.db.zip
+releases/offenders.photos.*.zip
 releases/*_scrubbed.db
 !releases/MANIFEST.json
 
@@ -86,5 +87,6 @@ tokens/
 secrets/
 # Never commit release DB binaries (public copies go to GitHub Releases only)
 releases/offenders.db.zip
+releases/offenders.photos.*.zip
 releases/offenders_scrubbed.db
 releases/*.db.bak*

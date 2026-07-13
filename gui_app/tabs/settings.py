@@ -98,9 +98,11 @@ class SettingsTabMixin:
         )
         _muted(
             sync_card,
-            "Optional: download the shared public offenders archive from GitHub Releases. "
-            "Archives use project-relative paths only (no local user-profile paths). "
-            "When enabled, the app checks for updates on every open.",
+            "Optional: download the shared public offenders archive from GitHub Releases "
+            "(SQLite + archived mugshots under data/report_pages/*/photos/). "
+            "Photo packs are several GB. Archives use project-relative paths only "
+            "(no local user-profile paths). When enabled, the app checks for updates "
+            "on every open.",
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         self.settings_db_sync_enabled = ctk.BooleanVar(
@@ -137,8 +139,8 @@ class SettingsTabMixin:
         sync_act.pack(fill="x", padx=14, pady=(0, 8))
         self.settings_db_sync_btn = ctk.CTkButton(
             sync_act,
-            text="Refresh database now",
-            width=160,
+            text="Refresh database & photos",
+            width=190,
             height=34,
             command=self._settings_db_sync_now,
             fg_color=C["accent"],

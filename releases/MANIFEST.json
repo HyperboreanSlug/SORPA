@@ -1,9 +1,30 @@
 {
   "asset": "offenders.db.zip",
   "db_name": "offenders.db",
-  "sha256": "66bd8849660ff783bfe0e9bf0ea583fae8d8e911e960ec7a304c443df5f187cf",
-  "size_bytes": 120735398,
-  "created_at_utc": "2026-07-12T22:59:30Z",
-  "record_count": 301313,
-  "notes": "Public U.S. sex offender registry archive. Paths are project-relative. No local user profile paths."
+  "sha256": "fa55f8a7efcfe4c84dfebcd9dc73c2284cc0a1c69447d9ef0027222afb5b289b",
+  "size_bytes": 122354623,
+  "created_at_utc": "2026-07-13T01:44:35Z",
+  "record_count": 303903,
+  "records_with_photo_path": 58722,
+  "includes_photos": true,
+  "photos": [
+    {
+      "name": "offenders.photos.001.zip",
+      "sha256": "9c627b1dd93beefa57dbc8354d99d7d1a25cf07fd573655e6f1bb5fb1ac9494f",
+      "size_bytes": 1806208169,
+      "file_count": 39878,
+      "uncompressed_bytes": 1799348569
+    },
+    {
+      "name": "offenders.photos.002.zip",
+      "sha256": "7479d3f7a4939c273d6d75b28ca60dbc2adfe7c3e1e53720ca88b884cb67c473",
+      "size_bytes": 1765834549,
+      "file_count": 16383,
+      "uncompressed_bytes": 1763016599
+    }
+  ],
+  "photo_part_count": 2,
+  "photo_file_count": 56261,
+  "photo_size_bytes": 3572042718,
+  "notes": "Public U.S. sex offender registry archive. Paths are project-relative. Mugshots ship as offenders.photos.NNN.zip and extract under data/report_pages/*/photos/."
 }

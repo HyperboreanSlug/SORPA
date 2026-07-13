@@ -321,6 +321,7 @@ class ArchiverApp(
                     "Public database",
                     "Download the shared public offender database from GitHub?\n\n"
                     "• Contains publicly published registry fields only\n"
+                    "• Includes archived mugshot photos (several GB — may take a while)\n"
                     "• Paths are project-relative (no local user folders)\n"
                     "• If you choose Yes, the app will check for updates on every open\n\n"
                     "You can change this later under Settings → Public database.",
