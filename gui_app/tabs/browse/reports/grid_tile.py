@@ -127,9 +127,9 @@ class ReportsGridTileMixin:
         index: int,
     ):
         """Grid tile: max photo, min chrome; 2 rows still fit on 1080p (~332px)."""
-        # Fixed height: 2×(332+4) ≈ 672 ≤ typical 1080p content area
-        # Non-photo chrome ~130px → photo ~200px
-        _W, _H = 180, 332
+        # Fixed height: room for photo + chrome + export strip
+        # Non-photo chrome ~150px → photo ~200px
+        _W, _H = 180, 352
         _PHOTO_H = 200
         card = ctk.CTkFrame(
             parent,
@@ -231,9 +231,14 @@ class ReportsGridTileMixin:
         )
         status_lbl.pack(side="right")
 
-        actions = ctk.CTkFrame(card, fg_color="transparent", height=24)
+        # Bottom action strip: verdict + export (fixed height for grid tiles)
+        actions = ctk.CTkFrame(card, fg_color="transparent", height=44)
         actions.pack(fill="x", padx=2, pady=(1, 2), side="bottom")
         actions.pack_propagate(False)
+
+        row1 = ctk.CTkFrame(actions, fg_color="transparent", height=22)
+        row1.pack(fill="x")
+        row1.pack_propagate(False)
 
         sel_var = ctk.BooleanVar(
             value=bool(
@@ -242,7 +247,7 @@ class ReportsGridTileMixin:
             )
         )
         ctk.CTkCheckBox(
-            actions,
+            row1,
             text="",
             width=18,
             variable=sel_var,
@@ -282,23 +287,39 @@ class ReportsGridTileMixin:
             self._reports_update_metrics()
 
         ctk.CTkButton(
-            actions, text="✗", width=34, height=22,
+            row1, text="✗", width=30, height=20,
             command=lambda: _set("confirmed"),
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
             font=("Segoe UI", 11),
         ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="✓", width=34, height=22,
+            row1, text="✓", width=30, height=20,
             command=lambda: _set("correct"),
             fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
             font=("Segoe UI", 11),
         ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="Skip", width=40, height=22,
+            row1, text="Skip", width=36, height=20,
             command=lambda: _set("skip"),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
-            border_width=1, border_color=C["border"], font=("Segoe UI", 10),
+            border_width=1, border_color=C["border"], font=("Segoe UI", 9),
         ).pack(side="left")
+
+        # Single-card export pinned to bottom of cell
+        export_btn = ctk.CTkButton(
+            actions,
+            text="Export",
+            height=18,
+            font=("Segoe UI", 10),
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            text_color=C["bg"],
+            command=lambda m=mc: None,  # set after btn created
+        )
+        export_btn.configure(
+            command=lambda m=mc, b=export_btn: self._reports_export_single_card(m, b)
+        )
+        export_btn.pack(fill="x", padx=1, pady=(2, 0))
 
         def _bind_open(widget, m=mc):
             try:

@@ -109,42 +109,21 @@ def person_name(record: Mapping[str, Any]) -> str:
 
 
 def location(record: Mapping[str, Any]) -> str:
-    """Last known residence only (address → city/county/state). Empty if none."""
+    """City and state only (export cards). Empty if none."""
     return last_known_location(record)
 
 
 def last_known_location(record: Mapping[str, Any]) -> str:
-    """Prefer street address; else city / county / state. Never 'Unknown'."""
-    addr = _clean_field(record.get("address"))
+    """City + state only. Never address/county; never 'Unknown'."""
     city = _clean_field(record.get("city"))
-    county = _clean_field(record.get("county"))
     state = _clean_field(record.get("state") or record.get("source_state")).upper()
-    # Drop junk state codes
     if state in ("YY", "XX", "ZZ", "US", "NA", "UN", "UNK"):
         state = ""
-
-    if addr:
-        # Address often already includes city/state — avoid doubling if present
-        tail = []
-        if city and city.casefold() not in addr.casefold():
-            tail.append(city.title() if city == city.upper() or city == city.lower() else city)
-        if state and state not in addr.upper():
-            tail.append(state)
-        if tail:
-            return f"{addr}, {', '.join(tail)}"
-        return addr
-
-    bits = []
     if city:
-        bits.append(city.title() if city == city.upper() or city == city.lower() else city)
-    if county:
-        c = county.replace("-", " ").replace("_", " ")
-        c = c.title() if c == c.upper() or c == c.lower() else c
-        if not c.casefold().endswith("county"):
-            c = f"{c} County"
-        bits.append(c)
-    if state:
-        bits.append(state)
+        # Title-case all-caps/all-lower city names only
+        if city == city.upper() or city == city.lower():
+            city = city.title()
+    bits = [b for b in (city, state) if b]
     return ", ".join(bits)
 
 

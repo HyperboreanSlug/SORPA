@@ -70,7 +70,26 @@ def load_mugshot(record: Mapping[str, Any], box: Tuple[int, int]) -> Image.Image
             fill=(120, 120, 130),
         )
         return placeholder
-    return ImageOps.fit(img, box, method=Image.Resampling.LANCZOS, centering=(0.5, 0.35))
+    # Full photo inside the box — no zoom/crop (letterbox if aspect differs)
+    return contain_photo(img, box)
+
+
+def contain_photo(img: Image.Image, box: Tuple[int, int]) -> Image.Image:
+    """Scale photo to fit entirely inside *box* (no crop/zoom); pad with card bg."""
+    tw, th = int(box[0]), int(box[1])
+    if tw < 1 or th < 1:
+        return img
+    # ImageOps.contain keeps aspect ratio and fits inside the box
+    fitted = ImageOps.contain(img, (tw, th), method=Image.Resampling.LANCZOS)
+    # Dark pad matches export card background (not zoomed crop)
+    out = Image.new("RGB", (tw, th), (12, 12, 14))
+    x = (tw - fitted.width) // 2
+    y = (th - fitted.height) // 2
+    if fitted.mode == "RGBA":
+        out.paste(fitted, (x, y), fitted)
+    else:
+        out.paste(fitted.convert("RGB"), (x, y))
+    return out
 
 
 def is_backdrop(r: int, g: int, b: int) -> bool:

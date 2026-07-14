@@ -290,7 +290,19 @@ class ReportsCardsAddMixin:
             ),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"], font=FONT_SM,
-        ).pack(side="right")
+        ).pack(side="right", padx=(0, 4))
+        list_export_btn = ctk.CTkButton(
+            actions, text="Export", width=64, height=26,
+            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
+            font=FONT_SM,
+            command=lambda: None,
+        )
+        list_export_btn.configure(
+            command=lambda m=mc, b=list_export_btn: self._reports_export_single_card(
+                m, b
+            )
+        )
+        list_export_btn.pack(side="right", padx=(0, 4))
         # Double-click card → archived HTML, else live URL, else photo
         try:
             card.bind(

@@ -1,12 +1,70 @@
-"""Reports: select cards and export watermarked 1×2 / 2×2 grids."""
+"""Reports: select cards, single-card export, and 1×2 / 2×2 grids."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Optional
 
 from tkinter import messagebox
 
 
 class ReportsExportGridMixin:
+    def _reports_record_for_export(self, mc) -> Dict[str, Any]:
+        """Snapshot record for card export (listed race preferred)."""
+        rec = dict(getattr(mc, "record", None) or {})
+        try:
+            listed = getattr(mc, "expected_race", None)
+            if listed and str(listed).strip():
+                rec["race"] = str(listed).strip()
+        except Exception:
+            pass
+        return rec
+
+    def _reports_export_single_card(self, mc, btn=None) -> None:
+        """Export one watermarked mugshot card to the Desktop (no dialog on success)."""
+        record = self._reports_record_for_export(mc)
+        if not record:
+            return
+        if btn is not None:
+            try:
+                btn.configure(state="disabled", text="…")
+            except Exception:
+                pass
+
+        def work():
+            from gui_app.shared.export_card import export_record_card_to_desktop
+
+            return export_record_card_to_desktop(record)
+
+        def done(result=None, error=None):
+            if btn is not None:
+                try:
+                    btn.configure(state="normal", text="Export")
+                except Exception:
+                    pass
+            if error is not None:
+                messagebox.showerror("Export card", str(error))
+                return
+            path = result
+            msg = f"Card → {getattr(path, 'name', path)}"
+            try:
+                if hasattr(self, "report_status"):
+                    self.report_status.configure(text=msg)
+                if hasattr(self, "stats_label"):
+                    self.stats_label.configure(text=msg)
+            except Exception:
+                pass
+            try:
+                self.log_queue.put(f"Reports card export: {path}")
+            except Exception:
+                pass
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="report-card-export")
+        else:
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
+
     def _reports_export_selected_init(self) -> None:
         if not hasattr(self, "_report_export_selected"):
             self._report_export_selected: Dict[str, Dict[str, Any]] = {}
@@ -46,15 +104,7 @@ class ReportsExportGridMixin:
         self._reports_export_selected_init()
         key = self._reports_export_key(mc)
         if selected:
-            rec = dict(getattr(mc, "record", None) or {})
-            # Prefer listed registry race for watermarked share cards
-            try:
-                listed = getattr(mc, "expected_race", None)
-                if listed and str(listed).strip():
-                    rec["race"] = str(listed).strip()
-            except Exception:
-                pass
-            self._report_export_selected[key] = rec
+            self._report_export_selected[key] = self._reports_record_for_export(mc)
         else:
             self._report_export_selected.pop(key, None)
         self._reports_update_export_status()

@@ -31,6 +31,32 @@ def draw_labeled_block(
     return top + 10
 
 
+def plan_crime_block(
+    draw,
+    cr: str,
+    *,
+    max_text_w: int,
+    max_height: int,
+) -> tuple:
+    """Return (font, line_h, lines, total_h) that fits in *max_height*."""
+    label_h = 34
+    body_avail = max_height - label_h - 8
+    if body_avail < 24:
+        return None
+    for size in (34, 30, 26, 22, 18):
+        font = load_font(size, bold=True)
+        line_h = max(28, size + 8)
+        max_lines = max(1, body_avail // line_h)
+        lines = fit_lines(draw, cr, font, max_text_w, max_lines)
+        body_h = len(lines) * line_h
+        if body_h <= body_avail:
+            return font, line_h, lines, label_h + body_h + 6
+    font = load_font(18, bold=True)
+    line_h = 26
+    lines = [ellipsize(draw, cr, font, max_text_w)]
+    return font, line_h, lines, label_h + line_h + 6
+
+
 def draw_crime_block(
     draw,
     cr: str,
@@ -40,33 +66,27 @@ def draw_crime_block(
     max_text_w: int,
     bottom_limit: int,
     label_font,
+    anchor_bottom: bool = False,
 ) -> int:
-    """Draw CRIME, shrinking type so it never spills past *bottom_limit*."""
+    """Draw CRIME. If *anchor_bottom*, pin the block to just above *bottom_limit*."""
     label_h = 34
-    avail = bottom_limit - top - label_h - 8
-    if avail < 36:
+    max_height = bottom_limit - top
+    if max_height < 40:
         return top
-    draw.text((margin, top), "CRIME", font=label_font, fill=_MUTED)
-    body_top = top + label_h
-    for size in (34, 30, 26, 22, 18):
-        font = load_font(size, bold=True)
-        line_h = max(28, size + 8)
-        max_lines = max(1, avail // line_h)
-        lines = fit_lines(draw, cr, font, max_text_w, max_lines)
-        if len(lines) * line_h <= avail:
-            y = body_top
-            for line in lines:
-                draw.text((margin, y), line, font=font, fill=_TEXT)
-                y += line_h
-            return y + 6
-    font = load_font(18, bold=True)
-    draw.text(
-        (margin, body_top),
-        ellipsize(draw, cr, font, max_text_w),
-        font=font,
-        fill=_TEXT,
+    plan = plan_crime_block(
+        draw, cr, max_text_w=max_text_w, max_height=max_height
     )
-    return body_top + 28
+    if plan is None:
+        return top
+    font, line_h, lines, total_h = plan
+    if anchor_bottom:
+        top = max(top, bottom_limit - total_h)
+    draw.text((margin, top), "CRIME", font=label_font, fill=_MUTED)
+    y = top + label_h
+    for line in lines:
+        draw.text((margin, y), line, font=font, fill=_TEXT)
+        y += line_h
+    return y + 6
 
 
 def fit_lines(draw, text: str, font, max_width: int, max_lines: int) -> List[str]:

@@ -243,51 +243,42 @@ class ReportsBuildMixin:
         if hasattr(self, "_reports_export_selected_init"):
             self._reports_export_selected_init()
 
-        page_flow = _FlowRow(top, padx=5, pady=2)
+        # Second line: pagination + summary stats (same row / flow, not a third strip)
+        line2 = _FlowRow(top, padx=5, pady=2)
         self._report_page = 0
         self._report_pool: list = []
-        page_flow.add(
+        line2.add(
             ctk.CTkButton(
-                page_flow.host, text="◀ Prev", width=80,
+                line2.host, text="◀ Prev", width=80,
                 command=self._reports_prev_page,
                 fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
                 border_width=1, border_color=C["border"],
             )
         )
         self.report_page_label = ctk.CTkLabel(
-            page_flow.host, text="Page —", font=FONT_SM, text_color=C["muted"],
+            line2.host, text="Page —", font=FONT_SM, text_color=C["muted"],
         )
-        page_flow.add(self.report_page_label)
-        page_flow.add(
+        line2.add(self.report_page_label)
+        line2.add(
             ctk.CTkButton(
-                page_flow.host, text="Next ▶", width=90,
+                line2.host, text="Next ▶", width=90,
                 command=self._reports_next_page,
                 fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
                 border_width=1, border_color=C["border"],
             )
         )
-        self.report_layout_hint = ctk.CTkLabel(
-            page_flow.host,
-            text="Check cards → 1×2 / 2×2 watermarked export",
-            font=FONT_SM,
-            text_color=C["dim"],
-        )
-        page_flow.add(self.report_layout_hint)
-
-        # ---- Summary metrics (also wrap) ----
-        sum_flow = _FlowRow(top, padx=4, pady=2)
 
         def _metric(key: str) -> ctk.CTkLabel:
             chip = ctk.CTkFrame(
-                sum_flow.host, fg_color=C["elevated"], corner_radius=6,
+                line2.host, fg_color=C["elevated"], corner_radius=6,
                 border_width=1, border_color=C["border"],
             )
             lb = ctk.CTkLabel(
                 chip, text="—", font=FONT_SM, text_color=C["text"], anchor="center",
             )
-            lb.pack(padx=10, pady=5)
+            lb.pack(padx=8, pady=4)
             setattr(self, key, lb)
-            sum_flow.add(chip)
+            line2.add(chip)
             return lb
 
         _metric("report_m_total")
@@ -295,6 +286,14 @@ class ReportsBuildMixin:
         _metric("report_m_confirmed")
         _metric("report_m_correct")
         _metric("report_m_unreviewed")
+
+        self.report_layout_hint = ctk.CTkLabel(
+            line2.host,
+            text="Check cards → 1×2 / 2×2 export",
+            font=FONT_SM,
+            text_color=C["dim"],
+        )
+        line2.add(self.report_layout_hint)
 
         self.report_status = ctk.CTkLabel(
             top,
@@ -314,8 +313,7 @@ class ReportsBuildMixin:
             add="+",
         )
         _after_idle_reflow(self, flow)
-        _after_idle_reflow(self, page_flow)
-        _after_idle_reflow(self, sum_flow)
+        _after_idle_reflow(self, line2)
 
         # ---- Scrollable card list (fast wheel binding after paint) ----
         scroll = ctk.CTkScrollableFrame(

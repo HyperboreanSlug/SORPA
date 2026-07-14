@@ -36,7 +36,7 @@ from scraper.searcher import format_race_label
 
 
 def render_export_card(record: Mapping[str, Any]) -> Image.Image:
-    """Watermarked card: last known location only; no 'Unknown'; crime fits box."""
+    """Watermarked card: full photo (no zoom), city+state only, crime at bottom."""
     canvas = Image.new("RGBA", (_CARD_W, _CARD_H), _BG)
     draw = ImageDraw.Draw(canvas)
 
@@ -44,6 +44,8 @@ def render_export_card(record: Mapping[str, Any]) -> Image.Image:
     footer_reserve = 56
     photo_box = (_CARD_W - margin * 2, _PHOTO_H)
     photo_rect = (margin, margin, margin + photo_box[0], margin + photo_box[1])
+    # Photo box: dark frame, full image letterboxed inside (never cropped/zoomed)
+    draw.rectangle(photo_rect, fill=(12, 12, 14, 255))
     mug = load_mugshot(record, photo_box).convert("RGBA")
     canvas.paste(mug, (margin, margin), mug if mug.mode == "RGBA" else None)
 
@@ -77,6 +79,7 @@ def render_export_card(record: Mapping[str, Any]) -> Image.Image:
 
     y = bar_y + 28
     max_text_w = _CARD_W - margin * 2
+    crime_bottom = _CARD_H - margin - footer_reserve
 
     for line in wrap_text(draw, name, name_font, max_text_w)[:2]:
         draw.text((margin, y), line, font=name_font, fill=_TEXT)
@@ -85,28 +88,31 @@ def render_export_card(record: Mapping[str, Any]) -> Image.Image:
     if race:
         y = _draw_race_banner(draw, race, y, margin, max_text_w, banner_font)
 
+    # City + state only (never address/county)
     if loc:
         y = draw_labeled_block(
             draw,
-            "Last known location",
+            "Location",
             loc,
             y,
             margin,
             max_text_w,
             label_font,
             value_font,
-            max_lines=3,
+            max_lines=2,
         )
 
+    # Crime always at the bottom of the card (above watermark handle)
     if cr:
-        y = draw_crime_block(
+        draw_crime_block(
             draw,
             cr,
-            y,
+            y + 12,
             margin=margin,
             max_text_w=max_text_w,
-            bottom_limit=_CARD_H - margin - footer_reserve,
+            bottom_limit=crime_bottom,
             label_font=label_font,
+            anchor_bottom=True,
         )
 
     handle = _WATERMARK or "@DoDeportations"
