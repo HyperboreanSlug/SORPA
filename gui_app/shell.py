@@ -110,7 +110,17 @@ class ArchiverApp(
         header = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
         header.pack(fill="x")
 
-        # Wrap title / DB path / actions so they stay visible on narrow windows
+        # Right: operational status only (not a second record counter)
+        self.stats_label = ctk.CTkLabel(
+            header,
+            text="Ready",
+            font=FONT_SM,
+            text_color=C["accent"],
+            anchor="e",
+        )
+        self.stats_label.pack(side="right", padx=(8, 12), pady=6)
+
+        # Left: title + DB path (includes the only record count)
         flow = FlowRow(header, padx=6, pady=2)
         self._header_flow = flow
         h = flow.host
@@ -142,11 +152,6 @@ class ArchiverApp(
             border_color=C["border"],
         ).pack(side="left", pady=4)
         flow.add(db_chip)
-
-        self.stats_label = ctk.CTkLabel(
-            h, text="Ready", font=FONT_SM, text_color=C["accent"]
-        )
-        flow.add(self.stats_label)
         after_idle_reflow(self, flow)
 
         self._header_record_count: Optional[int] = None

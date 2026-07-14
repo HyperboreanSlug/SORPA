@@ -89,20 +89,8 @@ class ShellHeaderMixin:
                     self.header_db_label.configure(text=f"DB: {path_show}{n2}")
                 except Exception:
                     pass
-            if hasattr(self, "stats_label") and count is not None:
-                try:
-                    cur = (self.stats_label.cget("text") or "").strip()
-                    idle_like = (
-                        not cur
-                        or cur == "Ready"
-                        or cur.endswith(" records")
-                        or cur.endswith("record")
-                        or "selected" in cur.lower()
-                    )
-                    if idle_like and not getattr(self, "is_running", False):
-                        self.stats_label.configure(text=f"{count:,} records")
-                except Exception:
-                    pass
+            # stats_label is status-only (Ready / scrape / export). Do not
+            # mirror the record count there — that lived on DB line only.
 
         if hasattr(self, "run_bg"):
             self.run_bg(work, apply, name="header-count")
