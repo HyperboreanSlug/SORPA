@@ -146,8 +146,8 @@ class ShellOpsMixin:
         self._open_path(path)
 
     def _on_close(self) -> None:
-        """Window close: optional DB backup, then destroy."""
-        if self._closing:
+        """Window close: cancel jobs, optional backup, then hard process exit."""
+        if getattr(self, "_closing", False) and getattr(self, "_shutdown_armed", False):
             return
 
         if getattr(self, "is_running", False):
@@ -162,7 +162,13 @@ class ShellOpsMixin:
             except Exception:
                 pass
 
-        self._closing = True
+        # Stop workers / after-loops immediately (before slow backup)
+        try:
+            from gui_app.process_lifecycle import mark_closing
+
+            mark_closing(self)
+        except Exception:
+            self._closing = True
 
         if hasattr(self, "settings_backup_on_close"):
             try:
@@ -196,11 +202,24 @@ class ShellOpsMixin:
                         f"Could not backup database:\n{e}\n\nClose anyway?",
                     ):
                         self._closing = False
+                        try:
+                            self._shutdown_armed = False
+                        except Exception:
+                            pass
                         return
                 except Exception:
                     pass
 
         try:
-            self.destroy()
+            from gui_app.process_lifecycle import shutdown_app
+
+            shutdown_app(self)
         except Exception:
-            pass
+            try:
+                self.quit()
+            except Exception:
+                pass
+            try:
+                self.destroy()
+            except Exception:
+                pass

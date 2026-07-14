@@ -38,13 +38,18 @@ class AsyncJobsMixin:
 
         ``done`` is invoked as ``done(result=..., error=...)``.
         Returns a job id (monotonic) for optional cancellation checks.
+        Refuses new work while the app is closing.
         """
+        if getattr(self, "_closing", False):
+            return -1
         if not hasattr(self, "_bg_queue"):
             self._init_async_jobs()
         self._bg_seq = int(getattr(self, "_bg_seq", 0) or 0) + 1
         job_id = self._bg_seq
 
         def worker() -> None:
+            if getattr(self, "_closing", False):
+                return
             result: Any = None
             err: Optional[BaseException] = None
             try:
@@ -55,6 +60,8 @@ class AsyncJobsMixin:
                     traceback.print_exc()
                 except Exception:
                     pass
+            if getattr(self, "_closing", False):
+                return
             try:
                 self._bg_queue.put((job_id, done, result, err))
             except Exception:

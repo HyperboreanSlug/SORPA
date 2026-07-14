@@ -15,7 +15,7 @@
 | Need | Open first |
 |------|------------|
 | GUI entry | `gui.py` → `gui_app/shell.py` |
-| Shell lifecycle | `shell.py`, `shell_sync.py`, `shell_header.py`, `shell_ops.py` |
+| Shell lifecycle | `shell.py`, `shell_sync.py`, `shell_header.py`, `shell_ops.py`, `process_lifecycle.py` |
 | Browse | `gui_app/tabs/browse/` packages |
 | NSOPW UI | `gui_app/tabs/nsopw/` |
 | DeepFace UI | `gui_app/tabs/deepface/` |
@@ -57,6 +57,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `shell_sync.py` | GitHub DB sync |
 | `shell_header.py` | Path + counts (async COUNT, never blocks UI) |
 | `shell_ops.py` | Log, sash, close, tab change |
+| `process_lifecycle.py` | Hard shutdown: cancel flags, quit Tk, force-exit leftover threads |
 | `async_jobs.py` | `run_bg` + main-thread job queue (all DB work) |
 | `shell_warm.py` | Idle-preload lazy tabs so first open is near-instant |
 | `lazy_tabs.py` | `warm()` builds without focus steal / on_change |
