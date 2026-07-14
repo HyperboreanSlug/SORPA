@@ -58,12 +58,19 @@ class SearchBuildMixin:
         bar = ctk.CTkFrame(tab, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
 
+        def _opt_label(text: str, *, first: bool = False) -> None:
+            ctk.CTkLabel(
+                bar, text=text, font=FONT_SM, text_color=C["muted"],
+            ).pack(side="left", padx=((0 if first else 10), 4))
+
+        _opt_label("Name", first=True)
         self.search_name_var = ctk.StringVar()
         ctk.CTkEntry(
-            bar, textvariable=self.search_name_var, placeholder_text="Name…",
-            width=200, fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
-        ).pack(side="left", padx=(0, 8))
+            bar, textvariable=self.search_name_var, placeholder_text="First or last…",
+            width=180, fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        ).pack(side="left", padx=(0, 0))
 
+        _opt_label("State")
         self.search_state_var = ctk.StringVar(value="")
         _US_STATES = [
             "", "ALL",
@@ -79,8 +86,9 @@ class SearchBuildMixin:
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
             button_hover_color=C["border"], dropdown_fg_color=C["panel"],
             dropdown_hover_color=C["elevated"], text_color=C["text"],
-        ).pack(side="left", padx=4)
+        ).pack(side="left", padx=(0, 0))
 
+        _opt_label("Race")
         self.search_race_var = ctk.StringVar(value="")
         ctk.CTkComboBox(
             bar, variable=self.search_race_var, width=120,
@@ -91,9 +99,10 @@ class SearchBuildMixin:
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
             button_hover_color=C["border"], dropdown_fg_color=C["panel"],
             text_color=C["text"],
-        ).pack(side="left", padx=4)
+        ).pack(side="left", padx=(0, 0))
 
         # Surname-ethnicity lists (name-based; includes indian + high-confidence)
+        _opt_label("Ethnicity")
         self.search_ethnicity_var = ctk.StringVar(value="")
         ctk.CTkComboBox(
             bar, variable=self.search_ethnicity_var, width=170,
@@ -112,12 +121,12 @@ class SearchBuildMixin:
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
             button_hover_color=C["border"], dropdown_fg_color=C["panel"],
             text_color=C["text"],
-        ).pack(side="left", padx=4)
+        ).pack(side="left", padx=(0, 0))
 
         ctk.CTkButton(
             bar, text="Search", width=100, command=lambda: self._do_search(),
             fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=(12, 6))
         ctk.CTkButton(
             bar, text="Show all", width=100,
             command=self._search_show_all,

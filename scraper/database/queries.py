@@ -170,7 +170,14 @@ class QueryMixin:
         limit = max(0, int(limit))
         offset = max(0, int(offset))
         if not state or state.upper() == "ALL":
-            query = "SELECT * FROM offenders ORDER BY last_name ASC LIMIT ? OFFSET ?"
+            # Named rows first — NULL last_name sorts first in plain ASC and
+            # made the default Browse view look empty (dashes only).
+            query = (
+                "SELECT * FROM offenders "
+                "ORDER BY CASE WHEN last_name IS NULL "
+                "OR TRIM(COALESCE(last_name, '')) = '' THEN 1 ELSE 0 END, "
+                "last_name ASC LIMIT ? OFFSET ?"
+            )
             rows = self._conn.execute(query, (limit, offset)).fetchall()
         else:
             params: List[Any] = []

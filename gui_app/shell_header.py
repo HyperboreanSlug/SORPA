@@ -1,6 +1,7 @@
 """Header path/count status for ArchiverApp."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +37,7 @@ class ShellHeaderMixin:
             pass
 
     def _refresh_header_db_path(self) -> None:
-        """Show active SQLite path and live offender count in the header."""
+        """Show active SQLite path; count runs off the UI thread."""
         try:
             p = Path(self.db_path)
             if not p.is_absolute():
@@ -49,43 +50,73 @@ class ShellHeaderMixin:
                 show = str(p)
             if len(show) > 48:
                 show = "…" + show[-46:]
+        except Exception:
+            show = str(getattr(self, "db_path", "data/offenders.db"))
+
+        # Immediate path paint (use cached count while worker runs)
+        cached = getattr(self, "_header_record_count", None)
+        n = f"  ·  {cached:,} records" if cached is not None else ""
+        if hasattr(self, "header_db_label"):
+            try:
+                self.header_db_label.configure(text=f"DB: {show}{n}")
+            except Exception:
+                pass
+
+        if getattr(self, "_header_count_busy", False):
+            return
+        self._header_count_busy = True
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+        path_show = show
+
+        def worker() -> None:
             count: Optional[int] = None
-            n = ""
             try:
                 from scraper.database import Database
 
-                db = Database(self.db_path)
+                db = Database(db_path)
                 try:
                     count = int(db.get_total_count() or 0)
-                    n = f"  ·  {count:,} records"
-                    self._header_record_count = count
                 finally:
                     db.close()
             except Exception:
-                if self._header_record_count is not None:
-                    n = f"  ·  {self._header_record_count:,} records"
-            if hasattr(self, "header_db_label"):
-                self.header_db_label.configure(text=f"DB: {show}{n}")
-            if hasattr(self, "stats_label") and count is not None:
-                try:
-                    cur = (self.stats_label.cget("text") or "").strip()
-                    idle_like = (
-                        not cur
-                        or cur == "Ready"
-                        or cur.endswith(" records")
-                        or cur.endswith("record")
-                        or "selected" in cur.lower()
-                    )
-                    if idle_like and not getattr(self, "is_running", False):
-                        self.stats_label.configure(text=f"{count:,} records")
-                except Exception:
-                    pass
-        except Exception:
-            if hasattr(self, "header_db_label"):
-                try:
-                    self.header_db_label.configure(text=f"DB: {self.db_path}")
-                except Exception:
-                    pass
+                count = None
+
+            def apply() -> None:
+                self._header_count_busy = False
+                if count is not None:
+                    self._header_record_count = count
+                n2 = ""
+                c = self._header_record_count
+                if c is not None:
+                    n2 = f"  ·  {c:,} records"
+                if hasattr(self, "header_db_label"):
+                    try:
+                        self.header_db_label.configure(text=f"DB: {path_show}{n2}")
+                    except Exception:
+                        pass
+                if hasattr(self, "stats_label") and count is not None:
+                    try:
+                        cur = (self.stats_label.cget("text") or "").strip()
+                        idle_like = (
+                            not cur
+                            or cur == "Ready"
+                            or cur.endswith(" records")
+                            or cur.endswith("record")
+                            or "selected" in cur.lower()
+                        )
+                        if idle_like and not getattr(self, "is_running", False):
+                            self.stats_label.configure(text=f"{count:,} records")
+                    except Exception:
+                        pass
+
+            try:
+                self.after(0, apply)
+            except Exception:
+                self._header_count_busy = False
+
+        threading.Thread(
+            target=worker, name="header-count", daemon=True
+        ).start()
 
     def _open_data_folder_header(self) -> None:
         path = Path("data")

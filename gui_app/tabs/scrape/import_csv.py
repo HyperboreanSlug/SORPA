@@ -109,24 +109,21 @@ class ScrapeImportMixin:
 
 
     def _after_db_data_changed(self) -> None:
-        """Refresh Integrity / header; mark Misclassify stats as needing re-Analyze."""
-        if hasattr(self, "_refresh_integrity"):
-            try:
-                self._refresh_integrity()
-            except Exception:
-                pass
-        # Always refresh top-bar record count (thread-safe)
+        """Refresh header; schedule Integrity only if that tab is built."""
+        # Header count is async; never block the UI here.
         try:
             if hasattr(self, "schedule_header_refresh"):
                 self.schedule_header_refresh(0)
-            else:
+            elif hasattr(self, "_refresh_header_db_path"):
                 self._refresh_header_db_path()
         except Exception:
+            pass
+        # Integrity refresh is heavy — only if widgets exist; runs in a thread.
+        if hasattr(self, "integrity_summary") and hasattr(self, "_refresh_integrity"):
             try:
-                self._refresh_header_db_path()
+                self.after(50, self._refresh_integrity)
             except Exception:
                 pass
-        # Misclassify / Statistics are computed on demand — prompt re-run
         note = "DB updated · open Misclassify → Analyze to include new rows"
         if hasattr(self, "misclass_status"):
             try:
@@ -138,6 +135,9 @@ class ScrapeImportMixin:
                 self.mcstat_status.configure(text=note)
             except Exception:
                 pass
-        self.log_queue.put(note)
+        try:
+            self.log_queue.put(note)
+        except Exception:
+            pass
 
 

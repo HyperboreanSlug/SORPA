@@ -129,8 +129,32 @@ def _start_deepface_setup_background(app_settings: Optional[dict] = None) -> Non
 
             ok = ensure_deepface(auto_install=True, warm=False, log=_log)
             if ok and warm and deepface_available():
+                # Skip TF model load when weights already on disk — re-warm
+                # loads ~1GB+ and can freeze/thrash the whole machine on launch.
+                try:
+                    from scraper.mugshot_ethnicity.weights_catalog import (
+                        detector_local_status,
+                        weight_local_status,
+                    )
+
+                    need = [
+                        m
+                        for m in (models or ["Race"])
+                        if not weight_local_status(m).get("downloaded")
+                    ]
+                    det_ok = detector_local_status(detector).get("downloaded")
+                    if not need and det_ok:
+                        _log(
+                            f"Weights already cached ({', '.join(models or ['Race'])}"
+                            f" + {detector}) — skip auto warm"
+                        )
+                        return
+                    if not need and not det_ok:
+                        need = models or ["Race"]
+                except Exception:
+                    need = models or ["Race"]
                 download_selected_weights(
-                    models or ["Race"],
+                    need or models or ["Race"],
                     detector_backend=detector,
                     log=_log,
                 )

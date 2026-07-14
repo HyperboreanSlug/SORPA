@@ -51,64 +51,98 @@ from gui_app.widgets import (
 
 class ScrapeDedupeMixin:
     def _check_duplicates(self) -> None:
-        """Scan DB for duplicate groups and show a summary dialog."""
-        from scraper.database import DEFAULT_DEDUPE_STRATEGIES, Database
-
-        strats = list(DEFAULT_DEDUPE_STRATEGIES)
-        try:
-            db = Database(self.db_path)
-            try:
-                summary = db.count_duplicates(strats)
-                samples = db.find_duplicate_groups("source_url", limit_groups=8)
-            finally:
-                db.close()
-        except Exception as e:
-            messagebox.showerror("Duplicate check failed", str(e))
+        """Scan DB for duplicate groups off the UI thread (~10–20s on large DBs)."""
+        if getattr(self, "_dup_check_running", False):
+            messagebox.showinfo("Duplicate check", "Already scanning…")
             return
-
-        lines = [
-            f"Total offenders: {summary['total_offenders']:,}",
-            "",
-            "By match key (safe extras are auto-removable; portal/CAPTCHA clusters are not):",
-        ]
-        for s, info in (summary.get("by_strategy") or {}).items():
-            lines.append(
-                f"  · {s}: {info.get('safe_extra_rows', 0):,} safe removable "
-                f"/ {info.get('extra_rows', 0):,} raw extra "
-                f"({info.get('unsafe_groups', 0)} unsafe groups)"
-            )
-        safe_samples = [g for g in samples if g.get("safe", True)][:5]
-        unsafe_samples = [g for g in samples if not g.get("safe", True)][:3]
-        if safe_samples:
-            lines.append("")
-            lines.append("Sample safe source_url duplicates:")
-            for g in safe_samples:
-                lines.append(
-                    f"  · keep #{g['keep_id']} {g['keep_preview']} "
-                    f"(×{g['count']}) remove {g['remove_ids'][:4]}"
-                )
-        if unsafe_samples:
-            lines.append("")
-            lines.append("Skipped portal/CAPTCHA URL clusters (not removed):")
-            for g in unsafe_samples:
-                lines.append(f"  · ×{g['count']}  {str(g.get('key') or '')[:60]}")
-        lines.append("")
-        lines.append(
-            "Use Remove duplicates… to delete safe extras. "
-            "Details are merged onto the keeper (states, charges, listings/URLs)."
-        )
-        msg = "\n".join(lines)
-        self.log_queue.put("Duplicate check:\n" + msg)
+        self._dup_check_running = True
         if hasattr(self, "integrity_status"):
-            safe_extra = int(summary.get("total_safe_extra_rows") or 0)
-            self.integrity_status.configure(
-                text=f"Duplicates: {safe_extra:,} safe removable"
-            )
-        messagebox.showinfo("Duplicate check", msg)
-        try:
-            self._refresh_integrity()
-        except Exception:
-            pass
+            try:
+                self.integrity_status.configure(text="Scanning duplicates…")
+            except Exception:
+                pass
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+
+        def worker() -> None:
+            err = None
+            summary = None
+            samples = []
+            try:
+                from scraper.database import DEFAULT_DEDUPE_STRATEGIES, Database
+
+                strats = list(DEFAULT_DEDUPE_STRATEGIES)
+                db = Database(db_path)
+                try:
+                    summary = db.count_duplicates(strats)
+                    samples = db.find_duplicate_groups("source_url", limit_groups=8)
+                finally:
+                    db.close()
+            except Exception as e:
+                err = str(e)
+
+            def done() -> None:
+                self._dup_check_running = False
+                if err or not summary:
+                    messagebox.showerror(
+                        "Duplicate check failed", err or "no result"
+                    )
+                    return
+                lines = [
+                    f"Total offenders: {summary['total_offenders']:,}",
+                    "",
+                    "By match key (safe extras are auto-removable; "
+                    "portal/CAPTCHA clusters are not):",
+                ]
+                for s, info in (summary.get("by_strategy") or {}).items():
+                    lines.append(
+                        f"  · {s}: {info.get('safe_extra_rows', 0):,} safe removable "
+                        f"/ {info.get('extra_rows', 0):,} raw extra "
+                        f"({info.get('unsafe_groups', 0)} unsafe groups)"
+                    )
+                safe_samples = [g for g in samples if g.get("safe", True)][:5]
+                unsafe_samples = [g for g in samples if not g.get("safe", True)][:3]
+                if safe_samples:
+                    lines.append("")
+                    lines.append("Sample safe source_url duplicates:")
+                    for g in safe_samples:
+                        lines.append(
+                            f"  · keep #{g['keep_id']} {g['keep_preview']} "
+                            f"(×{g['count']}) remove {g['remove_ids'][:4]}"
+                        )
+                if unsafe_samples:
+                    lines.append("")
+                    lines.append("Skipped portal/CAPTCHA URL clusters (not removed):")
+                    for g in unsafe_samples:
+                        lines.append(
+                            f"  · ×{g['count']}  {str(g.get('key') or '')[:60]}"
+                        )
+                lines.append("")
+                lines.append(
+                    "Use Remove duplicates… to delete safe extras. "
+                    "Details are merged onto the keeper "
+                    "(states, charges, listings/URLs)."
+                )
+                msg = "\n".join(lines)
+                try:
+                    self.log_queue.put("Duplicate check:\n" + msg)
+                except Exception:
+                    pass
+                if hasattr(self, "integrity_status"):
+                    safe_extra = int(summary.get("total_safe_extra_rows") or 0)
+                    try:
+                        self.integrity_status.configure(
+                            text=f"Duplicates: {safe_extra:,} safe removable"
+                        )
+                    except Exception:
+                        pass
+                messagebox.showinfo("Duplicate check", msg)
+
+            try:
+                self.after(0, done)
+            except Exception:
+                self._dup_check_running = False
+
+        threading.Thread(target=worker, name="dup-check", daemon=True).start()
 
 
     def _remove_duplicates(self) -> None:

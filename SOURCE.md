@@ -55,8 +55,10 @@ data/        # offenders.db, report_pages, settings (runtime)
 |--------|------|
 | `shell.py` | Window, tabs, init |
 | `shell_sync.py` | GitHub DB sync |
-| `shell_header.py` | Path + counts |
+| `shell_header.py` | Path + counts (async COUNT, never blocks UI) |
 | `shell_ops.py` | Log, sash, close, tab change |
+| `tabs/browse/integrity/refresh.py` | Integrity stats off UI thread (no unlimited backfill / auto-dedupe) |
+| `tabs/browse/search/run_query.py` | Browse search worker thread |
 
 ### Tabs (packages of mixins)
 | Package | Pieces |

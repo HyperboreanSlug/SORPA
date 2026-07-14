@@ -198,25 +198,39 @@ class InsertMixin:
         """
         Populate middle_name (and split multi-token first names) from existing
         full_name / first_name / raw_data_json. Returns counts.
+
+        Default cap is 5_000 rows per call so a GUI refresh cannot load the
+        whole table (often 100k+ candidates + raw_data_json) into RAM.
+        Pass ``limit=0`` for an uncapped CLI repair pass.
         """
+        # 0 = explicit unlimited; None = safe default; >0 = hard cap
+        if limit is None:
+            cap: Optional[int] = 5000
+        elif int(limit) <= 0:
+            cap = None
+        else:
+            cap = int(limit)
         sql = (
             "SELECT id, first_name, middle_name, last_name, full_name, raw_data_json "
             "FROM offenders "
             "WHERE middle_name IS NULL OR TRIM(middle_name) = '' "
             "   OR (first_name IS NOT NULL AND instr(trim(first_name), ' ') > 0)"
         )
-        if limit is not None and int(limit) > 0:
-            sql += f" LIMIT {int(limit)}"
-        rows = self._conn.execute(sql).fetchall()
+        if cap is not None:
+            sql += f" LIMIT {cap}"
+        # Iterate cursor — do not fetchall() 100k+ rows with raw_data_json
         updated = 0
         scanned = 0
-        for row in rows:
+        cur = self._conn.execute(sql)
+        while True:
+            row = cur.fetchone()
+            if row is None:
+                break
             scanned += 1
             rec = dict(row)
             patch = self.extract_middle_name_parts(rec)
             if not patch:
                 continue
-            # Only write real changes
             cols = []
             vals: List[Any] = []
             for k, v in patch.items():
@@ -233,6 +247,8 @@ class InsertMixin:
                 vals,
             )
             updated += 1
+            if updated % 500 == 0:
+                self._conn.commit()
         if updated:
             self._conn.commit()
         return {"scanned": scanned, "updated": updated}
