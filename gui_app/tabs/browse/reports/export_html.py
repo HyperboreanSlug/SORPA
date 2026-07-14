@@ -241,10 +241,10 @@ class ReportsExportHtmlMixin:
   .photo { width: 100%; }
   .photo img {
     width: 100%; aspect-ratio: 4/5; height: auto; object-fit: cover;
-    border-radius: 8px; background: #101014; display: block;
+    border-radius: 8px; background: #0c1526; display: block;
   }
   .nophoto {
-    width: 100%; aspect-ratio: 4/5; border-radius: 8px; background: #101014;
+    width: 100%; aspect-ratio: 4/5; border-radius: 8px; background: #0c1526;
     display: flex; align-items: center; justify-content: center;
     color: var(--dim); font-size: .75rem;
   }
@@ -311,10 +311,10 @@ class ReportsExportHtmlMixin:
   .card.v-correct { border-color: #3a6a50; }
   .photo img {
     width: 112px; height: 140px; object-fit: cover; border-radius: 10px;
-    background: #101014; display: block;
+    background: #0c1526; display: block;
   }
   .nophoto {
-    width: 112px; height: 140px; border-radius: 10px; background: #101014;
+    width: 112px; height: 140px; border-radius: 10px; background: #0c1526;
     display: flex; align-items: center; justify-content: center;
     color: var(--dim); font-size: .85rem;
   }
@@ -347,7 +347,7 @@ class ReportsExportHtmlMixin:
   .vs-eth strong { color: var(--text); font-weight: 650; }
   .crime {
     margin: .35rem 0 .45rem; padding: .5rem .75rem;
-    background: #1a1a20; border-radius: 8px; border: 1px solid var(--border);
+    background: #152238; border-radius: 8px; border: 1px solid var(--border);
     color: var(--text); font-size: .92rem; line-height: 1.35;
   }
   .crime-label {
@@ -373,8 +373,8 @@ class ReportsExportHtmlMixin:
 <title>Misclassification report · {_esc(generated)}</title>
 <style>
   :root {{
-    --bg: #0c0c0e; --panel: #1a1a20; --elev: #22222a; --border: #2e2e38;
-    --text: #ececf1; --muted: #9b9ba8; --dim: #6b6b78; --accent: #e8a87c;
+    --bg: #0a1020; --panel: #152238; --elev: #1c2c48; --border: #2a3d5c;
+    --text: #e8eef8; --muted: #8fa3bf; --dim: #5e7394; --accent: #e8a87c;
     --danger: #e07a7a; --success: #7dcea0;
   }}
   * {{ box-sizing: border-box; }}
@@ -384,7 +384,7 @@ class ReportsExportHtmlMixin:
   }}
   header.page {{
     position: sticky; top: 0; z-index: 10;
-    background: rgba(12,12,14,.92); backdrop-filter: blur(10px);
+    background: rgba(10,16,32,.92); backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
     padding: 1rem 1.5rem 1.1rem;
   }}

@@ -15,26 +15,27 @@ try:
 except Exception:
     pass
 
+# Dark blue chrome (distinct from mapa’s charcoal greys)
 C = {
-    "bg": "#0c0c0e",
-    "surface": "#141418",
-    "panel": "#1a1a20",
-    "elevated": "#22222a",
-    "border": "#2e2e38",
-    "text": "#ececf1",
-    "muted": "#9b9ba8",
-    "dim": "#6b6b78",
+    "bg": "#0a1020",
+    "surface": "#101a2e",
+    "panel": "#152238",
+    "elevated": "#1c2c48",
+    "border": "#2a3d5c",
+    "text": "#e8eef8",
+    "muted": "#8fa3bf",
+    "dim": "#5e7394",
     "accent": "#e8a87c",
     "accent_hover": "#f0bc98",
     "accent_dim": "#3d2e24",
     "success": "#7dcea0",
     "danger": "#e07a7a",
     "info": "#8ab4c9",
-    "row_alt": "#121216",
-    "select": "#3d342c",
-    "tree_bg": "#101014",
-    "tree_fg": "#e8e8ef",
-    "tree_head": "#1c1c24",
+    "row_alt": "#0d1628",
+    "select": "#243d66",
+    "tree_bg": "#0c1526",
+    "tree_fg": "#e4ecf8",
+    "tree_head": "#15233a",
 }
 
 FONT_UI = ("Segoe UI", 12)
