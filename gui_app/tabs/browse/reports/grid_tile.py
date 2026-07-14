@@ -126,8 +126,8 @@ class ReportsGridTileMixin:
         border: str,
         index: int,
     ):
-        """Grid tile: max photo, min chrome; Export toggle next to Correct."""
-        # Fixed height: one action row (no checkbox / full-width export strip)
+        """Grid tile: max photo, min chrome; checkbox + Export (single card)."""
+        # Fixed height: one action row (select + verdict + one-shot Export)
         _W, _H = 180, 328
         _PHOTO_H = 200
         card = ctk.CTkFrame(
@@ -230,10 +230,30 @@ class ReportsGridTileMixin:
         )
         status_lbl.pack(side="right")
 
-        # Bottom: Incorrect · Correct · Export(toggle) · Skip
+        # Bottom: [select] · Incorrect · Correct · Export(card) · Skip
         actions = ctk.CTkFrame(card, fg_color="transparent", height=24)
         actions.pack(fill="x", padx=2, pady=(1, 2), side="bottom")
         actions.pack_propagate(False)
+
+        sel_var = ctk.BooleanVar(
+            value=bool(
+                hasattr(self, "_reports_is_export_selected")
+                and self._reports_is_export_selected(mc)
+            )
+        )
+        ctk.CTkCheckBox(
+            actions,
+            text="",
+            width=18,
+            variable=sel_var,
+            command=lambda m=mc, v=sel_var: self._reports_set_export_selected(
+                m, bool(v.get())
+            ),
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            border_color=C["border"],
+            checkmark_color=C["bg"],
+        ).pack(side="left", padx=(0, 2))
 
         def _set(v: str, m=mc, card_widget=card, status=status_lbl):
             self._set_verdict_for_mc(m, v, save=True)
@@ -262,24 +282,35 @@ class ReportsGridTileMixin:
             self._reports_update_metrics()
 
         ctk.CTkButton(
-            actions, text="✗", width=28, height=20,
+            actions, text="✗", width=26, height=20,
             command=lambda: _set("confirmed"),
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
             font=("Segoe UI", 11),
         ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="✓", width=28, height=20,
+            actions, text="✓", width=26, height=20,
             command=lambda: _set("correct"),
             fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
             font=("Segoe UI", 11),
         ).pack(side="left", padx=(0, 2))
-        # Export toggle sits next to mark-correct (select for 1×2 / 2×2)
-        if hasattr(self, "_reports_make_export_toggle"):
-            self._reports_make_export_toggle(
-                actions, mc, width=52, height=20, font=("Segoe UI", 9)
-            ).pack(side="left", padx=(0, 2))
+        # Immediate single name-card export to Desktop
+        export_btn = ctk.CTkButton(
+            actions,
+            text="Export",
+            width=48,
+            height=20,
+            font=("Segoe UI", 9),
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            text_color=C["bg"],
+            command=lambda: None,
+        )
+        export_btn.configure(
+            command=lambda m=mc, b=export_btn: self._reports_export_single_card(m, b)
+        )
+        export_btn.pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="Skip", width=34, height=20,
+            actions, text="Skip", width=32, height=20,
             command=lambda: _set("skip"),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
             border_width=1, border_color=C["border"], font=("Segoe UI", 9),

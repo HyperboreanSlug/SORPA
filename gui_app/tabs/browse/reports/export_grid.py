@@ -130,65 +130,6 @@ class ReportsExportGridMixin:
             except Exception:
                 pass
 
-    def _reports_style_export_toggle(self, btn, selected: bool) -> None:
-        """On/off look for the per-card Export toggle."""
-        from gui_app.theme import C
-
-        if btn is None:
-            return
-        try:
-            if selected:
-                btn.configure(
-                    text="Export●",
-                    fg_color=C["accent"],
-                    hover_color=C["accent_hover"],
-                    text_color=C["bg"],
-                    border_width=0,
-                )
-            else:
-                btn.configure(
-                    text="Export",
-                    fg_color=C["elevated"],
-                    hover_color=C["border"],
-                    text_color=C["text"],
-                    border_width=1,
-                    border_color=C["border"],
-                )
-        except Exception:
-            pass
-
-    def _reports_make_export_toggle(
-        self,
-        parent,
-        mc,
-        *,
-        width: int = 58,
-        height: int = 22,
-        font=None,
-    ):
-        """Toggle select-for-grid-export; place next to Correct on cards."""
-        import customtkinter as ctk
-        from gui_app.theme import C, FONT_SM
-
-        on = bool(self._reports_is_export_selected(mc))
-        btn = ctk.CTkButton(
-            parent,
-            text="Export●" if on else "Export",
-            width=width,
-            height=height,
-            font=font or FONT_SM,
-            command=lambda: None,
-        )
-        self._reports_style_export_toggle(btn, on)
-
-        def _toggle(m=mc, b=btn):
-            now = not self._reports_is_export_selected(m)
-            self._reports_set_export_selected(m, now)
-            self._reports_style_export_toggle(b, now)
-
-        btn.configure(command=_toggle)
-        return btn
-
     def _reports_export_grid(self, layout: str) -> None:
         """Export checked names as a watermarked 1×2 or 2×2 card grid."""
         from gui_app.shared.export_card import (
@@ -203,8 +144,8 @@ class ReportsExportGridMixin:
         if not recs:
             messagebox.showinfo(
                 "Export grid",
-                "Toggle Export on one or more cards (next to Correct), "
-                "then use 1×2 or 2×2.",
+                "Check one or more cards, then export 1×2 or 2×2.\n"
+                "(Export button alone writes a single card to the Desktop.)",
             )
             return
         if len(recs) > cap:

@@ -70,9 +70,9 @@ class ReportsFilterPageMixin:
             try:
                 self.report_layout_hint.configure(
                     text=(
-                        "Grid · Export toggle → 1×2 / 2×2"
+                        "Grid · ☐ multi · Export = one card"
                         if is_grid
-                        else "List · Export toggle next to Correct"
+                        else "List · ☐ multi · Export = one card"
                     )
                 )
             except Exception:

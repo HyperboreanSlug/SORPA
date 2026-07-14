@@ -285,7 +285,7 @@ class ReportsBuildMixin:
         )
         self.report_layout_hint = ctk.CTkLabel(
             line2.host,
-            text="Export toggle on cards → 1×2 / 2×2",
+            text="☐ multi · Export = one card · Grid 1×2/2×2",
             font=("Segoe UI", 10),
             text_color=C["dim"],
         )
@@ -293,7 +293,7 @@ class ReportsBuildMixin:
 
         self.report_status = ctk.CTkLabel(
             top,
-            text="Analyze & build · mark Correct / Incorrect · toggle Export for grid",
+            text="Analyze & build · Export = one card · check boxes for 1×2 / 2×2",
             font=("Segoe UI", 10), text_color=C["dim"], anchor="w",
             wraplength=900, justify="left",
         )
@@ -324,8 +324,8 @@ class ReportsBuildMixin:
             scroll,
             text=(
                 "No report list yet.\n"
-                "1. Analyze & build  ·  2. Mark Correct / Incorrect  ·  "
-                "3. Toggle Export → 1×2 / 2×2"
+                "1. Analyze & build  ·  2. Export = single card  ·  "
+                "3. Check boxes → 1×2 / 2×2"
             ),
             font=FONT_SM, text_color=C["dim"], justify="left",
         )
