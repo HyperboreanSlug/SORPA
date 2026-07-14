@@ -152,7 +152,16 @@ class ReportsVerdictStoreMixin:
         dob = (rec.get("date_of_birth") or "").strip().casefold()
         if fn and ln:
             return f"n:{fn}|{mn}|{ln}|{st}|{dob}"
-        return ReportsTabMixin._report_item_key(mc)
+        rid = rec.get("id")
+        if rid is not None and str(rid).strip() != "":
+            return f"id:{rid}"
+        name = (
+            f"{rec.get('first_name', '') or ''} {rec.get('last_name', '') or ''}"
+        ).strip() or (rec.get("full_name") or "")
+        return (
+            f"n:{name}|{getattr(mc, 'expected_race', '')}|"
+            f"{getattr(mc, 'likely_ethnicity', '')}|{getattr(mc, 'confidence', '')}"
+        )
 
 
     def _verdict_for_mc(self, mc) -> str:

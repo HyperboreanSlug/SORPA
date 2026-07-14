@@ -163,21 +163,67 @@ class ReportsSourceLoadMixin:
         return list(by_id.values())
 
 
-    def _reports_filtered_source(self) -> list:
-        """Apply report filters to surname + DeepFace results (full pool)."""
-        surname = list(self._misclass_results or [])
-        deepface: list = []
-        if bool(getattr(self, "report_include_deepface", None) and self.report_include_deepface.get()):
-            deepface = self._reports_load_deepface_hits()
-        results = self._reports_merge_sources(surname, deepface)
-        if not results:
-            return []
+    @staticmethod
+    def _reports_photo_exists(photo: str) -> bool:
+        """True if mugshot path exists (relative paths resolve via cwd and ROOT)."""
+        raw = (photo or "").strip()
+        if not raw:
+            return False
+        candidates = (
+            Path(raw),
+            Path.cwd() / raw,
+            ROOT / raw,
+            Path.cwd() / raw.replace("\\", "/"),
+            ROOT / raw.replace("\\", "/"),
+        )
+        for p in candidates:
+            try:
+                if p.is_file():
+                    return True
+            except OSError:
+                continue
+        return False
 
-        photos_only = bool(self.report_photos_only.get())
-        vfilter = self._reports_verdict_filter_key()
-        race_allow = self._reports_race_buckets_allowed()
-        # Keep legacy checkboxes in sync with Listed-as dropdown
-        listed = self._reports_listed_filter_value()
+    def _reports_filter_snapshot(self, *, verdict_key: Optional[str] = None) -> dict:
+        """Read Tk filter widgets on the main thread (safe for worker use)."""
+        photos_only = False
+        include_df = False
+        try:
+            photos_only = bool(
+                getattr(self, "report_photos_only", None)
+                and self.report_photos_only.get()
+            )
+        except Exception:
+            photos_only = True
+        try:
+            include_df = bool(
+                getattr(self, "report_include_deepface", None)
+                and self.report_include_deepface.get()
+            )
+        except Exception:
+            include_df = False
+        if verdict_key is not None:
+            vfilter = str(verdict_key).strip().lower() or "all"
+        else:
+            try:
+                vfilter = self._reports_verdict_filter_key()
+            except Exception:
+                vfilter = "unreviewed"
+        try:
+            race_allow = set(self._reports_race_buckets_allowed() or ())
+        except Exception:
+            race_allow = {"White", "Black", "Other"}
+        if not race_allow:
+            race_allow = {"White", "Black", "Other"}
+        try:
+            actual = self._reports_actual_filter_value()
+        except Exception:
+            actual = "All"
+        try:
+            listed = self._reports_listed_filter_value()
+        except Exception:
+            listed = "All"
+        # Legacy checkbox mirror (main thread only)
         try:
             if hasattr(self, "report_race_white"):
                 self.report_race_white.set(listed in ("All", "White"))
@@ -187,6 +233,47 @@ class ReportsSourceLoadMixin:
                 self.report_race_other.set(listed in ("All", "Other"))
         except Exception:
             pass
+        return {
+            "photos_only": photos_only,
+            "include_deepface": include_df,
+            "vfilter": vfilter,
+            "race_allow": race_allow,
+            "actual": actual,
+            "listed": listed,
+        }
+
+    def _reports_filtered_source(
+        self,
+        *,
+        verdict_key: Optional[str] = None,
+        snapshot: Optional[dict] = None,
+    ) -> list:
+        """Apply report filters to surname + DeepFace results (full pool).
+
+        *verdict_key*: optional override (``all`` / ``unreviewed`` / …).
+        *snapshot*: pre-read filter state (use when calling from a worker thread
+        so Tk widgets are not touched off the main thread).
+        """
+        snap = snapshot if isinstance(snapshot, dict) else self._reports_filter_snapshot(
+            verdict_key=verdict_key
+        )
+        if verdict_key is not None:
+            snap = dict(snap)
+            snap["vfilter"] = str(verdict_key).strip().lower() or "all"
+
+        photos_only = bool(snap.get("photos_only"))
+        vfilter = str(snap.get("vfilter") or "unreviewed")
+        race_allow = set(snap.get("race_allow") or {"White", "Black", "Other"})
+        actual_want = str(snap.get("actual") or "All")
+
+        surname = list(self._misclass_results or [])
+        deepface: list = []
+        if bool(snap.get("include_deepface")):
+            deepface = self._reports_load_deepface_hits()
+        results = self._reports_merge_sources(surname, deepface)
+        if not results:
+            return []
+
         # Ensure verdicts file is loaded (first open / new session)
         if not getattr(self, "_report_verdicts_loaded", False):
             if not hasattr(self, "_report_verdicts") or self._report_verdicts is None:
@@ -239,19 +326,32 @@ class ReportsSourceLoadMixin:
         # Collapse same-person duplicates (session-url variants etc.)
         from scraper.database import Database
 
+        def _actual_ok(mc) -> bool:
+            if not actual_want or actual_want == "All":
+                return True
+            try:
+                got = self._reports_actual_bucket(self._reports_actual_label_for_mc(mc))
+                return got == actual_want
+            except Exception:
+                return True
+
         best_by_person: Dict[str, Any] = {}
         for mc in results:
             rec = mc.record or {}
             bucket = _misclass_race_bucket(mc.expected_race)
             if bucket not in race_allow:
                 continue
-            if not self._reports_actual_passes(mc):
+            if not _actual_ok(mc):
                 continue
             photo = (rec.get("photo_path") or "").strip()
-            has_photo = bool(photo and Path(photo).is_file())
+            has_photo = self._reports_photo_exists(photo)
             if photos_only and not has_photo:
                 continue
-            person = self._report_person_key(mc)
+            try:
+                person = self._report_person_key(mc)
+            except Exception:
+                rid = rec.get("id")
+                person = f"id:{rid}" if rid is not None else f"obj:{id(mc)}"
             prev = best_by_person.get(person)
             if prev is None:
                 best_by_person[person] = mc
@@ -268,7 +368,10 @@ class ReportsSourceLoadMixin:
                 1 if (prev_rec.get("_deepface") or {}).get("is_hit") else 0,
                 Database._row_richness(prev_rec),
                 float(prev.confidence or 0),
-                1 if (prev_rec.get("photo_path") or "").strip() else 0,
+                1 if self._reports_photo_exists(
+                    (prev_rec.get("photo_path") or "").strip()
+                )
+                else 0,
             )
             if score_new >= score_old:
                 best_by_person[person] = mc

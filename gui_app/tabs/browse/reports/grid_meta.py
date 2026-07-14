@@ -176,11 +176,14 @@ class ReportsGridMetaMixin:
     def _reports_update_metrics(self) -> None:
         page_items = self._report_items or []
         pool = list(getattr(self, "_report_pool", None) or [])
-        # Verdict chips count full analyze set (not just current Show slice)
-        source = list(self._misclass_results or [])
+        # Same race/photo/actual filters as the sheet, but all verdicts
+        # (not the raw multi-10k analyze dump, which made chips look broken)
+        source = list(getattr(self, "_report_metrics_base", None) or [])
+        if not source:
+            source = pool
 
         n_photo = 0
-        n_conf = n_ok = n_un = 0
+        n_conf = n_ok = n_un = n_skip = 0
         for mc in source:
             rec = mc.record or {}
             p = (rec.get("photo_path") or "").strip()
@@ -191,17 +194,32 @@ class ReportsGridMetaMixin:
                 n_conf += 1
             elif v == "correct":
                 n_ok += 1
-            elif v == "unreviewed":
+            elif v == "skip":
+                n_skip += 1
+            else:
                 n_un += 1
 
-        if hasattr(self, "report_m_total"):
-            pool_n = len(pool)
-            self.report_m_total.configure(
-                text=f"This sheet: {pool_n:,} · page: {len(page_items):,}"
-            )
-            self.report_m_photo.configure(text=f"With photo: {n_photo:,}")
-            self.report_m_confirmed.configure(text=f"Incorrect: {n_conf:,}")
-            self.report_m_correct.configure(text=f"Correct: {n_ok:,}")
-            self.report_m_unreviewed.configure(text=f"Unconfirmed: {n_un:,}")
+        pool_n = len(pool)
+        base_n = len(source)
+        # Compact one-line strip (top of Reports); keep filters free of big chips
+        if base_n and base_n != pool_n:
+            sheet_bit = f"Sheet {pool_n:,}/{base_n:,}"
+        else:
+            sheet_bit = f"Sheet {pool_n:,}"
+        line = (
+            f"{sheet_bit}  ·  page {len(page_items):,}  ·  "
+            f"photo {n_photo:,}  ·  ✗{n_conf:,}  ·  ✓{n_ok:,}  ·  ○{n_un:,}"
+        )
+        bar = getattr(self, "report_stats_bar", None)
+        if bar is not None:
+            try:
+                bar.configure(text=line)
+            except Exception:
+                pass
+        elif hasattr(self, "report_m_total"):
+            try:
+                self.report_m_total.configure(text=line)
+            except Exception:
+                pass
 
 

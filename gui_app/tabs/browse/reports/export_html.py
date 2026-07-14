@@ -240,7 +240,7 @@ class ReportsExportHtmlMixin:
   .card.v-skip { border-color: #4a4a55; opacity: .9; }
   .photo { width: 100%; }
   .photo img {
-    width: 100%; aspect-ratio: 4/5; height: auto; object-fit: cover;
+    width: 100%; aspect-ratio: 4/5; height: auto; object-fit: contain;
     border-radius: 8px; background: #0c1526; display: block;
   }
   .nophoto {
@@ -310,7 +310,7 @@ class ReportsExportHtmlMixin:
   .card.v-confirmed { border-color: #8a4040; }
   .card.v-correct { border-color: #3a6a50; }
   .photo img {
-    width: 112px; height: 140px; object-fit: cover; border-radius: 10px;
+    width: 112px; height: 140px; object-fit: contain; border-radius: 10px;
     background: #0c1526; display: block;
   }
   .nophoto {

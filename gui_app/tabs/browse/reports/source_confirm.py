@@ -129,37 +129,115 @@ class ReportsSourceConfirmMixin:
 
         def after_analyze() -> None:
             """Misclass done — build full report pool (DB) off the UI thread."""
+            raw_n = len(getattr(self, "_misclass_results", None) or [])
             if hasattr(self, "report_status"):
                 try:
                     self.report_status.configure(
-                        text="Building report pool… (DeepFace merge)"
+                        text=(
+                            f"Analyze found {raw_n:,} mismatches · "
+                            "building report pool…"
+                        )
                     )
                 except Exception:
                     pass
 
+            # Snapshot Tk filters on the main thread; worker must not touch widgets
+            try:
+                snap = self._reports_filter_snapshot()
+                snap_all = dict(snap)
+                snap_all["vfilter"] = "all"
+            except Exception:
+                snap = {
+                    "photos_only": True,
+                    "include_deepface": False,
+                    "vfilter": "unreviewed",
+                    "race_allow": {"White"},
+                    "actual": "All",
+                    "listed": "White",
+                }
+                snap_all = dict(snap)
+                snap_all["vfilter"] = "all"
+
             def work():
-                return self._reports_filtered_source()
+                base = self._reports_filtered_source(
+                    verdict_key="all", snapshot=snap_all
+                )
+                vfilter = str(snap.get("vfilter") or "unreviewed")
+                if vfilter == "all":
+                    sheet = list(base)
+                else:
+                    sheet = [
+                        mc
+                        for mc in base
+                        if self._reports_verdict_passes_filter(
+                            self._verdict_for_mc(mc), vfilter
+                        )
+                    ]
+                return {"base": base, "sheet": sheet, "snap": snap, "raw_n": raw_n}
 
             def done(result=None, error=None):
                 if error is not None:
                     messagebox.showerror("Analyze & build", str(error))
                     return
+                payload = result if isinstance(result, dict) else {}
+                base = list(payload.get("base") or [])
+                sheet = list(payload.get("sheet") or [])
+                snap_used = payload.get("snap") or snap
+                raw = int(payload.get("raw_n") or raw_n)
                 self._report_page = 0
-                self._report_pool = list(result or [])
-                if not self._report_pool:
-                    messagebox.showinfo(
-                        "Reports",
-                        "No mismatches for the current filters.\n"
-                        "• Run surname Analyze with lower min conf., or\n"
-                        "• Run DeepFace → Scan first "
-                        "(hits appear when “DeepFace hits” is checked).",
-                    )
+                self._report_metrics_base = base
+                self._report_pool = sheet
+                if not sheet:
+                    listed = snap_used.get("listed") or "?"
+                    photos = "on" if snap_used.get("photos_only") else "off"
+                    show = snap_used.get("vfilter") or "?"
+                    actual = snap_used.get("actual") or "All"
+                    if raw <= 0:
+                        msg = (
+                            "Analyze found 0 surname mismatches.\n\n"
+                            "On Misclassify / Statistics, try:\n"
+                            "• lower Min conf. (e.g. 0.5)\n"
+                            "• ethnicity = all\n"
+                            "• Scan cap = 0 (entire DB) or a larger cap\n\n"
+                            "Or enable DeepFace hits after running DeepFace → Scan."
+                        )
+                    elif base:
+                        msg = (
+                            f"Analyze found {raw:,} mismatches, and "
+                            f"{len(base):,} match Listed/Photos/Actual — "
+                            f"but 0 match Show={show}.\n\n"
+                            "Switch Show to All (or Confirmed incorrect / "
+                            "Confirmed correct) to see them."
+                        )
+                    else:
+                        msg = (
+                            f"Analyze found {raw:,} mismatches, but none match "
+                            "the current Reports filters:\n"
+                            f"• Listed as: {listed}\n"
+                            f"• Photos only: {photos}\n"
+                            f"• Actual: {actual}\n"
+                            f"• Show: {show}\n\n"
+                            "Try Listed as → All, turn Photos only off, "
+                            "or Actual → All."
+                        )
+                    messagebox.showinfo("Reports", msg)
                     self._report_items = []
                     self._reports_rebuild_cards(refilter=False)
                     self._reports_update_metrics()
                     return
                 self._reports_rebuild_cards(refilter=False)
                 self._reports_update_metrics()
+                if hasattr(self, "report_status"):
+                    try:
+                        self.report_status.configure(
+                            text=(
+                                f"Report ready · {len(sheet):,} on sheet "
+                                f"· {len(base):,} in filter · "
+                                f"{raw:,} analyzed"
+                            )
+                        )
+                    except Exception:
+                        pass
 
             if hasattr(self, "run_bg"):
                 self.run_bg(work, done, name="reports-pool")

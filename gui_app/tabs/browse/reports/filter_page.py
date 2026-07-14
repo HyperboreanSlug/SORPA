@@ -70,9 +70,9 @@ class ReportsFilterPageMixin:
             try:
                 self.report_layout_hint.configure(
                     text=(
-                        "Grid · multi-column mugshots  ·  Open HTML uses same layout"
+                        "Grid · Export toggle → 1×2 / 2×2"
                         if is_grid
-                        else "List · full-width rows  ·  Open HTML uses same layout"
+                        else "List · Export toggle next to Correct"
                     )
                 )
             except Exception:

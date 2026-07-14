@@ -63,7 +63,23 @@ class ReportsCardsLayoutMixin:
                 and self.report_include_deepface.get()
             )
         ):
-            self._report_pool = self._reports_filtered_source()
+            # Snapshot on UI thread, then filter (may open DB — keep refilter snappy)
+            snap = self._reports_filter_snapshot()
+            base = self._reports_filtered_source(
+                verdict_key="all", snapshot=snap
+            )
+            self._report_metrics_base = base
+            vfilter = str(snap.get("vfilter") or self._reports_verdict_filter_key())
+            if vfilter == "all":
+                self._report_pool = list(base)
+            else:
+                self._report_pool = [
+                    mc
+                    for mc in base
+                    if self._reports_verdict_passes_filter(
+                        self._verdict_for_mc(mc), vfilter
+                    )
+                ]
             # Keep page in range after refilter
             page_size = self._reports_page_size()
             n_pages = max(
@@ -306,18 +322,22 @@ class ReportsCardsLayoutMixin:
 
 
     def _reports_load_thumb(self, photo_path: str, max_size: tuple) -> Optional[Any]:
-        """Load a small CTkImage; keep refs for GC. Returns None on failure."""
+        """Load CTkImage fitted to *max_size* (no crop, keep aspect); keep refs for GC."""
         try:
             from PIL import Image
 
+            from gui_app.shared.export_card_photo import contain_photo
+
             img = Image.open(photo_path)
-            # Downsample aggressively for scroll performance
-            try:
-                resample = Image.Resampling.BILINEAR
-            except AttributeError:
-                resample = Image.BILINEAR  # type: ignore[attr-defined]
-            img.thumbnail(max_size, resample)
-            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            if getattr(img, "n_frames", 1) > 1:
+                img.seek(0)
+            img = img.convert("RGB")
+            box = (max(1, int(max_size[0])), max(1, int(max_size[1])))
+            # Letterbox into the tile box — same rules as export cards / HTML contain
+            fitted = contain_photo(img, box)
+            ctk_img = ctk.CTkImage(
+                light_image=fitted, dark_image=fitted, size=box
+            )
             if not hasattr(self, "_report_image_refs") or self._report_image_refs is None:
                 self._report_image_refs = []
             self._report_image_refs.append(ctk_img)

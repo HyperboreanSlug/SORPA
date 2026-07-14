@@ -122,25 +122,6 @@ class ReportsCardsAddMixin:
 
         line1 = ctk.CTkFrame(body, fg_color="transparent")
         line1.pack(fill="x")
-        sel_var = ctk.BooleanVar(
-            value=bool(
-                hasattr(self, "_reports_is_export_selected")
-                and self._reports_is_export_selected(mc)
-            )
-        )
-        ctk.CTkCheckBox(
-            line1,
-            text="",
-            width=22,
-            variable=sel_var,
-            command=lambda m=mc, v=sel_var: self._reports_set_export_selected(
-                m, bool(v.get())
-            ),
-            fg_color=C["accent"],
-            hover_color=C["accent_hover"],
-            border_color=C["border"],
-            checkmark_color=C["bg"],
-        ).pack(side="left", padx=(0, 4))
         ctk.CTkLabel(
             line1, text=name, font=FONT_BOLD, text_color=C["text"], anchor="w",
         ).pack(side="left")
@@ -226,6 +207,11 @@ class ReportsCardsAddMixin:
             fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
             font=FONT_SM,
         ).pack(side="left", padx=(0, 4))
+        # Export toggle next to Correct (select for grid 1×2 / 2×2)
+        if hasattr(self, "_reports_make_export_toggle"):
+            self._reports_make_export_toggle(
+                actions, mc, width=64, height=26, font=FONT_SM
+            ).pack(side="left", padx=(0, 4))
         ctk.CTkButton(
             actions, text="Skip", width=50, height=26,
             command=lambda: _set("skip"),
@@ -291,18 +277,6 @@ class ReportsCardsAddMixin:
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"], font=FONT_SM,
         ).pack(side="right", padx=(0, 4))
-        list_export_btn = ctk.CTkButton(
-            actions, text="Export", width=64, height=26,
-            fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
-            font=FONT_SM,
-            command=lambda: None,
-        )
-        list_export_btn.configure(
-            command=lambda m=mc, b=list_export_btn: self._reports_export_single_card(
-                m, b
-            )
-        )
-        list_export_btn.pack(side="right", padx=(0, 4))
         # Double-click card → archived HTML, else live URL, else photo
         try:
             card.bind(

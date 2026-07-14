@@ -58,11 +58,27 @@ class ReportsBuildMixin:
         tab.grid_columnconfigure(0, weight=1)
         tab.grid_rowconfigure(2, weight=1)
 
-        # ---- Toolbar (wraps so every control stays visible) ----
+        # ---- Compact header (stats out of the way + thin toolbar) ----
         top = ctk.CTkFrame(tab, fg_color=C["surface"])
-        top.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 2))
+        top.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 0))
 
-        flow = _FlowRow(top, padx=5, pady=3)
+        # One-line stats strip at very top (does not compete with filters)
+        self.report_stats_bar = ctk.CTkLabel(
+            top,
+            text="Sheet —  ·  photo —  ·  ✗—  ·  ✓—  ·  ○—",
+            font=("Segoe UI", 11),
+            text_color=C["dim"],
+            anchor="e",
+        )
+        self.report_stats_bar.pack(fill="x", padx=4, pady=(0, 0))
+        # Back-compat: metric updaters may still set these keys
+        self.report_m_total = self.report_stats_bar
+        self.report_m_photo = self.report_stats_bar
+        self.report_m_confirmed = self.report_stats_bar
+        self.report_m_correct = self.report_stats_bar
+        self.report_m_unreviewed = self.report_stats_bar
+
+        flow = _FlowRow(top, padx=3, pady=1)
         self._reports_toolbar_flow = flow
         h = flow.host
 
@@ -70,12 +86,12 @@ class ReportsBuildMixin:
             chip = flow.chip()
             ctk.CTkLabel(
                 chip, text=text, font=FONT_SM, text_color=C["muted"]
-            ).pack(side="left", padx=(2, 4), pady=2)
+            ).pack(side="left", padx=(2, 3), pady=1)
             return chip
 
         flow.add(
             ctk.CTkButton(
-                h, text="Analyze & build", width=130,
+                h, text="Analyze & build", width=120, height=28,
                 command=self._reports_build_list,
                 fg_color=C["accent"], hover_color=C["accent_hover"], text_color=C["bg"],
             )
@@ -216,40 +232,40 @@ class ReportsBuildMixin:
             )
         )
 
-        gex = _lbl_chip("Grid export")
+        gex = _lbl_chip("Grid")
         ctk.CTkButton(
-            gex, text="1×2", width=48,
+            gex, text="1×2", width=42, height=26,
             command=lambda: self._reports_export_grid("1x2"),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=(0, 3), pady=2)
+        ).pack(side="left", padx=(0, 2), pady=1)
         ctk.CTkButton(
-            gex, text="2×2", width=48,
+            gex, text="2×2", width=42, height=26,
             command=lambda: self._reports_export_grid("2x2"),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=(0, 3), pady=2)
+        ).pack(side="left", padx=(0, 2), pady=1)
         ctk.CTkButton(
-            gex, text="Clear sel", width=70,
+            gex, text="Clear", width=48, height=26,
             command=self._reports_clear_export_selection,
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
             border_width=1, border_color=C["border"],
-        ).pack(side="left", padx=(0, 3), pady=2)
+        ).pack(side="left", padx=(0, 2), pady=1)
         self.report_export_sel_label = ctk.CTkLabel(
-            gex, text="Selected: 0", font=FONT_SM, text_color=C["dim"],
+            gex, text="Sel 0", font=FONT_SM, text_color=C["dim"],
         )
-        self.report_export_sel_label.pack(side="left", padx=(2, 2), pady=2)
+        self.report_export_sel_label.pack(side="left", padx=(2, 2), pady=1)
         flow.add(gex)
         if hasattr(self, "_reports_export_selected_init"):
             self._reports_export_selected_init()
 
-        # Second line: pagination + summary stats (same row / flow, not a third strip)
-        line2 = _FlowRow(top, padx=5, pady=2)
+        # Pagination only (stats live on the top strip)
+        line2 = _FlowRow(top, padx=3, pady=0)
         self._report_page = 0
         self._report_pool: list = []
         line2.add(
             ctk.CTkButton(
-                line2.host, text="◀ Prev", width=80,
+                line2.host, text="◀", width=36, height=26,
                 command=self._reports_prev_page,
                 fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
                 border_width=1, border_color=C["border"],
@@ -261,54 +277,31 @@ class ReportsBuildMixin:
         line2.add(self.report_page_label)
         line2.add(
             ctk.CTkButton(
-                line2.host, text="Next ▶", width=90,
+                line2.host, text="▶", width=36, height=26,
                 command=self._reports_next_page,
                 fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
                 border_width=1, border_color=C["border"],
             )
         )
-
-        def _metric(key: str) -> ctk.CTkLabel:
-            chip = ctk.CTkFrame(
-                line2.host, fg_color=C["elevated"], corner_radius=6,
-                border_width=1, border_color=C["border"],
-            )
-            lb = ctk.CTkLabel(
-                chip, text="—", font=FONT_SM, text_color=C["text"], anchor="center",
-            )
-            lb.pack(padx=8, pady=4)
-            setattr(self, key, lb)
-            line2.add(chip)
-            return lb
-
-        _metric("report_m_total")
-        _metric("report_m_photo")
-        _metric("report_m_confirmed")
-        _metric("report_m_correct")
-        _metric("report_m_unreviewed")
-
         self.report_layout_hint = ctk.CTkLabel(
             line2.host,
-            text="Check cards → 1×2 / 2×2 export",
-            font=FONT_SM,
+            text="Export toggle on cards → 1×2 / 2×2",
+            font=("Segoe UI", 10),
             text_color=C["dim"],
         )
         line2.add(self.report_layout_hint)
 
         self.report_status = ctk.CTkLabel(
             top,
-            text=(
-                "Click Analyze & build (uses Misclassify ethnicity / min conf). "
-                "Show: Unconfirmed (default) · Confirmed correct drops off this sheet."
-            ),
-            font=FONT_SM, text_color=C["dim"], anchor="w",
+            text="Analyze & build · mark Correct / Incorrect · toggle Export for grid",
+            font=("Segoe UI", 10), text_color=C["dim"], anchor="w",
             wraplength=900, justify="left",
         )
-        self.report_status.pack(fill="x", padx=8, pady=(0, 4))
+        self.report_status.pack(fill="x", padx=4, pady=(0, 1))
         top.bind(
             "<Configure>",
             lambda e: self.report_status.configure(
-                wraplength=max(200, int(getattr(e, "width", 900) or 900) - 24)
+                wraplength=max(200, int(getattr(e, "width", 900) or 900) - 16)
             ),
             add="+",
         )
@@ -319,7 +312,7 @@ class ReportsBuildMixin:
         scroll = ctk.CTkScrollableFrame(
             tab, fg_color=C["surface"], corner_radius=0, border_width=0,
         )
-        scroll.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 6))
+        scroll.grid(row=2, column=0, sticky="nsew", padx=2, pady=(0, 4))
         scroll.grid_columnconfigure(0, weight=1)
         self._report_scroll = scroll
         self._report_tab = tab
@@ -330,15 +323,12 @@ class ReportsBuildMixin:
         self._report_empty = ctk.CTkLabel(
             scroll,
             text=(
-                "No report list yet.\n\n"
-                "1. Set ethnicity / min conf (shared with Misclassify)\n"
-                "2. Click Analyze & build\n"
-                "3. Review Unconfirmed — mark Confirmed incorrect or Confirmed correct\n"
-                "4. Confirmed cards leave Unconfirmed (use Show → Confirmed / All)\n"
-                "5. Show: Unconfirmed · Confirmed incorrect · Confirmed correct · All"
+                "No report list yet.\n"
+                "1. Analyze & build  ·  2. Mark Correct / Incorrect  ·  "
+                "3. Toggle Export → 1×2 / 2×2"
             ),
             font=FONT_SM, text_color=C["dim"], justify="left",
         )
-        self._report_empty.pack(anchor="w", padx=16, pady=24)
+        self._report_empty.pack(anchor="w", padx=12, pady=12)
 
 
