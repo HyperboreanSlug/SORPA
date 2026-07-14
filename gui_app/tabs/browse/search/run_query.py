@@ -1,4 +1,4 @@
-"""Browse → Search query runner."""
+"""Browse → Search query runner (DB work off the UI thread)."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -8,12 +8,7 @@ class SearchQueryMixin:
     def _do_search(
         self, name=None, state=None, race=None, ethnicity=None, *_args, **_kwargs
     ):
-        """Run search on the UI thread and fill the results tree.
-
-        Keep this synchronous: queries are typically <1s, and scheduling
-        tree updates via ``after`` from a worker thread is unreliable on
-        Windows (blank table at open).
-        """
+        """Snapshot filters on UI thread; query DB in a background job."""
         try:
             name_ui = (self.search_name_var.get() or "").strip()
             state_ui = (self.search_state_var.get() or "").strip().upper()
@@ -26,7 +21,6 @@ class SearchQueryMixin:
         except Exception:
             name_ui, state_ui, race_ui, eth_ui = "", "", "", ""
 
-        # Explicit kwargs win; None means “read from widgets”.
         name = name_ui if name is None else (name or "").strip()
         state = state_ui if state is None else (state or "").strip().upper()
         race = race_ui if race is None else (race or "").strip()
@@ -34,43 +28,58 @@ class SearchQueryMixin:
         state_f = state if state and state != "ALL" else None
         race_f = race or None
         eth_f = eth or None
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
 
+        self._search_job_id = int(getattr(self, "_search_job_id", 0) or 0) + 1
+        job_id = self._search_job_id
         try:
             self.search_status.configure(text="Searching…")
         except Exception:
             pass
 
-        from scraper.searcher import SexOffenderSearcher
+        def work():
+            from scraper.searcher import SexOffenderSearcher
 
-        searcher = SexOffenderSearcher(
-            db_path=str(getattr(self, "db_path", None) or "data/offenders.db")
-        )
-        try:
+            searcher = SexOffenderSearcher(db_path=db_path)
             try:
-                records, status = self._search_run_query(
+                return self._search_run_query(
                     searcher, name, state_f, race_f, eth_f
                 )
-            except Exception as e:
+            finally:
+                searcher.close()
+
+        def done(result=None, error=None):
+            if job_id != getattr(self, "_search_job_id", 0):
+                return
+            if error is not None:
                 try:
                     self._populate_search_tree([])
                 except Exception:
                     pass
                 try:
-                    self.search_status.configure(text=f"Search error: {e}")
+                    self.search_status.configure(text=f"Search error: {error}")
                 except Exception:
                     pass
                 try:
-                    self.log_queue.put(f"Search error: {e}")
+                    self.log_queue.put(f"Search error: {error}")
                 except Exception:
                     pass
                 return
+            records, status = result or ([], "")
             self._populate_search_tree(records)
             try:
                 self.search_status.configure(text=status)
             except Exception:
                 pass
-        finally:
-            searcher.close()
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="browse-search")
+        else:
+            # Fallback (tests / headless): run sync
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
 
     @staticmethod
     def _search_run_query(
@@ -80,7 +89,7 @@ class SearchQueryMixin:
         race_f: Optional[str],
         eth_f: Optional[str],
     ) -> Tuple[List[Dict[str, Any]], str]:
-        """Pure query logic shared by the UI path."""
+        """Pure query logic — safe to call from a worker thread."""
         if name:
             results = searcher.search_by_name(
                 name=name,

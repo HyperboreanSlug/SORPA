@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import csv
-import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from tkinter import filedialog, messagebox
 
@@ -12,7 +11,6 @@ class IntegrityRefreshMixin:
     """Load integrity report without freezing the main window."""
 
     def _refresh_integrity(self, *, include_dupes: bool = False) -> None:
-        """Queue a background integrity load (no-op if Integrity tab not built)."""
         if not hasattr(self, "integrity_summary"):
             return
         if getattr(self, "_integrity_refreshing", False):
@@ -26,83 +24,90 @@ class IntegrityRefreshMixin:
             self.integrity_status.configure(text="Loading…")
         except Exception:
             pass
-
         db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
         want_dupes = bool(include_dupes)
 
-        def worker() -> None:
-            err: Optional[str] = None
-            report: Optional[Dict[str, Any]] = None
-            incomplete: List[Any] = []
-            dup_summary = None
+        def work():
+            from scraper.database import Database
+
             notes: List[str] = []
+            db = Database(db_path)
             try:
-                from scraper.database import Database
-
-                db = Database(db_path)
                 try:
-                    # Cheap one-shot repair only — never unlimited backfills.
-                    try:
-                        fixed = db.repair_bogus_states()
-                        if fixed:
-                            notes.append(
-                                f"Repaired {fixed:,} rows with bogus state codes"
-                            )
-                    except Exception:
-                        pass
-                    report = db.get_integrity_report()
-                    incomplete = db.find_incomplete_reports(
-                        need_race=True,
-                        need_crime=True,
-                        need_photo=True,
-                        need_html=False,
-                        limit=5000,
-                    )
-                    if want_dupes:
-                        try:
-                            from scraper.database import DEFAULT_DEDUPE_STRATEGIES
-
-                            dup_summary = db.count_duplicates(
-                                list(DEFAULT_DEDUPE_STRATEGIES)
-                            )
-                        except Exception as e:
-                            notes.append(f"Duplicate scan skipped: {e}")
-                finally:
-                    db.close()
-            except Exception as e:
-                err = str(e)
-
-            def done() -> None:
-                self._integrity_refreshing = False
-                for n in notes:
-                    try:
-                        self.log_queue.put(n)
-                    except Exception:
-                        pass
-                if err or not report:
-                    try:
-                        self.integrity_summary.configure(
-                            text=f"Error: {err or 'no report'}"
+                    fixed = db.repair_bogus_states()
+                    if fixed:
+                        notes.append(
+                            f"Repaired {fixed:,} rows with bogus state codes"
                         )
-                        self.integrity_status.configure(text="Refresh failed")
-                    except Exception:
-                        pass
-                    return
-                self._apply_integrity_report(report, incomplete, dup_summary)
+                except Exception:
+                    pass
+                report = db.get_integrity_report()
+                incomplete = db.find_incomplete_reports(
+                    need_race=True,
+                    need_crime=True,
+                    need_photo=True,
+                    need_html=False,
+                    limit=5000,
+                )
+                dup_summary = None
+                if want_dupes:
+                    try:
+                        from scraper.database import DEFAULT_DEDUPE_STRATEGIES
 
+                        dup_summary = db.count_duplicates(
+                            list(DEFAULT_DEDUPE_STRATEGIES)
+                        )
+                    except Exception as e:
+                        notes.append(f"Duplicate scan skipped: {e}")
+                return {
+                    "report": report,
+                    "incomplete": incomplete,
+                    "dup_summary": dup_summary,
+                    "notes": notes,
+                }
+            finally:
+                db.close()
+
+        def done(result=None, error=None):
+            self._integrity_refreshing = False
+            if error is not None:
+                try:
+                    self.integrity_summary.configure(text=f"Error: {error}")
+                    self.integrity_status.configure(text="Refresh failed")
+                except Exception:
+                    pass
+                return
+            payload = result or {}
+            for n in payload.get("notes") or []:
+                try:
+                    self.log_queue.put(n)
+                except Exception:
+                    pass
+            report = payload.get("report")
+            if not report:
+                try:
+                    self.integrity_summary.configure(text="Error: no report")
+                    self.integrity_status.configure(text="Refresh failed")
+                except Exception:
+                    pass
+                return
+            self._apply_integrity_report(
+                report,
+                payload.get("incomplete") or [],
+                payload.get("dup_summary"),
+            )
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="integrity-refresh")
+        else:
             try:
-                self.after(0, done)
-            except Exception:
-                self._integrity_refreshing = False
-
-        threading.Thread(
-            target=worker, name="integrity-refresh", daemon=True
-        ).start()
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
 
     def _apply_integrity_report(
         self, report: Dict[str, Any], incomplete: list, dup_summary: Any
     ) -> None:
-        """Paint integrity widgets from a finished worker payload."""
         o = report["overall"]
         complete = int(o.get("with_everything") or 0)
         total = int(o.get("total") or 0)
@@ -174,8 +179,7 @@ class IntegrityRefreshMixin:
             self._refresh_integrity()
             messagebox.showinfo(
                 "Export",
-                "Integrity report is loading in the background.\n"
-                "Click Export again when status shows Updated.",
+                "Integrity still loading — export again when status is Updated.",
             )
             return
         path = filedialog.asksaveasfilename(defaultextension=".csv")
@@ -190,8 +194,7 @@ class IntegrityRefreshMixin:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
-                for row in report["by_state"]:
-                    w.writerow(row)
+                w.writerows(report["by_state"])
             messagebox.showinfo("Exported", path)
         except Exception as e:
             messagebox.showerror("Export failed", str(e))

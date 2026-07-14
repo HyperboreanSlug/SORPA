@@ -54,23 +54,41 @@ class SearchSelectMixin:
         sel = self.search_tree.selection()
         if not sel:
             return
-        rec = self._search_records_by_iid.get(sel[0])
-        if rec and rec.get("id") and not rec.get("photo_path"):
-            # Refresh full row from DB for photo/html
-            try:
+        iid = sel[0]
+        rec = self._search_records_by_iid.get(iid)
+        if not rec:
+            return
+        # Paint cached row immediately; refresh photo/html off UI if missing
+        self._fill_detail_drawer(self.search_detail, rec)
+        if rec.get("id") and not rec.get("photo_path"):
+            db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+            oid = int(rec["id"])
+
+            def work():
                 from scraper.database import Database
 
-                db = Database(self.db_path)
+                db = Database(db_path)
                 try:
-                    full = db.get_offender_by_id(int(rec["id"]))
-                    if full:
-                        rec = full
-                        self._search_records_by_iid[sel[0]] = full
+                    full = db.get_offender_by_id(oid)
+                    return dict(full) if full else None
                 finally:
                     db.close()
-            except Exception:
-                pass
-        self._fill_detail_drawer(self.search_detail, rec)
+
+            def done(result=None, error=None):
+                if error or not result:
+                    return
+                # Only update if selection still this row
+                try:
+                    cur = self.search_tree.selection()
+                    if not cur or cur[0] != iid:
+                        return
+                except Exception:
+                    return
+                self._search_records_by_iid[iid] = result
+                self._fill_detail_drawer(self.search_detail, result)
+
+            if hasattr(self, "run_bg"):
+                self.run_bg(work, done, name="search-row")
 
 
     def _show_race_distribution(self, dist):

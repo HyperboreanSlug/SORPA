@@ -1,52 +1,8 @@
-"""MisclassifyRunMixin."""
+"""MisclassifyRunMixin — analysis off the UI thread."""
 from __future__ import annotations
 
-import csv
-import json
-import os
-import queue
-import re
-import subprocess
-import sys
-import threading
-import traceback
-import webbrowser
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-
-import customtkinter as ctk
-
-from gui_app.paths import ROOT
-from gui_app.theme import (
-    C,
-    FONT_BOLD,
-    FONT_MONO,
-    FONT_SECTION,
-    FONT_SM,
-    FONT_TITLE,
-    FONT_UI,
-)
-from gui_app.widgets import (
-    _bind_tree_scroll_isolation,
-    _card,
-    _enable_tree_column_sort,
-    _format_race_display,
-    _format_state_display,
-    _hpaned,
-    _misclass_race_bucket,
-    _muted,
-    _render_bar_chart,
-    _render_pie_chart,
-    _section_label,
-    _stretch_columns,
-    _tree_frame,
-    _vpaned,
-    _wire_wide_scroll,
-)
+from tkinter import filedialog, messagebox
+from typing import Callable, Optional
 
 
 class MisclassifyRunMixin:
@@ -58,131 +14,160 @@ class MisclassifyRunMixin:
         rec = self._misclass_records_by_iid.get(sel[0])
         if not rec:
             return
-        # Prefer full DB row so photo_path / HTML paths are current
-        if rec.get("id"):
-            try:
+        iid = sel[0]
+        if rec.get("id") and not rec.get("photo_path"):
+            db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+            oid = int(rec["id"])
+            tags = {
+                k: rec[k]
+                for k in (
+                    "_misclass_expected_race",
+                    "_misclass_likely",
+                    "_misclass_conf",
+                )
+                if k in rec
+            }
+
+            def work():
                 from scraper.database import Database
 
-                db = Database(self.db_path)
+                db = Database(db_path)
                 try:
-                    full = db.get_offender_by_id(int(rec["id"]))
-                    if full:
-                        # Keep analysis labels on the record for display context
-                        full = dict(full)
-                        for k in ("_misclass_expected_race", "_misclass_likely", "_misclass_conf"):
-                            if k in rec:
-                                full[k] = rec[k]
-                        rec = full
-                        self._misclass_records_by_iid[sel[0]] = rec
+                    full = db.get_offender_by_id(oid)
+                    return dict(full) if full else None
                 finally:
                     db.close()
-            except Exception:
-                pass
+
+            def done(result=None, error=None):
+                row = rec
+                if result and not error:
+                    result.update(tags)
+                    self._misclass_records_by_iid[iid] = result
+                    row = result
+                if getattr(self, "misclass_detail", None) is not None:
+                    self._fill_detail_drawer(self.misclass_detail, row)
+
+            if hasattr(self, "run_bg"):
+                self.run_bg(work, done, name="misclass-row")
+                return
         if getattr(self, "misclass_detail", None) is not None:
             self._fill_detail_drawer(self.misclass_detail, rec)
 
-
-    def _run_misclassification(self):
-        from scraper.searcher import SexOffenderSearcher
-
+    def _run_misclassification(self, on_done: Optional[Callable[[], None]] = None):
+        """Analyze ethnicities off the UI thread; optional callback when painted."""
+        if getattr(self, "_misclass_running", False):
+            try:
+                if hasattr(self, "misclass_status"):
+                    self.misclass_status.configure(text="Analyze already running…")
+            except Exception:
+                pass
+            return
         self._ensure_misclass_filter_vars()
-        searcher = SexOffenderSearcher(db_path=self.db_path)
         eth = (self.misclass_ethnicity_var.get() or "all").strip()
         try:
             min_conf = float(self.misclass_conf_var.get())
             limit = int(self.misclass_limit_var.get())
-            db_total = searcher.get_total_count()
-            eth_filter = None if eth == "all" else eth
-            # Always get base_count so Statistics can show % of selected ethnicity
-            results, eth_base = searcher.analyze_ethnicities(
-                min_confidence=min_conf,
-                limit=limit,
-                ethnicity_filter=eth_filter,
-                return_base_count=True,
-            )
-        finally:
-            searcher.close()
-
-        self._misclass_results = results
-        self._misclass_meta = {
-            "db_total": db_total,
-            "scanned_cap": limit,
-            "min_conf": min_conf,
-            "eth_filter": eth,
-            "eth_base_count": eth_base,
-        }
-
-        # Exclude manually Correct-labeled rows from table + Statistics
-        stats_results = self._results_excluding_correct(results)
-        n_correct = len(results) - len(stats_results)
-
-        if getattr(self, "misclass_detail", None) is not None:
+        except Exception as e:
+            messagebox.showerror("Misclassify", f"Invalid options: {e}")
+            return
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+        eth_filter = None if eth == "all" else eth
+        self._misclass_running = True
+        if hasattr(self, "misclass_status"):
             try:
-                self._fill_detail_drawer(self.misclass_detail, None)
+                self.misclass_status.configure(text="Analyzing… (UI stays responsive)")
             except Exception:
                 pass
-        self._populate_misclass_tree(stats_results)
-        shown = min(500, len(stats_results))
-        if hasattr(self, "misclass_status"):
-            if eth != "all" and eth_base is not None:
-                rate = (len(stats_results) / eth_base * 100.0) if eth_base else 0.0
-                self.misclass_status.configure(
-                    text=(
-                        f"{eth}: {eth_base:,} name matches · "
-                        f"{len(stats_results):,} misclassified ({rate:.1f}%)"
-                        + (f" · {n_correct} marked correct (excluded)" if n_correct else "")
-                        + (f" · showing first {shown}" if len(stats_results) > shown else "")
-                        + " · select a row for photo · Ctrl+C copies row"
-                    )
-                )
-            else:
-                self.misclass_status.configure(
-                    text=f"{len(stats_results)} potential mismatches"
-                    + (f" · {n_correct} correct excluded" if n_correct else "")
-                    + (f" · showing first {shown}" if len(stats_results) > shown else "")
-                    + " · select a row for photo · Statistics for transitions"
-                )
 
-        self._update_misclass_stats(
-            stats_results,
-            db_total=db_total,
-            scanned_cap=limit,
-            min_conf=min_conf,
-            eth_filter=eth,
-            eth_base_count=eth_base,
-        )
-        self.log_queue.put(
-            f"Misclassification: {len(stats_results)} mismatches"
-            + (f" ({n_correct} correct excluded)" if n_correct else "")
-            + (f" / {eth_base} {eth}" if eth != "all" else "")
-        )
-        if hasattr(self, "report_status"):
-            self.report_status.configure(
-                text=(
-                    f"Analyze ready · {len(stats_results):,} mismatches"
-                    + (f" · {n_correct} correct excluded" if n_correct else "")
-                    + " · Reports → Analyze & build for photo review"
-                )
-            )
+        def work():
+            from scraper.searcher import SexOffenderSearcher
 
+            searcher = SexOffenderSearcher(db_path=db_path)
+            try:
+                db_total = searcher.get_total_count()
+                results, eth_base = searcher.analyze_ethnicities(
+                    min_confidence=min_conf,
+                    limit=limit,
+                    ethnicity_filter=eth_filter,
+                    return_base_count=True,
+                )
+                return {
+                    "results": results,
+                    "eth_base": eth_base,
+                    "db_total": db_total,
+                    "limit": limit,
+                    "min_conf": min_conf,
+                    "eth": eth,
+                }
+            finally:
+                searcher.close()
+
+        def done(result=None, error=None):
+            self._misclass_running = False
+            if error is not None:
+                try:
+                    if hasattr(self, "misclass_status"):
+                        self.misclass_status.configure(text=f"Analyze error: {error}")
+                except Exception:
+                    pass
+                messagebox.showerror("Misclassify", str(error))
+                return
+            self._apply_misclass_results(result or {})
+            if on_done:
+                try:
+                    on_done()
+                except Exception as e:
+                    messagebox.showerror("Reports", str(e))
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="misclass-analyze")
+        else:
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
 
     def _export_misclass(self):
-        from scraper.searcher import SexOffenderSearcher
-
         self._ensure_misclass_filter_vars()
         path = filedialog.asksaveasfilename(defaultextension=".csv")
         if not path:
             return
-        searcher = SexOffenderSearcher(db_path=self.db_path)
         eth = (self.misclass_ethnicity_var.get() or "all").strip()
         try:
-            n = searcher.export_misclassifications(
-                path,
-                min_confidence=float(self.misclass_conf_var.get()),
-                ethnicity_filter=None if eth == "all" else eth,
-            )
-        finally:
-            searcher.close()
-        messagebox.showinfo("Exported", f"{n} rows → {path}")
+            min_conf = float(self.misclass_conf_var.get())
+        except Exception as e:
+            messagebox.showerror("Export", str(e))
+            return
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
 
+        def work():
+            from scraper.searcher import SexOffenderSearcher
 
+            searcher = SexOffenderSearcher(db_path=db_path)
+            try:
+                return searcher.export_misclassifications(
+                    path,
+                    min_confidence=min_conf,
+                    ethnicity_filter=None if eth == "all" else eth,
+                )
+            finally:
+                searcher.close()
+
+        def done(result=None, error=None):
+            if error is not None:
+                messagebox.showerror("Export failed", str(error))
+                return
+            messagebox.showinfo("Exported", f"{result} rows → {path}")
+
+        if hasattr(self, "run_bg"):
+            if hasattr(self, "misclass_status"):
+                try:
+                    self.misclass_status.configure(text="Exporting…")
+                except Exception:
+                    pass
+            self.run_bg(work, done, name="misclass-export")
+        else:
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)

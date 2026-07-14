@@ -1,116 +1,126 @@
-"""ScrapeImportMixin."""
+"""ScrapeImportMixin — CSV import off the UI thread."""
 from __future__ import annotations
 
-import csv
-import json
-import os
-import queue
-import re
-import subprocess
-import sys
-import threading
-import traceback
-import webbrowser
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-
-import customtkinter as ctk
-
-from gui_app.paths import ROOT
-from gui_app.theme import (
-    C,
-    FONT_BOLD,
-    FONT_MONO,
-    FONT_SECTION,
-    FONT_SM,
-    FONT_TITLE,
-    FONT_UI,
-)
-from gui_app.widgets import (
-    _bind_tree_scroll_isolation,
-    _card,
-    _enable_tree_column_sort,
-    _format_race_display,
-    _format_state_display,
-    _hpaned,
-    _misclass_race_bucket,
-    _muted,
-    _render_bar_chart,
-    _render_pie_chart,
-    _section_label,
-    _stretch_columns,
-    _tree_frame,
-    _vpaned,
-    _wire_wide_scroll,
-)
+from tkinter import filedialog, messagebox
 
 
 class ScrapeImportMixin:
     def _import_downloads_folder(self):
-        from scraper.database import Database
-
         folder = self.scrape_output_var.get() or "data/downloads"
         if not Path(folder).is_dir():
             messagebox.showwarning("Missing folder", f"Not a directory: {folder}")
             return
+        if getattr(self, "_csv_import_running", False):
+            messagebox.showinfo("Import", "Import already running…")
+            return
         skip = bool(self.scrape_import_skip.get())
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+        self._csv_import_running = True
         try:
-            db = Database(self.db_path)
+            self.scrape_import_status.configure(text="Importing folder…")
+        except Exception:
+            pass
+
+        def work():
+            from scraper.database import Database
+
+            db = Database(db_path)
             try:
-                summary = db.import_csv_directory(folder, skip_existing_urls=skip)
+                return db.import_csv_directory(folder, skip_existing_urls=skip)
             finally:
                 db.close()
-        except Exception as e:
-            messagebox.showerror("Import failed", str(e))
-            return
-        msg = (
-            f"Files: {summary['files']} · imported {summary['imported']} · "
-            f"skipped {summary['skipped']} · rows {summary['total_rows']}"
-        )
-        if summary.get("errors"):
-            msg += f" · errors: {len(summary['errors'])}"
-        self.scrape_import_status.configure(text=msg)
-        self.log_queue.put(f"CSV import folder: {msg}")
-        for err in summary.get("errors") or []:
-            self.log_queue.put(f"  import error: {err}")
-        self._after_db_data_changed()
 
+        def done(result=None, error=None):
+            self._csv_import_running = False
+            if error is not None:
+                messagebox.showerror("Import failed", str(error))
+                try:
+                    self.scrape_import_status.configure(text=f"Import failed: {error}")
+                except Exception:
+                    pass
+                return
+            summary = result or {}
+            msg = (
+                f"Files: {summary.get('files', 0)} · "
+                f"imported {summary.get('imported', 0)} · "
+                f"skipped {summary.get('skipped', 0)} · "
+                f"rows {summary.get('total_rows', 0)}"
+            )
+            if summary.get("errors"):
+                msg += f" · errors: {len(summary['errors'])}"
+            try:
+                self.scrape_import_status.configure(text=msg)
+            except Exception:
+                pass
+            self.log_queue.put(f"CSV import folder: {msg}")
+            for err in summary.get("errors") or []:
+                self.log_queue.put(f"  import error: {err}")
+            self._after_db_data_changed()
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="csv-import-folder")
+        else:
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
 
     def _import_csv_file(self):
-        from scraper.database import Database
-
         path = filedialog.askopenfilename(
             filetypes=[("CSV", "*.csv"), ("All", "*.*")],
             initialdir=self.scrape_output_var.get() or "data/downloads",
         )
         if not path:
             return
+        if getattr(self, "_csv_import_running", False):
+            messagebox.showinfo("Import", "Import already running…")
+            return
         skip = bool(self.scrape_import_skip.get())
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+        self._csv_import_running = True
         try:
-            db = Database(self.db_path)
+            self.scrape_import_status.configure(text=f"Importing {Path(path).name}…")
+        except Exception:
+            pass
+
+        def work():
+            from scraper.database import Database
+
+            db = Database(db_path)
             try:
-                result = db.import_csv(path, skip_existing_urls=skip)
+                return db.import_csv(path, skip_existing_urls=skip)
             finally:
                 db.close()
-        except Exception as e:
-            messagebox.showerror("Import failed", str(e))
-            return
-        msg = (
-            f"{Path(path).name}: imported {result['imported']} · "
-            f"skipped {result['skipped']} · rows {result['total_rows']}"
-        )
-        self.scrape_import_status.configure(text=msg)
-        self.log_queue.put(f"CSV import: {msg}")
-        self._after_db_data_changed()
 
+        def done(result=None, error=None):
+            self._csv_import_running = False
+            if error is not None:
+                messagebox.showerror("Import failed", str(error))
+                return
+            result = result or {}
+            msg = (
+                f"{Path(path).name}: imported {result.get('imported', 0)} · "
+                f"skipped {result.get('skipped', 0)} · "
+                f"rows {result.get('total_rows', 0)}"
+            )
+            try:
+                self.scrape_import_status.configure(text=msg)
+            except Exception:
+                pass
+            self.log_queue.put(f"CSV import: {msg}")
+            self._after_db_data_changed()
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="csv-import-file")
+        else:
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
 
     def _after_db_data_changed(self) -> None:
         """Refresh header; schedule Integrity only if that tab is built."""
-        # Header count is async; never block the UI here.
         try:
             if hasattr(self, "schedule_header_refresh"):
                 self.schedule_header_refresh(0)
@@ -118,7 +128,6 @@ class ScrapeImportMixin:
                 self._refresh_header_db_path()
         except Exception:
             pass
-        # Integrity refresh is heavy — only if widgets exist; runs in a thread.
         if hasattr(self, "integrity_summary") and hasattr(self, "_refresh_integrity"):
             try:
                 self.after(50, self._refresh_integrity)
@@ -139,5 +148,3 @@ class ScrapeImportMixin:
             self.log_queue.put(note)
         except Exception:
             pass
-
-

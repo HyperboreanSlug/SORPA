@@ -57,8 +57,10 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `shell_sync.py` | GitHub DB sync |
 | `shell_header.py` | Path + counts (async COUNT, never blocks UI) |
 | `shell_ops.py` | Log, sash, close, tab change |
-| `tabs/browse/integrity/refresh.py` | Integrity stats off UI thread (no unlimited backfill / auto-dedupe) |
-| `tabs/browse/search/run_query.py` | Browse search worker thread |
+| `async_jobs.py` | `run_bg` + main-thread job queue (all DB work) |
+| `tabs/browse/integrity/refresh.py` | Integrity stats via `run_bg` |
+| `tabs/browse/search/run_query.py` | Browse search via `run_bg` |
+| `tabs/browse/misclassify/run.py` | Surname analyze / export via `run_bg` |
 
 ### Tabs (packages of mixins)
 | Package | Pieces |

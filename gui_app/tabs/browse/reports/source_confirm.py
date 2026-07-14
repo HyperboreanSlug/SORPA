@@ -112,29 +112,66 @@ class ReportsSourceConfirmMixin:
 
 
     def _reports_build_list(self):
-        """Run Analyze (shared filters), merge DeepFace hits, render photo cards."""
+        """Run Analyze off UI (shared filters), then merge DeepFace hits + cards."""
         try:
-            # Misclassify tab is lazy — ensure filter vars exist before Analyze
             if hasattr(self, "_ensure_misclass_filter_vars"):
                 self._ensure_misclass_filter_vars()
-            self._run_misclassification()
         except Exception as e:
             messagebox.showerror("Analyze & build", str(e))
             return
-        self._report_page = 0
-        self._report_pool = self._reports_filtered_source()
-        if not self._report_pool:
-            messagebox.showinfo(
-                "Reports",
-                "No mismatches for the current filters.\n"
-                "• Run surname Analyze with lower min conf., or\n"
-                "• Run DeepFace → Scan first (hits appear when “DeepFace hits” is checked).",
-            )
-            self._report_items = []
-            self._reports_rebuild_cards(refilter=False)
-            self._reports_update_metrics()
-            return
-        self._reports_rebuild_cards(refilter=False)
-        self._reports_update_metrics()
+        if hasattr(self, "report_status"):
+            try:
+                self.report_status.configure(
+                    text="Analyzing… (UI stays responsive)"
+                )
+            except Exception:
+                pass
+
+        def after_analyze() -> None:
+            """Misclass done — build full report pool (DB) off the UI thread."""
+            if hasattr(self, "report_status"):
+                try:
+                    self.report_status.configure(
+                        text="Building report pool… (DeepFace merge)"
+                    )
+                except Exception:
+                    pass
+
+            def work():
+                return self._reports_filtered_source()
+
+            def done(result=None, error=None):
+                if error is not None:
+                    messagebox.showerror("Analyze & build", str(error))
+                    return
+                self._report_page = 0
+                self._report_pool = list(result or [])
+                if not self._report_pool:
+                    messagebox.showinfo(
+                        "Reports",
+                        "No mismatches for the current filters.\n"
+                        "• Run surname Analyze with lower min conf., or\n"
+                        "• Run DeepFace → Scan first "
+                        "(hits appear when “DeepFace hits” is checked).",
+                    )
+                    self._report_items = []
+                    self._reports_rebuild_cards(refilter=False)
+                    self._reports_update_metrics()
+                    return
+                self._reports_rebuild_cards(refilter=False)
+                self._reports_update_metrics()
+
+            if hasattr(self, "run_bg"):
+                self.run_bg(work, done, name="reports-pool")
+            else:
+                try:
+                    done(result=work(), error=None)
+                except Exception as e:
+                    done(result=None, error=e)
+
+        try:
+            self._run_misclassification(on_done=after_analyze)
+        except Exception as e:
+            messagebox.showerror("Analyze & build", str(e))
 
 

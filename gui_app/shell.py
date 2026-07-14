@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 import customtkinter as ctk
 
+from gui_app.async_jobs import AsyncJobsMixin
 from gui_app.lazy_tabs import LazyTabHost
 from gui_app.paths import ROOT
 from gui_app.shell_header import ShellHeaderMixin
@@ -36,6 +37,7 @@ from gui_app.widgets import _card, _vpaned
 
 
 class ArchiverApp(
+    AsyncJobsMixin,
     ShellSyncMixin,
     ShellHeaderMixin,
     ShellOpsMixin,
@@ -84,6 +86,7 @@ class ArchiverApp(
         self._report_verdicts_path = ROOT / "data" / "report_verdicts.json"
         self._load_report_verdicts()
 
+        self._init_async_jobs()
         self._build()
         self._load_sources()
         self._poll_log()

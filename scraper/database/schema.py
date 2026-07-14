@@ -29,23 +29,32 @@ from scraper.database.constants import (
 
 
 class SchemaMixin:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        *,
+        busy_timeout_ms: int = 8000,
+    ):
         # check_same_thread=False: GUI workers + CLI importers share one connection
         # under application-level coordination (same pattern as mapa).
+        # Keep busy_timeout modest so a locked DB cannot freeze a thread for a minute
+        # (UI must not open connections on the main thread either).
+        timeout_s = max(0.5, float(busy_timeout_ms) / 1000.0)
         if db_path == ":memory:":
             self.db_path = Path(":memory:")
-            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            self._conn = sqlite3.connect(
+                ":memory:", check_same_thread=False, timeout=timeout_s
+            )
         else:
             self.db_path = Path(db_path) if db_path else Path(DEFAULT_DB_PATH)
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(
-                str(self.db_path), check_same_thread=False
+                str(self.db_path), check_same_thread=False, timeout=timeout_s
             )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")  # Better concurrency
         self._conn.execute("PRAGMA foreign_keys=ON")
-        # Wait for other writers (GUI + repair scripts) instead of failing immediately
-        self._conn.execute("PRAGMA busy_timeout=60000")
+        self._conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
         self._init_schema()
 
     def _init_schema(self):

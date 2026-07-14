@@ -53,22 +53,39 @@ class DeepfaceScanCtrlMixin:
     def _deepface_scan_refresh_db_stats(self) -> None:
         if not hasattr(self, "df_scan_db_stats"):
             return
-        try:
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+
+        def work():
             from scraper.database import Database
 
-            db = Database(str(getattr(self, "db_path", None) or "data/offenders.db"))
+            db = Database(db_path)
             try:
-                st = db.count_deepface_scans()
+                return db.count_deepface_scans()
             finally:
                 db.close()
-            self.df_scan_db_stats.configure(
-                text=f"Stored: {st.get('total', 0):,} scanned · {st.get('hits', 0):,} hits"
-            )
-        except Exception:
+
+        def done(result=None, error=None):
             try:
-                self.df_scan_db_stats.configure(text="Stored: —")
+                if error or not result:
+                    self.df_scan_db_stats.configure(text="Stored: —")
+                    return
+                st = result
+                self.df_scan_db_stats.configure(
+                    text=(
+                        f"Stored: {st.get('total', 0):,} scanned · "
+                        f"{st.get('hits', 0):,} hits"
+                    )
+                )
             except Exception:
                 pass
+
+        if hasattr(self, "run_bg"):
+            self.run_bg(work, done, name="df-scan-stats")
+        else:
+            try:
+                done(result=work(), error=None)
+            except Exception as e:
+                done(result=None, error=e)
 
 
     def _deepface_scan_save_options(self) -> None:
