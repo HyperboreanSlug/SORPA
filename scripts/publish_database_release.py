@@ -100,20 +100,22 @@ def main() -> int:
         assets.extend(photo_paths)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-    if args.use_gh or not token:
+    if not token:
+        token = _git_cred_token()
+    if args.use_gh:
         gh = _which("gh")
         if gh:
             return _publish_gh(args.repo, args.tag, assets, man)
-        if not token:
-            names = " ".join(str(a) for a in assets)
-            print(
-                "No GITHUB_TOKEN/GH_TOKEN and gh CLI not found.\n"
-                "Assets ready under releases/ — upload manually:\n"
-                f"  gh release create {args.tag} {names} --repo {args.repo} "
-                f'--title "Public database" --notes "Public registry archive"\n'
-                "Or re-run with GITHUB_TOKEN set / --use-gh."
-            )
-            return 2
+        print("gh CLI not found — falling back to API upload with git credentials.")
+    if not token:
+        names = " ".join(str(a) for a in assets)
+        print(
+            "No GITHUB_TOKEN/GH_TOKEN, git credential, or gh CLI.\n"
+            "Assets ready under releases/ — upload manually:\n"
+            f"  gh release create {args.tag} {names} --repo {args.repo} "
+            f'--title "Public database" --notes "Public registry archive"\n'
+        )
+        return 2
 
     return _publish_api(args.repo, args.tag, assets, token, man)
 
@@ -122,6 +124,27 @@ def _which(cmd: str) -> str:
     from shutil import which
 
     return which(cmd) or ""
+
+
+def _git_cred_token() -> str:
+    """Password/token from git credential helper (same as git push)."""
+    try:
+        p = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if p.returncode != 0:
+        return ""
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("password="):
+            return line.split("=", 1)[1].strip()
+    return ""
 
 
 def _notes(man: dict) -> str:
@@ -270,8 +293,37 @@ def _publish_api(
         if not path.is_file():
             continue
         url = f"{upload_url}?name={path.name}"
-        print(f"Uploading {path.name} ({path.stat().st_size:,} bytes)…")
+        size = path.stat().st_size
+        print(f"Uploading {path.name} ({size:,} bytes)…")
         try:
+            # Stream via curl when available (multi-GB photo parts)
+            curl = _which("curl")
+            if curl and size > 50 * 1024 * 1024:
+                cmd = [
+                    curl,
+                    "-sS",
+                    "-X",
+                    "POST",
+                    "-H",
+                    f"Authorization: Bearer {token}",
+                    "-H",
+                    "Accept: application/vnd.github+json",
+                    "-H",
+                    "Content-Type: application/octet-stream",
+                    "-H",
+                    "User-Agent: SOR-Public-Archiver-Publish",
+                    "--data-binary",
+                    f"@{path}",
+                    url,
+                ]
+                cp = subprocess.run(cmd, capture_output=True, timeout=7200)
+                if cp.returncode != 0:
+                    err = (cp.stderr or b"").decode("utf-8", errors="replace")[:400]
+                    print(f"  FAIL curl rc={cp.returncode} {err}")
+                    return 1
+                print(f"  OK curl ({path.name})")
+                continue
+            # Smaller files: urllib (still avoid full RAM for mid-size if possible)
             with open(path, "rb") as f:
                 data = f.read()
             status, body = req(
@@ -287,9 +339,11 @@ def _publish_api(
             return 1
         except MemoryError:
             print(
-                f"  FAIL: {path.name} too large for API upload in-memory. "
-                "Re-run with --use-gh."
+                f"  FAIL: {path.name} too large for in-memory upload and curl missing."
             )
+            return 1
+        except Exception as e:
+            print(f"  FAIL {e}")
             return 1
     print("Done.")
     print(
