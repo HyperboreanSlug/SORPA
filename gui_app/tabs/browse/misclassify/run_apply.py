@@ -39,6 +39,7 @@ class MisclassifyApplyMixin:
                 self._fill_detail_drawer(self.misclass_detail, None)
             except Exception:
                 pass
+        # Tree applies listed-as + photo filters inside populate
         self._populate_misclass_tree(stats_results)
         shown = min(500, len(tree_results))
         filt_note = f" · {n_filtered} filtered out" if n_filtered else ""
@@ -51,7 +52,11 @@ class MisclassifyApplyMixin:
                         f"{len(stats_results):,} misclassified ({rate:.1f}%)"
                         + (f" · {n_correct} correct excluded" if n_correct else "")
                         + filt_note
-                        + (f" · showing first {shown}" if len(tree_results) > shown else "")
+                        + (
+                            f" · tree shows {shown}"
+                            if len(tree_results) <= 500
+                            else f" · tree shows first {shown} of {len(tree_results)}"
+                        )
                         + " · select a row for photo · Ctrl+C copies row"
                     )
                 )
@@ -61,7 +66,11 @@ class MisclassifyApplyMixin:
                         f"{len(stats_results)} potential mismatches"
                         + (f" · {n_correct} correct excluded" if n_correct else "")
                         + filt_note
-                        + (f" · showing first {shown}" if len(tree_results) > shown else "")
+                        + (
+                            f" · tree shows {shown}"
+                            if len(tree_results) <= 500
+                            else f" · tree shows first {shown} of {len(tree_results)}"
+                        )
                         + " · select a row for photo · Statistics for transitions"
                     )
                 )

@@ -71,93 +71,20 @@ class SearcherCoreMixin:
         self,
         ethnicity: str,
         state: Optional[str] = None,
-        limit: int = 1000,
+        limit: int = 0,
     ) -> SearchResults:
-        """Search by curated surname-ethnicity lists (indian, mena, merged, …)."""
+        """Search by curated surname-ethnicity lists (indian, mena, asian, …).
+
+        *limit* ``0`` returns all matching rows (no artificial cap).
+        """
         start = time.time()
         eth = (ethnicity or "").strip().lower()
-        surnames: List[str] = []
+        from scraper.searcher_surnames import surnames_for_ethnicity_filter
 
-        def _unique(names) -> List[str]:
-            seen: set = set()
-            out: List[str] = []
-            for n in names:
-                key = (n or "").strip().lower()
-                if key and key not in seen:
-                    seen.add(key)
-                    out.append(n)
-            return out
-
-        from scraper.searcher_race import (
-            BLACK_FILTERS,
-            INDIAN_MENA_MERGED_FILTERS,
-            INDIAN_ONLY_FILTERS,
-            MENA_ONLY_FILTERS,
-            NON_WHITE_FILTERS,
-            WHITE_FILTERS,
+        surnames = surnames_for_ethnicity_filter(self.ethnic_db, eth) or []
+        records = self.db.search_by_surname_list(
+            surnames, state=state, limit=limit
         )
-
-        if eth in NON_WHITE_FILTERS:
-            pool: list = []
-            pool.extend(self.ethnic_db.hispanic_surnames or [])
-            for names in (self.ethnic_db.asian_surnames or {}).values():
-                pool.extend(names)
-            pool.extend(self.ethnic_db.indian_surnames or [])
-            pool.extend(self.ethnic_db.indian_high_confidence_surnames or [])
-            pool.extend(self.ethnic_db.arabic_surnames or [])
-            pool.extend(self.ethnic_db.african_american_surnames or [])
-            for names in (self.ethnic_db.african_surnames or {}).values():
-                pool.extend(names)
-            pool.extend(self.ethnic_db.native_american_surnames or [])
-            surnames = _unique(pool)
-        elif eth in WHITE_FILTERS:
-            pool = list(self.ethnic_db.jewish_surnames or [])
-            pool.extend(self.ethnic_db.portuguese_surnames or [])
-            pool.extend(self.ethnic_db.native_american_surnames or [])
-            for names in (self.ethnic_db.european_surnames or {}).values():
-                pool.extend(names)
-            surnames = _unique(pool)
-        elif eth in BLACK_FILTERS:
-            pool = list(self.ethnic_db.african_american_surnames or [])
-            for names in (self.ethnic_db.african_surnames or {}).values():
-                pool.extend(names)
-            surnames = _unique(pool)
-        elif eth in INDIAN_MENA_MERGED_FILTERS:
-            # Indic + MENA only (East/SE Asian has its own "asian" filter)
-            pool = (
-                list(self.ethnic_db.indian_surnames or [])
-                + list(self.ethnic_db.indian_high_confidence_surnames or [])
-                + list(self.ethnic_db.arabic_surnames or [])
-            )
-            surnames = _unique(pool)
-        elif eth in INDIAN_ONLY_FILTERS:
-            # Indic only — East/SE Asian is separate under "asian"
-            pool = list(self.ethnic_db.indian_surnames or []) + list(
-                self.ethnic_db.indian_high_confidence_surnames or []
-            )
-            surnames = _unique(pool)
-        elif eth in MENA_ONLY_FILTERS:
-            surnames = _unique(list(self.ethnic_db.arabic_surnames or []))
-        elif eth == "hispanic":
-            surnames = list(self.ethnic_db.hispanic_surnames or [])
-        elif eth == "asian":
-            for names in (self.ethnic_db.asian_surnames or {}).values():
-                surnames.extend(names)
-        elif eth == "african_american":
-            surnames = list(self.ethnic_db.african_american_surnames or [])
-        elif eth == "jewish":
-            surnames = list(self.ethnic_db.jewish_surnames or [])
-        elif eth == "portuguese":
-            surnames = list(self.ethnic_db.portuguese_surnames or [])
-        elif eth == "native_american":
-            surnames = list(self.ethnic_db.native_american_surnames or [])
-        elif eth == "african":
-            for names in (self.ethnic_db.african_surnames or {}).values():
-                surnames.extend(names)
-        elif eth == "european":
-            for names in (self.ethnic_db.european_surnames or {}).values():
-                surnames.extend(names)
-        records = self.db.search_by_surname_list(surnames, state=state, limit=limit)
         elapsed_ms = (time.time() - start) * 1000
         return SearchResults(
             records=records,

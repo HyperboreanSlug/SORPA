@@ -96,6 +96,8 @@ class MisclassifyBuildMixin:
         ).pack(side="left", pady=2)
         flow.add(conf)
 
+        # 0 = all candidates. For indian/asian/… Analyze uses surname lists
+        # (full DB), not "newest N of 300k" — so Indian×White finds hundreds.
         cap = _chip("Scan cap (0=all)")
         ctk.CTkEntry(
             cap, textvariable=self.misclass_limit_var, width=80,

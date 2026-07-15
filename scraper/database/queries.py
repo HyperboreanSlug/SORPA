@@ -127,33 +127,60 @@ class QueryMixin:
         self,
         surnames: List[str],
         state: Optional[str] = None,
-        limit: int = 1000,
+        limit: int = 0,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """Return offenders whose last_name (or full_name tail) is in *surnames*."""
-        limit = max(0, int(limit))
+        """Return offenders whose last_name (or full_name tail) is in *surnames*.
+
+        *limit* ``0`` or negative means no row cap (all matches).
+        Large surname lists are queried in chunks to stay under SQLite bind limits.
+        """
+        limit = int(limit) if limit is not None else 0
         offset = max(0, int(offset))
         cleaned = sorted({
             (s or "").strip() for s in (surnames or []) if (s or "").strip()
         }, key=str.lower)
         if not cleaned:
             return []
-        # Case-insensitive IN via lower() = ?
-        placeholders = ",".join("?" for _ in cleaned)
-        lowers = [s.lower() for s in cleaned]
-        query = f"""
-            SELECT * FROM offenders WHERE (
-                LOWER(COALESCE(last_name, '')) IN ({placeholders})
-                OR LOWER(TRIM(COALESCE(full_name, ''))) IN ({placeholders})
-            )
-        """
-        params: List[Any] = list(lowers) + list(lowers)
-        if state and state.upper() != "ALL":
-            query = self._append_state_filter(query, params, state)
-        query += " ORDER BY last_name ASC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        rows = self._conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+
+        # Chunk IN lists (last_name + full_name doubles placeholders per name)
+        chunk_size = 400
+        by_id: Dict[int, Dict[str, Any]] = {}
+        for i in range(0, len(cleaned), chunk_size):
+            chunk = cleaned[i : i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            lowers = [s.lower() for s in chunk]
+            query = f"""
+                SELECT * FROM offenders WHERE (
+                    LOWER(COALESCE(last_name, '')) IN ({placeholders})
+                    OR LOWER(TRIM(COALESCE(full_name, ''))) IN ({placeholders})
+                )
+            """
+            params: List[Any] = list(lowers) + list(lowers)
+            if state and state.upper() != "ALL":
+                query = self._append_state_filter(query, params, state)
+            query += " ORDER BY last_name ASC"
+            for row in self._conn.execute(query, params).fetchall():
+                d = dict(row)
+                rid = d.get("id")
+                if rid is not None:
+                    by_id[int(rid)] = d
+                else:
+                    by_id[id(d)] = d
+
+        rows = sorted(
+            by_id.values(),
+            key=lambda r: (
+                (r.get("last_name") or "").lower(),
+                (r.get("first_name") or "").lower(),
+                int(r.get("id") or 0),
+            ),
+        )
+        if offset:
+            rows = rows[offset:]
+        if limit > 0:
+            rows = rows[:limit]
+        return rows
 
     def search_by_state(
         self,
