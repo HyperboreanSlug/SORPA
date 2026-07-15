@@ -10,6 +10,7 @@ MISCLASS_COLS = [
     "recorded_race",
     "likely_ethnicity",
     "confidence",
+    "deepface",
     "crime",
     "confirmation",
 ]
@@ -18,9 +19,28 @@ MISCLASS_LABELS = {
     "recorded_race": "Recorded race",
     "likely_ethnicity": "Likely ethnicity",
     "confidence": "Confidence",
+    "deepface": "DeepFace",
     "crime": "Crime",
     "confirmation": "Confirmation",
 }
+
+
+def format_deepface_cell(scan: Optional[Dict[str, Any]]) -> str:
+    """Compact DeepFace score for the Misclassify tree (label + conf)."""
+    if not scan:
+        return "—"
+    lab = (
+        str(scan.get("predicted_label") or scan.get("top_label") or "").strip()
+    )
+    try:
+        conf = float(scan.get("top_confidence") or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if not lab and conf <= 0:
+        err = str(scan.get("error") or "").strip()
+        return (err[:18] + "…") if len(err) > 18 else (err or "—")
+    lab_s = lab.replace("_", " ")[:12] if lab else "?"
+    return f"{lab_s} {conf:.2f}"
 
 # Sidebar actual-race picker (coarse + Indian/MENA for SOR work)
 MISCLASS_ACTUAL_RACES = [

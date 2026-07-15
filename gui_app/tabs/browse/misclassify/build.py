@@ -191,7 +191,10 @@ class MisclassifyBuildMixin:
         wrap.pack(fill="both", expand=True, padx=10, pady=(0, 8))
         cols = list(MISCLASS_COLS)
         self.misclass_tree.configure(columns=cols, show="headings")
-        _stretch_columns(self.misclass_tree, cols, [150, 100, 130, 80, 160, 120])
+        # name · race · likely · conf · deepface · crime · confirmation
+        _stretch_columns(
+            self.misclass_tree, cols, [140, 90, 120, 70, 100, 140, 110]
+        )
         _enable_tree_column_sort(
             self.misclass_tree,
             cols,

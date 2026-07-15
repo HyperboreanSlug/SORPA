@@ -197,6 +197,34 @@ class DeepfaceScanMixin:
             return None
         return self._deepface_scan_row_to_dict(row)
 
+    def get_deepface_scans_map(
+        self,
+        offender_ids: Iterable[int],
+    ) -> Dict[int, Dict[str, Any]]:
+        """Bulk lookup: offender_id → scan dict (only ids that have a row)."""
+        ids = sorted({int(x) for x in offender_ids if x is not None})
+        if not ids:
+            return {}
+        self._ensure_deepface_scans_table()
+        out: Dict[int, Dict[str, Any]] = {}
+        # Chunk to stay under SQLite variable limits
+        chunk = 400
+        for i in range(0, len(ids), chunk):
+            part = ids[i : i + chunk]
+            placeholders = ",".join("?" * len(part))
+            rows = self._conn.execute(
+                f"SELECT * FROM deepface_scans WHERE offender_id IN ({placeholders})",
+                part,
+            ).fetchall()
+            for row in rows:
+                d = self._deepface_scan_row_to_dict(row)
+                try:
+                    oid = int(d.get("offender_id"))
+                except (TypeError, ValueError):
+                    continue
+                out[oid] = d
+        return out
+
     def list_deepface_hits(
         self,
         *,

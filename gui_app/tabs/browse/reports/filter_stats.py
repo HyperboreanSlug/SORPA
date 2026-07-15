@@ -58,8 +58,37 @@ class ReportsFilterStatsMixin:
             if hasattr(self, "_misclass_apply_display_filters")
             else results
         )
-        from gui_app.tabs.browse.misclassify.constants import verification_label
+        from gui_app.tabs.browse.misclassify.constants import (
+            format_deepface_cell,
+            verification_label,
+        )
         from scraper.crime_summary import summarize_crime
+
+        # Bulk DeepFace scores for visible rows (one query)
+        df_map: dict = {}
+        try:
+            from scraper.database import Database
+
+            oids = []
+            for mc in display[:500]:
+                rid = (getattr(mc, "record", None) or {}).get("id")
+                if rid is not None:
+                    try:
+                        oids.append(int(rid))
+                    except (TypeError, ValueError):
+                        pass
+            if oids:
+                db_path = str(
+                    getattr(self, "db_path", None) or "data/offenders.db"
+                )
+                db = Database(db_path)
+                try:
+                    if hasattr(db, "get_deepface_scans_map"):
+                        df_map = db.get_deepface_scans_map(oids)
+                finally:
+                    db.close()
+        except Exception:
+            df_map = {}
 
         for mc in display[:500]:
             rec = dict(mc.record or {})
@@ -79,6 +108,24 @@ class ReportsFilterStatsMixin:
             # Surface analyzer ethnicity on the record for the sidebar picker
             if mc.likely_ethnicity and not rec.get("likely_ethnicity"):
                 rec["likely_ethnicity"] = mc.likely_ethnicity
+            scan = None
+            try:
+                oid = int(rec["id"]) if rec.get("id") is not None else None
+            except (TypeError, ValueError):
+                oid = None
+            if oid is not None:
+                scan = df_map.get(oid)
+            if scan:
+                rec["_deepface"] = {
+                    "top_label": scan.get("top_label"),
+                    "top_confidence": scan.get("top_confidence"),
+                    "predicted_label": scan.get("predicted_label"),
+                    "scores": scan.get("scores") or {},
+                    "is_hit": scan.get("is_hit"),
+                    "severity": scan.get("severity"),
+                    "error": scan.get("error"),
+                }
+            df_cell = format_deepface_cell(scan)
             crime_raw = (
                 rec.get("crime")
                 or rec.get("offense_description")
@@ -102,6 +149,7 @@ class ReportsFilterStatsMixin:
                     (mc.expected_race or "—")[:14],
                     (mc.likely_ethnicity or "")[:22],
                     f"{mc.confidence:.3f}",
+                    df_cell,
                     crime or "—",
                     conf_status,
                 ),
