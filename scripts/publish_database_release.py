@@ -44,6 +44,11 @@ def main() -> int:
         action="store_true",
         help="Do not repack mugshots (reuse prior photo assets)",
     )
+    ap.add_argument(
+        "--force-photo-rebuild",
+        action="store_true",
+        help="Rebuild all photo shards even when fingerprints match",
+    )
     ap.add_argument("--repo", default=REPO)
     ap.add_argument("--tag", default=TAG)
     args = ap.parse_args()
@@ -64,6 +69,8 @@ def main() -> int:
             cmd.append("--full-base")
         if args.skip_photos:
             cmd.append("--skip-photos")
+        if args.force_photo_rebuild:
+            cmd.append("--force-photo-rebuild")
         print("Scrubbing + packaging DB (base or delta) + photos…")
         rc = subprocess.call(cmd)
         if rc != 0:

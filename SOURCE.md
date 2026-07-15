@@ -58,6 +58,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `shell.py` | Window, tabs, init |
 | `shell_sync*.py` | GitHub DB sync/publish (header progress; auto-upload at threshold) |
 | `db_publish_pending` / `db_publish_run` | Pending listing change counter + publisher upload runner |
+| `db_publish_photos` | Stable ~400 MiB path-hash photo shards; skip unchanged parts |
 | `shell_header.py` | Path + counts (async COUNT, never blocks UI) |
 | `shell_ops.py` | Log, sash, close, tab change |
 | `process_lifecycle.py` | Hard shutdown: cancel flags, quit Tk, force-exit leftover threads |

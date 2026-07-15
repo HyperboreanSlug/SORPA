@@ -6,8 +6,9 @@ Outputs under ``releases/``:
   - offenders.photos.NNN.zip      (mugshots under data/report_pages/*/photos/)
   - MANIFEST.json                 (sha256, sizes, photo part list)
 
-Photo zips are split under GitHub's ~2 GiB asset limit. Only files referenced by
-``offenders.photo_path`` are included (not HTML chrome under *_assets/).
+Photo zips use path-hash shards (~400 MiB target) under GitHub's ~2 GiB limit.
+Unchanged shards keep their SHA so clients re-download only dirty parts.
+Only files referenced by ``offenders.photo_path`` are included.
 """
 from __future__ import annotations
 
@@ -30,8 +31,6 @@ OUT_DIR = ROOT / "releases"
 SCRUBBED = OUT_DIR / "offenders_scrubbed.db"
 ZIP_PATH = OUT_DIR / "offenders.db.zip"
 PHOTO_PREFIX = "offenders.photos."
-# Stay under GitHub's 2 GiB release-asset limit (leave headroom for zip overhead).
-MAX_PHOTO_PART_BYTES = 1_800_000_000
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 OUT_DIR.mkdir(exist_ok=True)
@@ -110,83 +109,11 @@ def collect_referenced_photos(db_path: Path) -> list[Path]:
     return sorted(found, key=lambda p: str(p).lower())
 
 
-def write_photo_parts(files: list[Path]) -> list[dict]:
-    """Zip mugshots into offenders.photos.NNN.zip parts; return manifest entries."""
-    # Remove old photo parts
-    for old in OUT_DIR.glob(f"{PHOTO_PREFIX}*.zip"):
-        try:
-            old.unlink()
-        except OSError as e:
-            print(f"warn: could not remove {old}: {e}")
+def write_photo_parts(files: list[Path], *, force_rebuild: bool = False) -> list[dict]:
+    """Zip mugshots into stable path-hash photo parts (~400 MiB target)."""
+    from scraper.db_publish_photos import write_photo_parts as _write
 
-    if not files:
-        return []
-
-    parts: list[dict] = []
-    part_idx = 0
-    zf: zipfile.ZipFile | None = None
-    part_path: Path | None = None
-    part_bytes = 0
-    part_files = 0
-    total_bytes = 0
-
-    def close_part() -> None:
-        nonlocal zf, part_path, part_bytes, part_files, part_idx
-        if zf is None or part_path is None:
-            return
-        zf.close()
-        zf = None
-        size = part_path.stat().st_size
-        entry = {
-            "name": part_path.name,
-            "sha256": sha256_file(part_path),
-            "size_bytes": size,
-            "file_count": part_files,
-            "uncompressed_bytes": part_bytes,
-        }
-        parts.append(entry)
-        print(
-            f"  wrote {part_path.name}: files={part_files} "
-            f"zip={size / (1024 * 1024):.1f} MB"
-        )
-        part_path = None
-        part_bytes = 0
-        part_files = 0
-
-    def open_part() -> None:
-        nonlocal zf, part_path, part_idx
-        part_idx += 1
-        part_path = OUT_DIR / f"{PHOTO_PREFIX}{part_idx:03d}.zip"
-        zf = zipfile.ZipFile(
-            part_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True
-        )
-
-    open_part()
-    assert zf is not None
-
-    for i, fp in enumerate(files, 1):
-        try:
-            sz = fp.stat().st_size
-        except OSError:
-            continue
-        if part_files > 0 and part_bytes + sz > MAX_PHOTO_PART_BYTES:
-            close_part()
-            open_part()
-            assert zf is not None
-        arc = fp.relative_to(ROOT).as_posix()
-        zf.write(fp, arcname=arc)
-        part_bytes += sz
-        part_files += 1
-        total_bytes += sz
-        if i % 5000 == 0:
-            print(f"  packed {i}/{len(files)} …")
-
-    close_part()
-    print(
-        f"photos: parts={len(parts)} files={len(files)} "
-        f"raw={total_bytes / (1024 ** 3):.2f} GiB"
-    )
-    return parts
+    return _write(ROOT, files, out_dir=OUT_DIR, force_rebuild=force_rebuild)
 
 
 def scrub_database() -> int:
@@ -306,6 +233,11 @@ def main() -> int:
         action="store_true",
         help="Reuse previous photo parts in MANIFEST (fast delta publishes)",
     )
+    ap.add_argument(
+        "--force-photo-rebuild",
+        action="store_true",
+        help="Rebuild every photo shard even if fingerprints match",
+    )
     args = ap.parse_args()
 
     if not SRC.is_file():
@@ -333,7 +265,9 @@ def main() -> int:
     if not args.skip_photos:
         print("packing referenced mugshots…")
         photo_files = collect_referenced_photos(SCRUBBED)
-        photo_parts = write_photo_parts(photo_files)
+        photo_parts = write_photo_parts(
+            photo_files, force_rebuild=bool(args.force_photo_rebuild)
+        )
     else:
         print("skipping photo pack (reuse MANIFEST photo list)")
 
