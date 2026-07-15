@@ -90,6 +90,12 @@ class DedupeOpsRemoveMixin:
 
         if not dry_run and deleted_ids:
             self._conn.commit()
+            try:
+                from scraper.db_publish_pending import add_pending_listings
+
+                add_pending_listings(len(deleted_ids))
+            except Exception:
+                pass
 
         return {
             "strategy": strategy,

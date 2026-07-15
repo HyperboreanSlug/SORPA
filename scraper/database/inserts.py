@@ -306,6 +306,12 @@ class InsertMixin:
         cursor = self._conn.cursor()
         cursor.execute(_OFFENDER_INSERT_SQL, _record_to_insert_tuple(record))
         self._conn.commit()
+        try:
+            from scraper.db_publish_pending import add_pending_listings
+
+            add_pending_listings(1)
+        except Exception:
+            pass
         return cursor.lastrowid
 
     def insert_offenders_batch(self, records: List[Dict[str, Any]]) -> int:
@@ -319,5 +325,16 @@ class InsertMixin:
             [_record_to_insert_tuple(r) for r in cleaned],
         )
         self._conn.commit()
-        return cursor.rowcount if cursor.rowcount is not None and cursor.rowcount >= 0 else len(cleaned)
+        n = (
+            cursor.rowcount
+            if cursor.rowcount is not None and cursor.rowcount >= 0
+            else len(cleaned)
+        )
+        try:
+            from scraper.db_publish_pending import add_pending_listings
+
+            add_pending_listings(int(n or 0))
+        except Exception:
+            pass
+        return n
 

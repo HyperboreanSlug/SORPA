@@ -133,6 +133,12 @@ class ScrapeImportMixin:
                 self.after(50, self._refresh_integrity)
             except Exception:
                 pass
+        # Publisher: auto-upload when pending listing changes ≥ threshold
+        try:
+            if hasattr(self, "_maybe_auto_publish_public_db"):
+                self.after(800, self._maybe_auto_publish_public_db)
+        except Exception:
+            pass
         note = "DB updated · open Misclassify → Analyze to include new rows"
         if hasattr(self, "misclass_status"):
             try:

@@ -239,7 +239,15 @@ class QueryMixin:
             vals,
         )
         self._conn.commit()
-        return (cur.rowcount or 0) > 0
+        changed = (cur.rowcount or 0) > 0
+        if changed:
+            try:
+                from scraper.db_publish_pending import add_pending_listings
+
+                add_pending_listings(1)
+            except Exception:
+                pass
+        return changed
 
     def get_integrity_report(self) -> Dict[str, Any]:
         """

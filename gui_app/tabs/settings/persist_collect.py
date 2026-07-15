@@ -76,6 +76,8 @@ class SettingsCollectMixin:
             "deepface_weight_models",
             "db_sync_prompted",
             "db_sync_tag",
+            "db_publish_change_threshold",
+            "db_auto_publish_enabled",
             "auto_update_enabled",
         ):
             if k in sett:
@@ -111,6 +113,25 @@ class SettingsCollectMixin:
             out["db_sync_on_startup"] = bool(out["db_sync_enabled"])
             out["db_sync_repo"] = str(
                 sett.get("db_sync_repo") or "HyperboreanSlug/SORPA"
+            )
+        if hasattr(self, "settings_db_auto_publish"):
+            out["db_auto_publish_enabled"] = bool(self.settings_db_auto_publish.get())
+        else:
+            out["db_auto_publish_enabled"] = bool(
+                sett.get("db_auto_publish_enabled", True)
+            )
+        if hasattr(self, "settings_db_publish_threshold"):
+            try:
+                out["db_publish_change_threshold"] = int(
+                    str(self.settings_db_publish_threshold.get()).strip() or "2500"
+                )
+            except ValueError:
+                out["db_publish_change_threshold"] = int(
+                    sett.get("db_publish_change_threshold", 2500)
+                )
+        else:
+            out["db_publish_change_threshold"] = int(
+                sett.get("db_publish_change_threshold", 2500)
             )
         return out
 

@@ -124,10 +124,9 @@ class SettingsBuildMixin:
         )
         _muted(
             sync_card,
-            "Optional: download the shared public offenders archive from GitHub Releases "
-            "(base SQLite + small delta packs + mugshots under data/report_pages/*/photos/). "
-            "When enabled, the app checks for updates on every open and applies only new "
-            "deltas when possible. This app never uploads — only the publisher machine does.",
+            "Download updates from GitHub when enabled (every open). "
+            "On the publisher machine only, Sync now uploads; auto-upload runs when "
+            "pending listing changes reach the threshold below.",
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         self.settings_db_sync_enabled = ctk.BooleanVar(
@@ -146,19 +145,79 @@ class SettingsBuildMixin:
             checkmark_color=C["bg"],
             border_color=C["border"],
             command=self._settings_on_db_sync_toggle,
-        ).pack(anchor="w", padx=14, pady=(0, 8))
+        ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.settings_db_auto_publish = ctk.BooleanVar(
+            value=bool(self.app_settings.get("db_auto_publish_enabled", True))
+        )
+        ctk.CTkCheckBox(
+            sync_card,
+            text="Auto-upload when pending listing changes reach threshold (publisher only)",
+            variable=self.settings_db_auto_publish,
+            font=FONT_SM,
+            text_color=C["text"],
+            fg_color=C["accent"],
+            hover_color=C["accent_hover"],
+            checkmark_color=C["bg"],
+            border_color=C["border"],
+        ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        thr_row = ctk.CTkFrame(sync_card, fg_color="transparent")
+        thr_row.pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkLabel(
+            thr_row,
+            text="Upload after N listings changed",
+            font=FONT_SM,
+            text_color=C["muted"],
+        ).pack(side="left", padx=(0, 8))
+        self.settings_db_publish_threshold = ctk.StringVar(
+            value=str(int(self.app_settings.get("db_publish_change_threshold", 2500)))
+        )
+        ctk.CTkEntry(
+            thr_row,
+            textvariable=self.settings_db_publish_threshold,
+            width=96,
+            fg_color=C["bg"],
+            border_color=C["border"],
+            text_color=C["text"],
+        ).pack(side="left", padx=(0, 12))
+        self.settings_db_pending_label = ctk.CTkLabel(
+            thr_row,
+            text="",
+            font=FONT_SM,
+            text_color=C["muted"],
+            anchor="w",
+        )
+        self.settings_db_pending_label.pack(side="left", fill="x", expand=True)
+        try:
+            self.after(200, self._settings_refresh_pending_publish)
+        except Exception:
+            pass
 
         sync_act = ctk.CTkFrame(sync_card, fg_color="transparent")
         sync_act.pack(fill="x", padx=14, pady=(0, 8))
-        self.settings_db_sync_btn = ctk.CTkButton(
+        self.settings_db_sync_now_btn = ctk.CTkButton(
             sync_act,
-            text="Refresh database & photos",
-            width=190,
+            text="Sync now",
+            width=110,
             height=34,
-            command=self._settings_db_sync_now,
+            command=self._settings_db_sync_now_click,
             fg_color=C["accent"],
             hover_color=C["accent_hover"],
             text_color=C["bg"],
+        )
+        self.settings_db_sync_now_btn.pack(side="left", padx=(0, 8))
+        self.settings_db_sync_btn = ctk.CTkButton(
+            sync_act,
+            text="Refresh from GitHub",
+            width=150,
+            height=34,
+            command=self._settings_db_sync_now,
+            fg_color=C["elevated"],
+            hover_color=C["border"],
+            text_color=C["text"],
+            border_width=1,
+            border_color=C["border"],
         )
         self.settings_db_sync_btn.pack(side="left", padx=(0, 8))
         self.settings_db_sync_status = ctk.CTkLabel(

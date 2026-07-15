@@ -73,15 +73,19 @@ Dark CustomTkinter UI (Browse: search + integrity + misclassify, NSOPW, scrape +
 
 ### Public database (download vs publish)
 
-**App (any install):** Settings → *Download / update database from GitHub*. When enabled,
-the app checks the `database-latest` release on every open, applies only new
-`offenders.delta.NNNN.zip` packs when the base is unchanged, and skips photo parts
-whose SHA already matches.
+**App (any install):** Settings → Public database. When download is enabled, the app
+checks the `database-latest` release on every open (base + small deltas). Header shows
+a non-blocking progress bar while syncing.
 
-**Publisher (this machine only):** create `data/db_publish.allow` once, then:
+**Sync now:** uploads on the publisher machine; downloads on other installs.
+**Auto-upload:** when pending listing changes reach a customizable threshold
+(default **2,500**), the publisher machine uploads automatically (requires
+`data/db_publish.allow`).
+
+**Publisher (this machine only):**
 
 ```bash
-python scripts/enable_db_publish.py
+python scripts/enable_db_publish.py   # once
 python scripts/publish_database_release.py --use-gh              # delta if possible
 python scripts/publish_database_release.py --use-gh --full-base  # new base + clear deltas
 python scripts/publish_database_release.py --use-gh --skip-photos  # fast DB-only publish

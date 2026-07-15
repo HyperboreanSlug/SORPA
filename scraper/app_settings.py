@@ -54,6 +54,9 @@ DEFAULTS: Dict[str, Any] = {
     "db_sync_on_startup": True,
     "db_sync_repo": "HyperboreanSlug/SORPA",
     "db_sync_tag": "database-latest",
+    # Publisher: auto-upload when this many listings changed since last publish
+    "db_publish_change_threshold": 2500,
+    "db_auto_publish_enabled": True,
     # App code auto-update from GitHub (git fetch + ff-only pull on open)
     "auto_update_enabled": True,
 }
@@ -147,6 +150,13 @@ def normalize_settings(s: Dict[str, Any]) -> Dict[str, Any]:
         str(out.get("db_sync_tag") or DEFAULTS["db_sync_tag"]).strip()
         or DEFAULTS["db_sync_tag"]
     )
+    out["db_auto_publish_enabled"] = bool(out.get("db_auto_publish_enabled", True))
+    try:
+        thr = int(out.get("db_publish_change_threshold", 2500))
+    except (TypeError, ValueError):
+        thr = 2500
+    # 1–1_000_000; default 2500 listings
+    out["db_publish_change_threshold"] = max(1, min(thr, 1_000_000))
 
     try:
         mb = int(out.get("max_backups", 10))

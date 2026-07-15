@@ -7,10 +7,11 @@ from typing import Any, Callable, Optional
 
 from tkinter import messagebox
 
+from gui_app.shell_sync_publish import ShellSyncPublishMixin
 from gui_app.shell_sync_ui import ShellSyncUiMixin
 
 
-class ShellSyncMixin(ShellSyncUiMixin):
+class ShellSyncMixin(ShellSyncUiMixin, ShellSyncPublishMixin):
     """First-run prompt + background DB sync from GitHub Releases."""
 
     def _maybe_prompt_or_sync_database(self) -> None:
@@ -76,6 +77,12 @@ class ShellSyncMixin(ShellSyncUiMixin):
                 except Exception:
                     self.app_settings = sett
             self._run_db_sync_background(force=False, reason="startup update check")
+
+        # Publisher: upload if enough listings changed since last publish
+        try:
+            self.after(1200, self._maybe_auto_publish_public_db)
+        except Exception:
+            pass
 
     def _run_db_sync_background(
         self,
