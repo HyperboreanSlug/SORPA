@@ -24,8 +24,11 @@ class NsopwEnrichRunMixin:
             if limit < 0:
                 limit = 0
             delay = max(0.25, float(self.nsopw_enrich_delay.get()))
+            thr_raw = getattr(self, "nsopw_enrich_threads", None)
+            threads = int(thr_raw.get()) if thr_raw is not None else 4
+            threads = max(1, min(threads, 16))
         except (TypeError, ValueError) as e:
-            messagebox.showerror("Enrich", f"Invalid limit/delay: {e}")
+            messagebox.showerror("Enrich", f"Invalid limit/delay/threads: {e}")
             return
 
         need_race = bool(self.nsopw_enrich_need_race.get())
@@ -55,7 +58,10 @@ class NsopwEnrichRunMixin:
         self.nsopw_enrich_cancel_btn.configure(state="normal")
         self.nsopw_enrich_progress.set(0)
         self.nsopw_enrich_status.configure(
-            text=f"Enriching {state or 'all states'} (limit {run_limit})…"
+            text=(
+                f"Enriching {state or 'all states'} "
+                f"(limit {run_limit}, {threads} threads)…"
+            )
         )
         db_path = str(
             getattr(self, "nsopw_db_path", None)
@@ -88,6 +94,7 @@ class NsopwEnrichRunMixin:
                 report_delay=delay,
                 html_dir=html_dir,
                 cancel_check=lambda: getattr(self, "_nsopw_enrich_cancel", False),
+                report_threads=threads,
             )
             try:
                 summary = builder.requeue_incomplete(
@@ -114,7 +121,8 @@ class NsopwEnrichRunMixin:
                         text=(
                             f"Done · queued {summary.get('queued', 0)} · "
                             f"updated {summary.get('updated', 0)} · "
-                            f"errors {summary.get('errors', 0)}"
+                            f"errors {summary.get('errors', 0)} · "
+                            f"threads {summary.get('threads', threads)}"
                         )
                     )
                     if hasattr(self, "_nsopw_refresh_state_dropdown"):

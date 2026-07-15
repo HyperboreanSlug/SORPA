@@ -66,8 +66,11 @@ class IntegrityRequeueMixin:
         try:
             limit = max(1, int(self.requeue_limit_var.get()))
             delay = max(0.25, float(self.requeue_delay_var.get()))
+            thr_var = getattr(self, "requeue_threads_var", None)
+            threads = int(thr_var.get()) if thr_var is not None else 4
+            threads = max(1, min(threads, 16))
         except (TypeError, ValueError):
-            limit, delay = 50, 0.75
+            limit, delay, threads = 50, 0.75, 4
 
         need_race = bool(self.requeue_need_race.get())
         need_crime = bool(self.requeue_need_crime.get())
@@ -89,7 +92,7 @@ class IntegrityRequeueMixin:
         self._set_running(True)
         self.requeue_btn.configure(state="disabled")
         self.requeue_cancel_btn.configure(state="normal")
-        self.requeue_status.configure(text="Requeue running…")
+        self.requeue_status.configure(text=f"Requeue running ({threads} threads)…")
         self.requeue_progress.set(0)
         self.requeue_progress.configure(mode="determinate")
 
@@ -115,6 +118,7 @@ class IntegrityRequeueMixin:
                 report_delay=delay,
                 html_dir="data/report_pages",
                 cancel_check=lambda: self._requeue_cancel,
+                report_threads=threads,
             )
             try:
                 summary = builder.requeue_incomplete(
@@ -141,7 +145,8 @@ class IntegrityRequeueMixin:
                             f"Done · queued {summary.get('queued', 0)} · "
                             f"updated {summary.get('updated', 0)} · "
                             f"skipped scope {summary.get('skipped_scope', 0)} · "
-                            f"errors {summary.get('errors', 0)}"
+                            f"errors {summary.get('errors', 0)} · "
+                            f"threads {summary.get('threads', threads)}"
                         )
                     )
                     self._refresh_integrity()

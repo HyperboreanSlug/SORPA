@@ -143,6 +143,14 @@ class IntegrityBuildMixin:
             lim_row, textvariable=self.requeue_delay_var, width=60,
             fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
         ).pack(side="left")
+        ctk.CTkLabel(lim_row, text="Threads", font=FONT_SM, text_color=C["muted"]).pack(
+            side="left", padx=(12, 6)
+        )
+        self.requeue_threads_var = ctk.IntVar(value=4)
+        ctk.CTkEntry(
+            lim_row, textvariable=self.requeue_threads_var, width=48,
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        ).pack(side="left")
         self.requeue_btn = ctk.CTkButton(
             lim_row, text="Requeue incomplete", height=32, width=150,
             command=self._start_requeue,

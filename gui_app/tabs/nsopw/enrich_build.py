@@ -37,6 +37,9 @@ class NsopwEnrichBuildMixin:
             self.nsopw_enrich_limit = ctk.StringVar(value="100")
         if not hasattr(self, "nsopw_enrich_delay"):
             self.nsopw_enrich_delay = ctk.DoubleVar(value=0.75)
+        if not hasattr(self, "nsopw_enrich_threads"):
+            # Default 4 so single-state (e.g. FL) enrich actually parallelizes.
+            self.nsopw_enrich_threads = ctk.IntVar(value=4)
         if not hasattr(self, "nsopw_enrich_need_race"):
             self.nsopw_enrich_need_race = ctk.BooleanVar(value=True)
             self.nsopw_enrich_need_crime = ctk.BooleanVar(value=True)
@@ -103,6 +106,21 @@ class NsopwEnrichBuildMixin:
             del_row, textvariable=self.nsopw_enrich_delay, width=72,
             fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
         ).pack(side="right")
+        thr_row = ctk.CTkFrame(run, fg_color="transparent")
+        thr_row.pack(fill="x", pady=2)
+        ctk.CTkLabel(
+            thr_row, text="Report threads", font=FONT_SM, text_color=C["muted"],
+        ).pack(side="left")
+        ctk.CTkEntry(
+            thr_row, textvariable=self.nsopw_enrich_threads, width=72,
+            fg_color=C["bg"], border_color=C["border"], text_color=C["text"],
+        ).pack(side="right")
+        ctk.CTkLabel(
+            run,
+            text="Threads fetch report pages in parallel (same state allowed).",
+            font=FONT_SM, text_color=C["dim"], anchor="w", wraplength=300,
+            justify="left",
+        ).pack(fill="x", pady=(0, 2))
         scope_row = ctk.CTkFrame(run, fg_color="transparent")
         scope_row.pack(fill="x", pady=(4, 2))
         ctk.CTkLabel(
