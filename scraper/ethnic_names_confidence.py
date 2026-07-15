@@ -84,7 +84,12 @@ class EthnicConfidenceMixin:
     def _family_count(matches: List[Tuple[str, str]]) -> int:
         families = set()
         for ethnicity, _source in matches:
-            if ethnicity == "Indian" or ethnicity.startswith("Indian ("):
+            # Indian + MENA/Arabic share one family (merged Indian/MENA bucket)
+            if (
+                ethnicity.startswith("Indian")
+                or ethnicity == "Arabic"
+                or ethnicity.lower().startswith("arabic")
+            ):
                 families.add("indian")
             elif ethnicity.startswith("Asian"):
                 families.add("asian")

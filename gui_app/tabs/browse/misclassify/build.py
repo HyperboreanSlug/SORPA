@@ -66,7 +66,7 @@ class MisclassifyBuildMixin:
         ctk.CTkComboBox(
             eth, variable=self.misclass_ethnicity_var, width=200,
             values=[
-                "all", "hispanic", "asian", "indian", "indian_high_confidence",
+                "all", "hispanic", "asian", "indian/mena", "indian_high_confidence",
                 "african_american",
             ],
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],

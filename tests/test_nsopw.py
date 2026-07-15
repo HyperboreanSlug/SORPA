@@ -556,7 +556,9 @@ class BuilderSurnameTests(unittest.TestCase):
             names = {s for s, _lab in pairs}
             self.assertIn("Patel", names)
             self.assertNotIn("Dwayne", names)
-            self.assertTrue(all(lab == "Indian (high_confidence)" for _s, lab in pairs))
+            self.assertTrue(
+                all(lab == "Indian/MENA (high_confidence)" for _s, lab in pairs)
+            )
             # Subcategory path under indian
             pairs2 = b.surnames_for_ethnicity(
                 "indian", subcategory="high_confidence", all_surnames=True

@@ -34,17 +34,21 @@ class EthnicClassifyNameMixin:
 
         if not indian_blocked:
             if surname_lc in self._indian_hc_lc:
-                matches.append(("Indian (high_confidence)", "indian_high_confidence"))
+                matches.append(
+                    ("Indian/MENA (high_confidence)", "indian_high_confidence")
+                )
             if self.indian_surnames_by_group:
                 for group, names in self._indian_group_lc.items():
                     if group == "high_confidence":
                         continue
                     if surname_lc in names:
-                        matches.append((f"Indian ({group})", f"indian_{group}"))
+                        matches.append(
+                            (f"Indian/MENA ({group})", f"indian_{group}")
+                        )
             if surname_lc in self._indian_lc and not any(
                 m[0].startswith("Indian") for m in matches
             ):
-                matches.append(("Indian", "indian_surnames"))
+                matches.append(("Indian/MENA", "indian_surnames"))
 
         for group, names in self._asian_lc.items():
             if surname_lc in names:
@@ -66,8 +70,9 @@ class EthnicClassifyNameMixin:
         if surname_lc in self._portuguese_lc:
             matches.append(("Portuguese", "portuguese_surnames"))
 
+        # MENA / Arabic surnames share the Indian/MENA family (merged bucket)
         if surname_lc in self._arabic_lc:
-            matches.append(("Arabic", "arabic_surnames"))
+            matches.append(("Indian/MENA (arabic)", "arabic_surnames"))
 
         for region, names in self._african_lc.items():
             if surname_lc in names:
@@ -99,17 +104,23 @@ class EthnicClassifyNameMixin:
         def sort_key(item: Tuple[str, str]) -> float:
             ethnicity, _source = item
             score = 0.0
-            if ethnicity == "Indian" or ethnicity.startswith("Indian ("):
-                score = 1.05
-                if is_amb or is_weak_with_western:
-                    score = 0.55  # weak until first name helps
-                if is_hc and not is_amb and not is_weak_with_western:
-                    score = 1.15
+            if ethnicity.startswith("Indian"):
+                # Indian/MENA (arabic): slightly below South Asian HC, above other families
+                if "(arabic)" in ethnicity.lower():
+                    score = 0.95
+                else:
+                    score = 1.05
+                    if is_amb or is_weak_with_western:
+                        score = 0.55  # weak until first name helps
+                    if is_hc and not is_amb and not is_weak_with_western:
+                        score = 1.15
                 if fn_signal == "indian":
                     score += 0.45
                 elif fn_signal in ("anglo", "slavic"):
                     # Andrey (white) / Andrei (Slavic) both contradict South Asian
-                    if is_amb or is_weak_with_western:
+                    if "(arabic)" in ethnicity.lower():
+                        score -= 0.25
+                    elif is_amb or is_weak_with_western:
                         score -= 0.65
                     elif is_hc:
                         score -= 0.2
@@ -139,6 +150,7 @@ class EthnicClassifyNameMixin:
                 elif fn_signal == "hispanic":
                     score -= 0.2
             elif ethnicity in ("Jewish", "Portuguese", "Arabic"):
+                # Arabic legacy label (pre Indian/MENA merge)
                 score = 0.85
                 if ethnicity == "Portuguese" and fn_signal == "hispanic":
                     score += 0.35  # Iberian cluster

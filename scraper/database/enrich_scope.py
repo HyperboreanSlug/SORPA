@@ -23,9 +23,20 @@ BULK_FLAG_MARKERS = ("tx_bulk", "csv_bulk", "bulk_import", "direct_import")
 
 
 def _ethnicity_family(likely_ethnicity: str) -> str:
-    """Normalize a classify_by_name label to a coarse family key."""
+    """Normalize a classify_by_name label to a coarse family key.
+
+    Indian + MENA/Arabic are one family (``indian``); display labels are
+    Indian/MENA. Filter aliases: indian, indian/mena, mena, arabic.
+    """
     eth = (likely_ethnicity or "").strip().lower()
-    if eth == "indian" or eth.startswith("indian") or "high_confidence" in eth:
+    if (
+        eth == "indian"
+        or eth.startswith("indian")
+        or eth in ("arabic", "mena", "indian/mena", "indian_mena")
+        or eth.startswith("arabic")
+        or eth.startswith("mena")
+        or ("high_confidence" in eth and "indian" in eth)
+    ):
         return "indian"
     if eth.startswith("asian"):
         return "asian"
@@ -43,8 +54,6 @@ def _ethnicity_family(likely_ethnicity: str) -> str:
         return "jewish"
     if eth == "portuguese":
         return "portuguese"
-    if eth == "arabic":
-        return "arabic"
     return eth.replace(" ", "_")
 
 
@@ -122,8 +131,8 @@ def record_matches_ethnicity_classifier(
     True when the offender's name classifies into *ethnicity_filter*.
 
     Uses the same family keys as Misclassify → Analyze (hispanic, asian,
-    indian, indian_high_confidence, african_american, …). ``all`` / empty
-    matches every record.
+    indian/mena, indian_high_confidence, african_american, …). ``all`` /
+    empty matches every record. ``arabic`` / ``mena`` alias to indian/mena.
     """
     filt = (ethnicity_filter or "").strip().lower()
     if not filt or filt == "all":
@@ -159,7 +168,18 @@ def record_matches_ethnicity_classifier(
         return False
 
     family = _ethnicity_family(likely_eth)
-    target = "indian" if hc_only else filt
+    if hc_only or filt in (
+        "indian",
+        "indian/mena",
+        "indian_mena",
+        "mena",
+        "arabic",
+        "middle_eastern",
+        "middle eastern",
+    ):
+        target = "indian"
+    else:
+        target = filt
     return family == target
 
 

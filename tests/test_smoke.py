@@ -723,7 +723,13 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertEqual(eth.classify_by_name("Garcia")[0], "Hispanic")
         self.assertTrue(eth.classify_by_name("Chen")[0].startswith("Asian"))
         patel = eth.classify_by_name("Patel")[0]
-        self.assertTrue(patel == "Indian" or patel.startswith("Indian ("))
+        self.assertTrue(patel.startswith("Indian"), msg=f"Patel got {patel}")
+        # MENA/Arabic surnames land in merged Indian/MENA bucket
+        ahmed = eth.classify_by_name("Ahmed")[0]
+        self.assertTrue(
+            ahmed.startswith("Indian/MENA"),
+            msg=f"Ahmed should be Indian/MENA, got {ahmed}",
+        )
         self.assertTrue(eth.is_indian_surname("Singh"))
         self.assertFalse(eth.is_asian_surname("Patel")[0])
         # Smith is a common Anglo surname (may match European lists after expansion)
@@ -805,6 +811,20 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertFalse(_is_compatible("Hispanic", "Black"))
         self.assertFalse(_is_compatible("Hispanic", "Asian"))
         self.assertEqual(_canonical_race_key("Hispanic or Latino"), "HISPANIC")
+
+    def test_indian_mena_white_compatible_only_for_arabic_branch(self):
+        """MENA-arabic labels accept White; Indic subgroup White is still a mismatch."""
+        from scraper.searcher_race import _is_compatible
+
+        self.assertTrue(
+            _is_compatible("Indian/MENA (arabic)", "White")
+        )
+        self.assertFalse(
+            _is_compatible("Indian/MENA (india)", "White")
+        )
+        self.assertTrue(
+            _is_compatible("Indian/MENA (india)", "Asian")
+        )
 
     def test_indian_other_and_other_asian_not_mismatch(self):
         from scraper.searcher import (

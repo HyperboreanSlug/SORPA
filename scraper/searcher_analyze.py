@@ -54,7 +54,18 @@ class SearcherAnalyzeMixin:
             "high-confidence indian",
             "indian_hc",
         )
+        # indian / indian/mena / mena / arabic → one merged family
         if hc_only:
+            family_filter = "indian"
+        elif filter_key in (
+            "indian",
+            "indian/mena",
+            "indian_mena",
+            "mena",
+            "arabic",
+            "middle_eastern",
+            "middle eastern",
+        ):
             family_filter = "indian"
         else:
             family_filter = filter_key

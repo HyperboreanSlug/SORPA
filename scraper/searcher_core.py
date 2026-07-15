@@ -79,8 +79,24 @@ class SearcherCoreMixin:
         surnames: List[str] = []
         if eth in ("indian_high_confidence", "high_confidence_indian", "indian_hc"):
             surnames = list(self.ethnic_db.indian_high_confidence_surnames or [])
-        elif eth == "indian":
-            surnames = list(self.ethnic_db.indian_surnames or [])
+        elif eth in (
+            "indian",
+            "indian/mena",
+            "indian_mena",
+            "mena",
+            "arabic",
+            "middle_eastern",
+            "middle eastern",
+        ):
+            # Merged Indian/MENA pool (Indic + Arabic surname lists)
+            seen: set = set()
+            for n in list(self.ethnic_db.indian_surnames or []) + list(
+                self.ethnic_db.arabic_surnames or []
+            ):
+                key = (n or "").strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    surnames.append(n)
         elif eth == "hispanic":
             surnames = list(self.ethnic_db.hispanic_surnames or [])
         elif eth == "asian":
@@ -88,8 +104,6 @@ class SearcherCoreMixin:
                 surnames.extend(names)
         elif eth == "african_american":
             surnames = list(self.ethnic_db.african_american_surnames or [])
-        elif eth == "arabic":
-            surnames = list(self.ethnic_db.arabic_surnames or [])
         elif eth == "jewish":
             surnames = list(self.ethnic_db.jewish_surnames or [])
         elif eth == "portuguese":

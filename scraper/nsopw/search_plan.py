@@ -413,6 +413,10 @@ def last_prefix_whitelist_for(
     eth = (ethnicity or "").lower().strip()
     indianish = eth in (
         "indian",
+        "indian/mena",
+        "indian_mena",
+        "mena",
+        "arabic",
         "indian_high_confidence",
         "high_confidence_indian",
         "high-confidence indian",

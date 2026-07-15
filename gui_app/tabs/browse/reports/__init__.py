@@ -45,7 +45,7 @@ class ReportsTabMixin(
         "Asian (japanese)",
         "Asian (filipino)",
         "Indian",
-        "Indian (india)",
+        "Indian/MENA (india)",
         "Hispanic",
         "African American",
         "Arabic",

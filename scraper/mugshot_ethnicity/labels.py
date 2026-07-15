@@ -88,16 +88,26 @@ def name_ethnicity_to_face_labels(name_ethnicity: str) -> Set[str]:
     eth = (name_ethnicity or "").strip().lower()
     if not eth or eth == "unknown":
         return set()
-    if eth == "indian" or eth.startswith("indian"):
-        return {"indian", "asian"}
+    if (
+        eth == "indian"
+        or eth.startswith("indian")
+        or eth in ("mena", "arabic")
+        or eth.startswith("arabic")
+    ):
+        # Merged Indian/MENA family. Arabic branch: ME/White OK on US registries.
+        if (
+            "(arabic)" in eth
+            or eth in ("arabic", "mena")
+            or eth.startswith("arabic")
+        ):
+            return {"middle_eastern", "white", "indian"}
+        return {"indian", "asian", "middle_eastern"}
     if eth.startswith("asian"):
         return {"asian"}
     if eth == "hispanic":
         return {"hispanic", "white"}
     if eth in ("african_american", "african american", "african"):
         return {"black"}
-    if eth in ("arabic",) or eth.startswith("arabic"):
-        return {"middle_eastern", "white"}
     if eth in ("european", "jewish", "portuguese"):
         return {"white"}
     if eth in ("native_american", "native american"):
