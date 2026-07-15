@@ -131,8 +131,9 @@ def record_matches_ethnicity_classifier(
     True when the offender's name classifies into *ethnicity_filter*.
 
     Uses the same family keys as Misclassify → Analyze (hispanic, asian,
-    indian/mena, indian_high_confidence, african_american, …). ``all`` /
-    empty matches every record. ``arabic`` / ``mena`` alias to indian/mena.
+    indian/mena, african_american, …). ``all`` / empty matches every record.
+    ``indian/mena`` includes high-confidence Indic surnames; ``arabic`` /
+    ``mena`` alias to indian/mena.
     """
     filt = (ethnicity_filter or "").strip().lower()
     if not filt or filt == "all":
@@ -150,15 +151,6 @@ def record_matches_ethnicity_classifier(
     if not last:
         return False
 
-    hc_only = filt in (
-        "indian_high_confidence",
-        "high_confidence_indian",
-        "high-confidence indian",
-        "indian_hc",
-    )
-    if hc_only and not ethnic_db.is_indian_high_confidence_surname(last):
-        return False
-
     first = (record.get("first_name") or "").strip() or None
     middle = (record.get("middle_name") or "").strip() or None
     likely_eth, confidence, _names = ethnic_db.classify_by_name(
@@ -168,7 +160,8 @@ def record_matches_ethnicity_classifier(
         return False
 
     family = _ethnicity_family(likely_eth)
-    if hc_only or filt in (
+    # indian/mena (and legacy HC / arabic aliases) → one family; HC included
+    if filt in (
         "indian",
         "indian/mena",
         "indian_mena",
@@ -176,6 +169,10 @@ def record_matches_ethnicity_classifier(
         "arabic",
         "middle_eastern",
         "middle eastern",
+        "indian_high_confidence",
+        "high_confidence_indian",
+        "high-confidence indian",
+        "indian_hc",
     ):
         target = "indian"
     else:

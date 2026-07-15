@@ -117,14 +117,14 @@ Examples:
     p_misclassify.add_argument(
         "--ethnicity",
         choices=[
-            "all", "hispanic", "asian", "indian", "indian/mena", "indian_high_confidence",
+            "all", "hispanic", "asian", "indian", "indian/mena",
             "african_american", "african", "arabic", "mena", "jewish", "portuguese",
             "native_american", "european",
         ],
         default="all",
         help=(
             "Type of ethnicity to check for misclassification "
-            "(indian/mena = South Asian + MENA; arabic/mena alias to same)"
+            "(indian/mena = South Asian incl. high-confidence + MENA)"
         ),
     )
     p_misclassify.add_argument("--confidence", type=float, default=0.5, help="Minimum confidence threshold (0-1)")
@@ -304,15 +304,15 @@ Examples:
     p_nsopw.add_argument(
         "--ethnicity",
         choices=[
-            "all", "hispanic", "asian", "indian", "indian/mena", "indian_high_confidence",
+            "all", "hispanic", "asian", "indian", "indian/mena",
             "african_american", "african",
             "arabic", "mena", "jewish", "portuguese", "native_american", "european",
         ],
         default="hispanic",
         help=(
-            "Ethnic surname list (asian=East/SE Asian; indian/mena=South Asian + MENA; "
-            "arabic/mena alias to indian/mena; "
-            "indian_high_confidence=curated high-confidence Indians; default: hispanic)"
+            "Ethnic surname list (asian=East/SE Asian; "
+            "indian/mena=South Asian incl. high-confidence + MENA; "
+            "arabic/mena alias to indian/mena; default: hispanic)"
         ),
     )
     p_nsopw.add_argument(

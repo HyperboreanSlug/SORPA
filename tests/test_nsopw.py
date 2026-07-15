@@ -550,20 +550,20 @@ class BuilderSurnameTests(unittest.TestCase):
             )
         b = NSOPWEthnicDatabaseBuilder(db_path=":memory:", delay=1.5, report_delay=0.1)
         try:
-            pairs = b.surnames_for_ethnicity(
-                "indian_high_confidence", all_surnames=True
-            )
-            names = {s for s, _lab in pairs}
-            self.assertIn("Patel", names)
-            self.assertNotIn("Dwayne", names)
-            self.assertTrue(
-                all(lab == "Indian/MENA (high_confidence)" for _s, lab in pairs)
-            )
-            # Subcategory path under indian
-            pairs2 = b.surnames_for_ethnicity(
+            # HC-only via subcategory; full indian/mena includes HC among others
+            pairs_hc = b.surnames_for_ethnicity(
                 "indian", subcategory="high_confidence", all_surnames=True
             )
-            self.assertEqual({s for s, _ in pairs2}, names)
+            names_hc = {s for s, _lab in pairs_hc}
+            self.assertIn("Patel", names_hc)
+            self.assertNotIn("Dwayne", names_hc)
+            self.assertTrue(
+                all(lab == "Indian/MENA (high_confidence)" for _s, lab in pairs_hc)
+            )
+            pairs_full = b.surnames_for_ethnicity("indian/mena", all_surnames=True)
+            names_full = {s for s, _ in pairs_full}
+            self.assertIn("Patel", names_full)
+            self.assertTrue(names_hc.issubset(names_full))
         finally:
             b.close()
 

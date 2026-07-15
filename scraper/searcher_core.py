@@ -73,13 +73,11 @@ class SearcherCoreMixin:
         state: Optional[str] = None,
         limit: int = 1000,
     ) -> SearchResults:
-        """Search by curated surname-ethnicity lists (e.g. indian, indian_high_confidence)."""
+        """Search by curated surname-ethnicity lists (e.g. indian/mena, hispanic)."""
         start = time.time()
         eth = (ethnicity or "").strip().lower()
         surnames: List[str] = []
-        if eth in ("indian_high_confidence", "high_confidence_indian", "indian_hc"):
-            surnames = list(self.ethnic_db.indian_high_confidence_surnames or [])
-        elif eth in (
+        if eth in (
             "indian",
             "indian/mena",
             "indian_mena",
@@ -87,12 +85,16 @@ class SearcherCoreMixin:
             "arabic",
             "middle_eastern",
             "middle eastern",
+            # legacy aliases → same merged pool (HC is already in indian_surnames)
+            "indian_high_confidence",
+            "high_confidence_indian",
+            "indian_hc",
         ):
-            # Merged Indian/MENA pool (Indic + Arabic surname lists)
+            # Merged Indian/MENA pool (Indic incl. high-confidence + Arabic lists)
             seen: set = set()
             for n in list(self.ethnic_db.indian_surnames or []) + list(
                 self.ethnic_db.arabic_surnames or []
-            ):
+            ) + list(self.ethnic_db.indian_high_confidence_surnames or []):
                 key = (n or "").strip().lower()
                 if key and key not in seen:
                     seen.add(key)

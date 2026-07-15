@@ -32,8 +32,8 @@ class SearcherAnalyzeMixin:
         """Find potential race/ethnicity misclassifications.
 
         ethnicity_filter: optional family key such as 'hispanic', 'asian',
-        'indian', 'indian_high_confidence', 'african_american'.
-        When set, only that family (or curated HC Indian list) is considered.
+        'indian'/'indian/mena' (includes high-confidence + MENA),
+        'african_american'. When set, only that family is considered.
 
         If return_base_count is True, returns
         ``(misclassifications, base_count)`` where *base_count* is how many
@@ -48,16 +48,9 @@ class SearcherAnalyzeMixin:
         misclassifications: List[Misclassification] = []
         base_count = 0
         filter_key = (ethnicity_filter or "").strip().lower() or None
-        hc_only = filter_key in (
-            "indian_high_confidence",
-            "high_confidence_indian",
-            "high-confidence indian",
-            "indian_hc",
-        )
-        # indian / indian/mena / mena / arabic → one merged family
-        if hc_only:
-            family_filter = "indian"
-        elif filter_key in (
+        # indian / indian/mena / mena / arabic / legacy HC → one merged family
+        # (high-confidence surnames are included, not a separate filter)
+        if filter_key in (
             "indian",
             "indian/mena",
             "indian_mena",
@@ -65,6 +58,10 @@ class SearcherAnalyzeMixin:
             "arabic",
             "middle_eastern",
             "middle eastern",
+            "indian_high_confidence",
+            "high_confidence_indian",
+            "high-confidence indian",
+            "indian_hc",
         ):
             family_filter = "indian"
         else:
@@ -91,9 +88,6 @@ class SearcherAnalyzeMixin:
                 recorded_ethnicity = str(recorded_ethnicity or "").strip()
 
             if not last_name:
-                continue
-
-            if hc_only and not self.ethnic_db.is_indian_high_confidence_surname(last_name):
                 continue
 
             likely_eth, confidence, matching_names = self.ethnic_db.classify_by_name(

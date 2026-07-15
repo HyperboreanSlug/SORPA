@@ -192,7 +192,7 @@ class NsopwBuildMixin:
             scope,
             variable=self.nsopw_ethnicity,
             values=[
-                "hispanic", "asian", "indian/mena", "indian_high_confidence",
+                "hispanic", "asian", "indian/mena",
                 "african_american", "african", "jewish",
                 "portuguese", "native_american", "european", "all",
             ],

@@ -113,8 +113,7 @@ class IntegrityBuildMixin:
         ctk.CTkComboBox(
             scope_row, variable=self.requeue_ethnicity, width=160,
             values=[
-                "all", "hispanic", "asian", "indian/mena", "indian_high_confidence",
-                "african_american",
+                "all", "hispanic", "asian", "indian/mena", "african_american",
             ],
             fg_color=C["bg"], border_color=C["border"], button_color=C["elevated"],
             text_color=C["text"], dropdown_fg_color=C["panel"],
