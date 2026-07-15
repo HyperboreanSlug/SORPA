@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-Prepare a scrubbed public offenders.db.zip (+ mugshot parts) and publish
-to GitHub Releases.
+Prepare scrubbed public DB (base + deltas + mugshots) and publish to GitHub Releases.
+
+Upload is gated to THIS local publisher instance only (data/db_publish.allow).
+Other machines / app installs can only download.
 
 Usage (from repo root)::
 
+    python scripts/enable_db_publish.py   # once on publisher machine
     gh auth login
     python scripts/publish_database_release.py --use-gh
+    python scripts/publish_database_release.py --use-gh --full-base
+    python scripts/publish_database_release.py --use-gh --skip-photos
 
-    set GITHUB_TOKEN=ghp_...
-    python scripts/publish_database_release.py
-
-The script:
-  1. Scrubs data/offenders.db (project-relative paths only)
-  2. Writes releases/offenders.db.zip
-  3. Packs referenced mugshots into releases/offenders.photos.NNN.zip
-  4. Writes releases/MANIFEST.json
-  5. Creates/updates release tag database-latest with those assets
+Default publishes a small delta when possible; use --full-base after large rebuilds.
 """
 from __future__ import annotations
 
@@ -34,50 +31,77 @@ if str(ROOT) not in sys.path:
 REPO = "HyperboreanSlug/SORPA"
 TAG = "database-latest"
 PHOTO_GLOB = "offenders.photos.*.zip"
+DELTA_GLOB = "offenders.delta.*.zip"
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--use-gh", action="store_true", help="Use gh CLI to upload")
-    ap.add_argument("--skip-scrub", action="store_true", help="Reuse existing zip/parts")
+    ap.add_argument("--skip-scrub", action="store_true", help="Reuse existing release files")
+    ap.add_argument("--full-base", action="store_true", help="Force full base zip")
+    ap.add_argument(
+        "--skip-photos",
+        action="store_true",
+        help="Do not repack mugshots (reuse prior photo assets)",
+    )
     ap.add_argument("--repo", default=REPO)
     ap.add_argument("--tag", default=TAG)
     args = ap.parse_args()
 
     os.chdir(ROOT)
+
+    from scraper.db_publish_gate import require_publish_allowed
+
+    require_publish_allowed(ROOT)
+
     zip_path = ROOT / "releases" / "offenders.db.zip"
     man_path = ROOT / "releases" / "MANIFEST.json"
-    photo_paths = sorted((ROOT / "releases").glob(PHOTO_GLOB))
 
     if not args.skip_scrub:
         scrub = ROOT / "scripts" / "scrub_db_for_release.py"
-        print("Scrubbing + zipping DB + photos…")
-        rc = subprocess.call([sys.executable, str(scrub)])
+        cmd = [sys.executable, str(scrub)]
+        if args.full_base:
+            cmd.append("--full-base")
+        if args.skip_photos:
+            cmd.append("--skip-photos")
+        print("Scrubbing + packaging DB (base or delta) + photos…")
+        rc = subprocess.call(cmd)
         if rc != 0:
             return rc
-        photo_paths = sorted((ROOT / "releases").glob(PHOTO_GLOB))
 
-    if not zip_path.is_file() or not man_path.is_file():
-        print("Missing releases/offenders.db.zip or MANIFEST.json")
+    if not man_path.is_file():
+        print("Missing releases/MANIFEST.json")
         return 1
 
     man = json.loads(man_path.read_text(encoding="utf-8"))
-    print(
-        f"DB zip: {zip_path.stat().st_size:,} bytes, "
-        f"records={man.get('record_count')}, sha={str(man.get('sha256'))[:16]}…"
-    )
-    print(
-        f"Photo parts: {len(photo_paths)} "
-        f"(manifest files={man.get('photo_file_count')}, "
-        f"bytes={man.get('photo_size_bytes')})"
-    )
-    for p in photo_paths:
-        print(f"  {p.name}: {p.stat().st_size:,} bytes")
+    photo_paths = sorted((ROOT / "releases").glob(PHOTO_GLOB))
+    delta_paths = sorted((ROOT / "releases").glob(DELTA_GLOB))
 
-    assets = [zip_path, man_path, *photo_paths]
+    print(
+        f"MANIFEST records={man.get('record_count')} "
+        f"format={man.get('format')} base={str(man.get('sha256') or '')[:16]}… "
+        f"deltas={len(man.get('deltas') or [])}"
+    )
+    if zip_path.is_file():
+        print(f"DB zip: {zip_path.stat().st_size:,} bytes")
+    for p in delta_paths:
+        print(f"  delta {p.name}: {p.stat().st_size:,} bytes")
+    for p in photo_paths:
+        print(f"  photo {p.name}: {p.stat().st_size:,} bytes")
+
+    assets = [man_path]
+    if zip_path.is_file():
+        assets.insert(0, zip_path)
+    assets.extend(delta_paths)
+    if not args.skip_photos:
+        assets.extend(photo_paths)
+    else:
+        # Still upload photo assets that exist if first publish
+        assets.extend(photo_paths)
+
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     if args.use_gh or not token:
-        gh = shutil_which("gh")
+        gh = _which("gh")
         if gh:
             return _publish_gh(args.repo, args.tag, assets, man)
         if not token:
@@ -94,7 +118,7 @@ def main() -> int:
     return _publish_api(args.repo, args.tag, assets, token, man)
 
 
-def shutil_which(cmd: str) -> str:
+def _which(cmd: str) -> str:
     from shutil import which
 
     return which(cmd) or ""
@@ -103,51 +127,55 @@ def shutil_which(cmd: str) -> str:
 def _notes(man: dict) -> str:
     photos = man.get("photo_file_count") or 0
     parts = man.get("photo_part_count") or 0
+    deltas = man.get("deltas") or []
     return (
         "Public U.S. sex offender registry SQLite archive for SOR Public Archiver.\n\n"
         f"- Records: {man.get('record_count')}\n"
-        f"- Mugshots: {photos} files in {parts} zip part(s) "
-        f"(``offenders.photos.NNN.zip``)\n"
-        "- Paths are project-relative under ``data/report_pages/*/photos/``\n"
-        "- No local user-profile paths\n"
+        f"- Format: {man.get('format', 1)} (base + {len(deltas)} delta pack(s))\n"
+        f"- Mugshots: {photos} files in {parts} zip part(s)\n"
+        "- Clients apply `offenders.delta.NNNN.zip` after the base for small updates\n"
+        "- Paths are project-relative under `data/report_pages/*/photos/`\n"
     )
 
 
 def _publish_gh(repo: str, tag: str, assets: list[Path], man: dict) -> int:
-    """Create release then upload assets one-by-one (large photo zips hang on create)."""
+    """Create/update release; upload assets with --clobber (no full delete)."""
     notes = _notes(man)
-    # Clean previous release/tag (best-effort)
-    subprocess.call(
-        ["gh", "release", "delete", tag, "--repo", repo, "--yes"],
+    # Ensure release exists
+    check = subprocess.call(
+        ["gh", "release", "view", tag, "--repo", repo],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    subprocess.call(
-        ["git", "push", "origin", f":refs/tags/{tag}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    # Create empty release first (no huge files on the create argv)
-    create = [
-        "gh",
-        "release",
-        "create",
-        tag,
-        "--repo",
-        repo,
-        "--title",
-        "Public database archive",
-        "--notes",
-        notes,
-    ]
-    print("Creating release…")
-    rc = subprocess.call(create)
-    if rc != 0:
-        print("gh release create failed", rc)
-        return rc
+    if check != 0:
+        create = [
+            "gh",
+            "release",
+            "create",
+            tag,
+            "--repo",
+            repo,
+            "--title",
+            "Public database archive",
+            "--notes",
+            notes,
+        ]
+        print("Creating release…")
+        rc = subprocess.call(create)
+        if rc != 0:
+            print("gh release create failed", rc)
+            return rc
+    else:
+        # Refresh notes
+        subprocess.call(
+            ["gh", "release", "edit", tag, "--repo", repo, "--notes", notes],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     for path in assets:
+        if not path.is_file():
+            continue
         cmd = [
             "gh",
             "release",
@@ -159,7 +187,6 @@ def _publish_gh(repo: str, tag: str, assets: list[Path], man: dict) -> int:
             "--clobber",
         ]
         print(f"Uploading {path.name} ({path.stat().st_size:,} bytes)…")
-        # Unbuffered progress from gh when possible
         env = os.environ.copy()
         env.setdefault("GH_PROMPT_DISABLED", "1")
         rc = subprocess.call(cmd, env=env)
@@ -180,7 +207,7 @@ def _publish_api(
     import urllib.request
 
     api = "https://api.github.com"
-    asset_names = {a.name for a in assets}
+    asset_names = {a.name for a in assets if a.is_file()}
 
     def req(
         method: str,
@@ -199,8 +226,7 @@ def _publish_api(
             headers["Content-Type"] = content_type
         r = urllib.request.Request(url, data=data, headers=headers, method=method)
         with urllib.request.urlopen(r, timeout=timeout) as resp:
-            body = resp.read()
-            return resp.status, body
+            return resp.status, resp.read()
 
     try:
         status, body = req("GET", f"{api}/repos/{repo}/releases/tags/{tag}")
@@ -229,9 +255,10 @@ def _publish_api(
         print(f"Created release id={rel.get('id')}")
 
     upload_url = (rel.get("upload_url") or "").split("{")[0]
+    # Delete only assets we are replacing (same name)
     for asset in rel.get("assets") or []:
         name = asset.get("name") or ""
-        if name in asset_names or name.startswith("offenders.photos."):
+        if name in asset_names:
             aid = asset.get("id")
             try:
                 req("DELETE", f"{api}/repos/{repo}/releases/assets/{aid}")
@@ -240,9 +267,10 @@ def _publish_api(
                 print("Could not delete asset", e)
 
     for path in assets:
+        if not path.is_file():
+            continue
         url = f"{upload_url}?name={path.name}"
         print(f"Uploading {path.name} ({path.stat().st_size:,} bytes)…")
-        # Stream file to avoid loading multi-GB into RAM
         try:
             with open(path, "rb") as f:
                 data = f.read()
@@ -265,7 +293,8 @@ def _publish_api(
             return 1
     print("Done.")
     print(
-        f"Download: https://github.com/{repo}/releases/download/{tag}/{assets[0].name}"
+        f"Download: https://github.com/{repo}/releases/download/{tag}/"
+        f"{(assets[0].name if assets else 'MANIFEST.json')}"
     )
     return 0
 

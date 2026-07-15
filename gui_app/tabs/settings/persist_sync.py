@@ -57,7 +57,7 @@ class SettingsDbSyncMixin:
 
             raw = load_settings()
             raw["db_sync_enabled"] = bool(self.settings_db_sync_enabled.get())
-            raw["db_sync_on_startup"] = bool(self.settings_db_sync_on_startup.get())
+            raw["db_sync_on_startup"] = bool(raw["db_sync_enabled"])
             if raw["db_sync_enabled"]:
                 raw["db_sync_prompted"] = True
             save_settings(raw)
@@ -125,9 +125,7 @@ class SettingsDbSyncMixin:
                         raw = load_settings()
                         raw["db_sync_enabled"] = True
                         raw["db_sync_prompted"] = True
-                        raw["db_sync_on_startup"] = bool(
-                            self.settings_db_sync_on_startup.get()
-                        )
+                        raw["db_sync_on_startup"] = True
                         raw["db_sync_repo"] = repo
                         save_settings(raw)
                         self.app_settings = normalize_settings(raw)

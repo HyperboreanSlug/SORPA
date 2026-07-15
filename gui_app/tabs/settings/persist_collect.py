@@ -98,7 +98,8 @@ class SettingsCollectMixin:
                 pass
         if hasattr(self, "settings_db_sync_enabled"):
             out["db_sync_enabled"] = bool(self.settings_db_sync_enabled.get())
-            out["db_sync_on_startup"] = bool(self.settings_db_sync_on_startup.get())
+            # Always check on open when sync is enabled
+            out["db_sync_on_startup"] = bool(out["db_sync_enabled"])
             out["db_sync_repo"] = (
                 self.settings_db_sync_repo.get() or sett.get("db_sync_repo") or ""
             ).strip()
@@ -107,7 +108,7 @@ class SettingsCollectMixin:
                 out["db_sync_prompted"] = True
         else:
             out["db_sync_enabled"] = bool(sett.get("db_sync_enabled", False))
-            out["db_sync_on_startup"] = bool(sett.get("db_sync_on_startup", True))
+            out["db_sync_on_startup"] = bool(out["db_sync_enabled"])
             out["db_sync_repo"] = str(
                 sett.get("db_sync_repo") or "HyperboreanSlug/SORPA"
             )

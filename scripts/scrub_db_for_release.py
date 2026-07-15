@@ -288,37 +288,32 @@ def scrub_database() -> int:
 
 
 def main() -> int:
+    import argparse
+    import os
+
+    ap = argparse.ArgumentParser(description="Scrub DB + package base/delta for release")
+    ap.add_argument(
+        "--full-base",
+        action="store_true",
+        help="Force a full offenders.db.zip base (clears delta chain)",
+    )
+    ap.add_argument(
+        "--skip-photos",
+        action="store_true",
+        help="Reuse previous photo parts in MANIFEST (fast delta publishes)",
+    )
+    args = ap.parse_args()
+
     if not SRC.is_file():
         print(f"Missing {SRC}")
         return 1
 
-    os_chdir = True
-    import os
-
-    if os_chdir:
-        os.chdir(ROOT)
+    os.chdir(ROOT)
 
     print("scrubbing database…")
     scrub_database()
 
-    if ZIP_PATH.exists():
-        ZIP_PATH.unlink()
-    print("zipping database…")
-    with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        zf.write(SCRUBBED, arcname="offenders.db")
-
-    print("packing referenced mugshots…")
-    photo_files = collect_referenced_photos(SCRUBBED)
-    photo_parts = write_photo_parts(photo_files)
-
-    size = ZIP_PATH.stat().st_size
-    sha = sha256_file(ZIP_PATH)
     c2 = sqlite3.connect(str(SCRUBBED))
-    nrec = c2.execute("SELECT COUNT(*) FROM offenders").fetchone()[0]
-    with_photo = c2.execute(
-        "SELECT COUNT(*) FROM offenders "
-        "WHERE photo_path IS NOT NULL AND TRIM(photo_path) != ''"
-    ).fetchone()[0]
     leaks = c2.execute(
         "SELECT COUNT(*) FROM offenders WHERE "
         "photo_path LIKE '%\\\\Users\\\\%' OR report_html_path LIKE '%\\\\Users\\\\%' OR "
@@ -327,35 +322,40 @@ def main() -> int:
         "raw_data_json LIKE '%\\\\Users\\\\%' OR raw_data_json LIKE '%/Users/%'"
     ).fetchone()[0]
     c2.close()
+    if leaks:
+        print(f"WARN: path leak rows after scrub: {leaks}")
 
-    photo_bytes = sum(int(p.get("size_bytes") or 0) for p in photo_parts)
-    photo_files_n = sum(int(p.get("file_count") or 0) for p in photo_parts)
-    manifest = {
-        "asset": "offenders.db.zip",
-        "db_name": "offenders.db",
-        "sha256": sha,
-        "size_bytes": size,
-        "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "record_count": nrec,
-        "records_with_photo_path": with_photo,
-        "includes_photos": bool(photo_parts),
-        "photos": photo_parts,
-        "photo_part_count": len(photo_parts),
-        "photo_file_count": photo_files_n,
-        "photo_size_bytes": photo_bytes,
-        "notes": (
-            "Public U.S. sex offender registry archive. "
-            "Paths are project-relative. Mugshots ship as offenders.photos.NNN.zip "
-            "and extract under data/report_pages/*/photos/."
-        ),
-    }
-    (OUT_DIR / "MANIFEST.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    photo_parts: list = []
+    if not args.skip_photos:
+        print("packing referenced mugshots…")
+        photo_files = collect_referenced_photos(SCRUBBED)
+        photo_parts = write_photo_parts(photo_files)
+    else:
+        print("skipping photo pack (reuse MANIFEST photo list)")
+
+    from scraper.db_publish_package import package_db_release
+
+    print("packaging base or delta…")
+    result = package_db_release(
+        ROOT,
+        SCRUBBED,
+        photo_parts=photo_parts or None,
+        full_base=bool(args.full_base),
     )
+    mode = result.get("mode")
     print(
-        f"zip_bytes={size} records={nrec} leaks={leaks} "
-        f"photo_parts={len(photo_parts)} photo_zip_bytes={photo_bytes} "
-        f"sha={sha[:16]}"
+        f"package mode={mode} ops={result.get('ops')} "
+        f"records={result.get('record_count')} "
+        f"msg={result.get('message') or ''}"
+    )
+    if mode == "noop":
+        print("Nothing to package (DB unchanged since last publish index).")
+        return 0
+    man = result.get("manifest") or {}
+    print(
+        f"base_sha={str(man.get('sha256') or '')[:16]}… "
+        f"deltas={len(man.get('deltas') or [])} "
+        f"photo_parts={man.get('photo_part_count')}"
     )
     return 0
 

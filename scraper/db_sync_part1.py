@@ -139,7 +139,10 @@ def resolve_release_urls(
         for name, meta in by_name.items():
             if not isinstance(name, str):
                 continue
-            if name.startswith(PHOTO_ASSET_PREFIX) and name.endswith(".zip"):
+            if name.endswith(".zip") and (
+                name.startswith(PHOTO_ASSET_PREFIX)
+                or name.startswith(DELTA_ASSET_PREFIX)
+            ):
                 url = meta.get("browser_download_url") or ""
                 if url:
                     extra[name] = url

@@ -125,21 +125,19 @@ class SettingsBuildMixin:
         _muted(
             sync_card,
             "Optional: download the shared public offenders archive from GitHub Releases "
-            "(SQLite + archived mugshots under data/report_pages/*/photos/). "
-            "Photo packs are several GB. Archives use project-relative paths only "
-            "(no local user-profile paths). When enabled, the app checks for updates "
-            "on every open.",
+            "(base SQLite + small delta packs + mugshots under data/report_pages/*/photos/). "
+            "When enabled, the app checks for updates on every open and applies only new "
+            "deltas when possible. This app never uploads — only the publisher machine does.",
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         self.settings_db_sync_enabled = ctk.BooleanVar(
             value=bool(self.app_settings.get("db_sync_enabled", False))
         )
-        self.settings_db_sync_on_startup = ctk.BooleanVar(
-            value=bool(self.app_settings.get("db_sync_on_startup", True))
-        )
+        # Always true when sync is enabled (kept for settings schema compatibility).
+        self.settings_db_sync_on_startup = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             sync_card,
-            text="Download / update database from GitHub",
+            text="Download / update database from GitHub (check every open)",
             variable=self.settings_db_sync_enabled,
             font=FONT_SM,
             text_color=C["text"],
@@ -148,17 +146,6 @@ class SettingsBuildMixin:
             checkmark_color=C["bg"],
             border_color=C["border"],
             command=self._settings_on_db_sync_toggle,
-        ).pack(anchor="w", padx=14, pady=(0, 4))
-        ctk.CTkCheckBox(
-            sync_card,
-            text="Check for database updates on every app open (when enabled above)",
-            variable=self.settings_db_sync_on_startup,
-            font=FONT_SM,
-            text_color=C["text"],
-            fg_color=C["accent"],
-            hover_color=C["accent_hover"],
-            checkmark_color=C["bg"],
-            border_color=C["border"],
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         sync_act = ctk.CTkFrame(sync_card, fg_color="transparent")

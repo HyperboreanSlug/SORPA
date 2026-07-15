@@ -63,7 +63,9 @@ SOR_Archives/
 releases/*.db
 releases/*.db.zip
 releases/offenders.photos.*.zip
+releases/offenders.delta.*.zip
 releases/*_scrubbed.db
+releases/publish_state/
 !releases/MANIFEST.json
 
 # Logs and local notes

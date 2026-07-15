@@ -1,14 +1,14 @@
 """Download / update the public offenders SQLite archive from GitHub.
 
-The archive is published as Release assets:
-  - ``offenders.db.zip`` (+ ``MANIFEST.json``)
-  - ``offenders.photos.NNN.zip`` (mugshots under ``data/report_pages/*/photos/``)
+Release assets (format 2):
+  - ``offenders.db.zip`` base snapshot (+ ``MANIFEST.json``)
+  - ``offenders.delta.NNNN.zip`` incremental upsert/delete packs
+  - ``offenders.photos.NNN.zip`` mugshots under ``data/report_pages/*/photos/``
 
-Paths inside the DB are project-relative; photos extract next to the DB's
-``data/`` folder so ``photo_path`` resolves for Browse / detail views.
+Clients only download. Upload is gated to the local publisher machine
+(``data/db_publish.allow`` + ``scripts/publish_database_release.py``).
 
-Default source: ``HyperboreanSlug/SORPA`` release tag
-``database-latest``.
+Default source: ``HyperboreanSlug/SORPA`` tag ``database-latest``.
 """
 from __future__ import annotations
 
@@ -19,21 +19,21 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-# Public GitHub repository that hosts the database release asset (not a person).
 DEFAULT_GITHUB_REPO = "HyperboreanSlug/SORPA"
 DEFAULT_RELEASE_TAG = "database-latest"
 DEFAULT_ASSET_NAME = "offenders.db.zip"
 DEFAULT_MANIFEST_NAME = "MANIFEST.json"
 DEFAULT_DB_REL = Path("data/offenders.db")
-USER_AGENT = "SOR-Public-Archiver-DB-Sync/1.0"
+USER_AGENT = "SOR-Public-Archiver-DB-Sync/1.1"
 PHOTO_ASSET_PREFIX = "offenders.photos."
+DELTA_ASSET_PREFIX = "offenders.delta."
 
 
 @dataclass
@@ -45,5 +45,6 @@ class SyncResult:
     sha256: Optional[str] = None
     bytes_written: int = 0
     photos_extracted: int = 0
+    deltas_applied: int = 0
 
 

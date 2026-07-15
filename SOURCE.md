@@ -55,7 +55,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | Module | Role |
 |--------|------|
 | `shell.py` | Window, tabs, init |
-| `shell_sync.py` | GitHub DB sync |
+| `shell_sync.py` | GitHub DB sync (check every open when enabled; download only) |
 | `shell_header.py` | Path + counts (async COUNT, never blocks UI) |
 | `shell_ops.py` | Log, sash, close, tab change |
 | `process_lifecycle.py` | Hard shutdown: cancel flags, quit Tk, force-exit leftover threads |
@@ -103,7 +103,8 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `cli_cmds_*` + `cli_parser` | CLI commands |
 | `paths.py` + `app_settings.py` | Install-root path resolution; portable `db_path` across machines |
 | `mugshot_ethnicity/` | still denser — split next pass |
-| `db_sync*` | GitHub public DB sync parts |
+| `db_sync*` | GitHub public DB sync (base + deltas + selective photos) |
+| `db_publish_*` | Publisher-only: gate, row index, delta package (this machine) |
 
 ---
 

@@ -63,7 +63,17 @@ class ShellSyncMixin:
                 self._run_db_sync_background(force=True, reason="first-run download")
             return
 
-        if sett.get("db_sync_enabled") and sett.get("db_sync_on_startup", True):
+        # When sync is enabled, always check on every open (delta-friendly).
+        if sett.get("db_sync_enabled"):
+            if not sett.get("db_sync_on_startup", True):
+                sett["db_sync_on_startup"] = True
+                try:
+                    from scraper.app_settings import save_settings, normalize_settings
+
+                    save_settings(sett)
+                    self.app_settings = normalize_settings(sett)
+                except Exception:
+                    self.app_settings = sett
             self._run_db_sync_background(force=False, reason="startup update check")
 
     def _run_db_sync_background(self, *, force: bool = False, reason: str = "") -> None:

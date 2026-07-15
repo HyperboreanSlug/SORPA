@@ -17,7 +17,7 @@ Tools for archiving and searching **publicly available** U.S. sex offender regis
 - **DeepFace** (optional) local mugshot face/race gross-mismatch scan
 - **Shareable export cards** (photo + race banner + offense summary → Desktop)
 - **Cookie jar + CAPTCHA queue** for state host walls
-- **GitHub public database sync** (optional cold-start archive)
+- **GitHub public database sync** (base + small deltas; check on every open when enabled)
 - **GUI** (`python gui.py`) and **CLI** (`python -m scraper` / `python archiver.py`)
 
 ## Requirements
@@ -70,6 +70,25 @@ python gui.py
 ```
 
 Dark CustomTkinter UI (Browse: search + integrity + misclassify, NSOPW, scrape + CSV import).
+
+### Public database (download vs publish)
+
+**App (any install):** Settings → *Download / update database from GitHub*. When enabled,
+the app checks the `database-latest` release on every open, applies only new
+`offenders.delta.NNNN.zip` packs when the base is unchanged, and skips photo parts
+whose SHA already matches.
+
+**Publisher (this machine only):** create `data/db_publish.allow` once, then:
+
+```bash
+python scripts/enable_db_publish.py
+python scripts/publish_database_release.py --use-gh              # delta if possible
+python scripts/publish_database_release.py --use-gh --full-base  # new base + clear deltas
+python scripts/publish_database_release.py --use-gh --skip-photos  # fast DB-only publish
+```
+
+Upload is refused without `data/db_publish.allow` (gitignored). Do not copy that file
+to other machines. Clients never upload.
 
 ### Standalone Windows EXE
 
