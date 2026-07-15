@@ -116,7 +116,7 @@ class ArchiverApp(
         header = ctk.CTkFrame(self, fg_color=C["surface"], corner_radius=0)
         header.pack(fill="x")
 
-        # Right: operational status only (not a second record counter)
+        # Right: status + (when active) non-blocking DB sync progress
         self.stats_label = ctk.CTkLabel(
             header,
             text="Ready",
@@ -125,6 +125,7 @@ class ArchiverApp(
             anchor="e",
         )
         self.stats_label.pack(side="right", padx=(8, 12), pady=6)
+        self._build_header_sync_indicator(header)
 
         # Left: title + DB path (includes the only record count)
         flow = FlowRow(header, padx=6, pady=2)

@@ -55,7 +55,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | Module | Role |
 |--------|------|
 | `shell.py` | Window, tabs, init |
-| `shell_sync.py` | GitHub DB sync (check every open when enabled; download only) |
+| `shell_sync.py` / `shell_sync_ui.py` | GitHub DB sync (every open; header progress bar, non-blocking) |
 | `shell_header.py` | Path + counts (async COUNT, never blocks UI) |
 | `shell_ops.py` | Log, sash, close, tab change |
 | `process_lifecycle.py` | Hard shutdown: cancel flags, quit Tk, force-exit leftover threads |

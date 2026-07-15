@@ -1,14 +1,16 @@
-"""GitHub public-database sync helpers for ArchiverApp."""
+"""GitHub public-database sync helpers for ArchiverApp (non-blocking UI)."""
 from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from tkinter import messagebox
 
+from gui_app.shell_sync_ui import ShellSyncUiMixin
 
-class ShellSyncMixin:
+
+class ShellSyncMixin(ShellSyncUiMixin):
     """First-run prompt + background DB sync from GitHub Releases."""
 
     def _maybe_prompt_or_sync_database(self) -> None:
@@ -63,7 +65,6 @@ class ShellSyncMixin:
                 self._run_db_sync_background(force=True, reason="first-run download")
             return
 
-        # When sync is enabled, always check on every open (delta-friendly).
         if sett.get("db_sync_enabled"):
             if not sett.get("db_sync_on_startup", True):
                 sett["db_sync_on_startup"] = True
@@ -76,8 +77,14 @@ class ShellSyncMixin:
                     self.app_settings = sett
             self._run_db_sync_background(force=False, reason="startup update check")
 
-    def _run_db_sync_background(self, *, force: bool = False, reason: str = "") -> None:
-        """Download/update public DB off the UI thread."""
+    def _run_db_sync_background(
+        self,
+        *,
+        force: bool = False,
+        reason: str = "",
+        on_done: Optional[Callable[[Any, Optional[str]], None]] = None,
+    ) -> None:
+        """Download/update public DB off the UI thread; header shows progress."""
         if getattr(self, "_db_sync_bg_running", False):
             return
         self._db_sync_bg_running = True
@@ -91,6 +98,15 @@ class ShellSyncMixin:
         except Exception:
             db_path = Path(self.db_path)
 
+        try:
+            self._db_sync_ui_show(
+                "Checking for database updates…"
+                if not force
+                else "Syncing public database…"
+            )
+        except Exception:
+            pass
+
         def worker() -> None:
             from scraper.db_sync import download_and_install_db
 
@@ -99,6 +115,7 @@ class ShellSyncMixin:
                     self.log_queue.put(f"DB sync ({reason or 'manual'}): {m}")
                 except Exception:
                     pass
+                self._db_sync_ui_update(m)
 
             err = None
             result = None
@@ -111,29 +128,36 @@ class ShellSyncMixin:
 
             def done() -> None:
                 self._db_sync_bg_running = False
+                final = None
                 if err:
+                    final = f"DB sync error: {err}"
                     try:
-                        self.log_queue.put(f"DB sync error: {err}")
+                        self.log_queue.put(final)
                     except Exception:
                         pass
-                    return
-                if result is None:
-                    return
-                try:
-                    self.log_queue.put(f"DB sync: {result.message}")
-                except Exception:
-                    pass
-                if result.ok and result.action in ("downloaded", "updated"):
+                    self._db_sync_ui_hide(final)
+                elif result is not None:
                     try:
-                        if hasattr(self, "_after_db_data_changed"):
-                            self._after_db_data_changed()
-                        else:
-                            self._refresh_header_db_path()
+                        self.log_queue.put(f"DB sync: {result.message}")
                     except Exception:
                         pass
+                    final = result.message
+                    if result.ok and result.action in ("downloaded", "updated"):
+                        self._db_sync_ui_complete_bar()
+                        try:
+                            if hasattr(self, "_after_db_data_changed"):
+                                self._after_db_data_changed()
+                            else:
+                                self._refresh_header_db_path()
+                        except Exception:
+                            pass
+                    self._db_sync_ui_hide(final)
+                else:
+                    self._db_sync_ui_hide("Ready")
+
+                if on_done is not None:
                     try:
-                        if hasattr(self, "stats_label"):
-                            self.stats_label.configure(text=result.message[:80])
+                        on_done(result, err)
                     except Exception:
                         pass
 
@@ -142,4 +166,4 @@ class ShellSyncMixin:
             except Exception:
                 self._db_sync_bg_running = False
 
-        threading.Thread(target=worker, name="db-sync-startup", daemon=True).start()
+        threading.Thread(target=worker, name="db-sync-bg", daemon=True).start()

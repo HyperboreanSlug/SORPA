@@ -1,52 +1,12 @@
-"""DbSync"""
+"""Settings: public DB sync toggle + manual refresh (non-blocking)."""
 from __future__ import annotations
 
-import csv
-import json
-import os
-import queue
-import re
-import subprocess
-import sys
-import threading
-import traceback
-import webbrowser
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox
 
-import customtkinter as ctk
-
-from gui_app.paths import ROOT
-from gui_app.theme import (
-    C,
-    FONT_BOLD,
-    FONT_MONO,
-    FONT_SECTION,
-    FONT_SM,
-    FONT_TITLE,
-    FONT_UI,
-)
-from gui_app.widgets import (
-    _bind_tree_scroll_isolation,
-    _card,
-    _enable_tree_column_sort,
-    _format_race_display,
-    _format_state_display,
-    _hpaned,
-    _misclass_race_bucket,
-    _muted,
-    _render_bar_chart,
-    _render_pie_chart,
-    _section_label,
-    _stretch_columns,
-    _tree_frame,
-    _vpaned,
-    _wire_wide_scroll,
-)
+from gui_app.theme import C
 
 
 class SettingsDbSyncMixin:
@@ -65,55 +25,64 @@ class SettingsDbSyncMixin:
         except Exception:
             pass
 
-
     def _settings_db_sync_now(self) -> None:
-        """Manual Refresh database now (GitHub Releases)."""
-        if getattr(self, "_db_sync_running", False):
+        """Manual refresh from GitHub Releases (header progress; UI stays usable)."""
+        if getattr(self, "_db_sync_bg_running", False) or getattr(
+            self, "_db_sync_running", False
+        ):
+            try:
+                self.settings_db_sync_status.configure(
+                    text="Sync already running…", text_color=C["muted"]
+                )
+            except Exception:
+                pass
             return
-        self._db_sync_running = True
+
+        # Persist repo before sync
         try:
-            self.settings_db_sync_btn.configure(state="disabled")
-            self.settings_db_sync_status.configure(text="Downloading…")
+            from scraper.app_settings import load_settings, save_settings, normalize_settings
+
+            raw = load_settings()
+            repo = (
+                (
+                    self.settings_db_sync_repo.get()
+                    if hasattr(self, "settings_db_sync_repo")
+                    else ""
+                )
+                or raw.get("db_sync_repo")
+                or "HyperboreanSlug/SORPA"
+            ).strip()
+            raw["db_sync_repo"] = repo
+            save_settings(raw)
+            self.app_settings = normalize_settings(raw)
         except Exception:
             pass
 
-        repo = (
-            (self.settings_db_sync_repo.get() if hasattr(self, "settings_db_sync_repo") else "")
-            or (self.app_settings or {}).get("db_sync_repo")
-            or "HyperboreanSlug/SORPA"
-        ).strip()
-        tag = str((self.app_settings or {}).get("db_sync_tag") or "database-latest")
+        self._db_sync_running = True
         try:
-            from scraper.paths import resolve_under_root
-
-            db_path = resolve_under_root(self.db_path)
-        except Exception:
-            db_path = Path(self.db_path)
-
-        def worker():
-            from scraper.db_sync import download_and_install_db
-
-            result = download_and_install_db(
-                db_path,
-                repo=repo,
-                tag=tag,
-                force=True,
-                log=lambda m: self.log_queue.put(f"DB sync: {m}"),
+            self.settings_db_sync_status.configure(
+                text="Syncing in background…", text_color=C["muted"]
             )
+        except Exception:
+            pass
 
-            def done():
-                self._db_sync_running = False
-                try:
-                    self.settings_db_sync_btn.configure(state="normal")
-                except Exception:
-                    pass
-                try:
-                    col = C["success"] if result.ok else C["danger"]
+        def on_done(result, err) -> None:
+            self._db_sync_running = False
+            try:
+                if err:
                     self.settings_db_sync_status.configure(
-                        text=result.message, text_color=col
+                        text=str(err)[:120], text_color=C["danger"]
                     )
-                except Exception:
-                    pass
+                    return
+                if result is None:
+                    self.settings_db_sync_status.configure(
+                        text="No result", text_color=C["muted"]
+                    )
+                    return
+                col = C["success"] if result.ok else C["danger"]
+                self.settings_db_sync_status.configure(
+                    text=result.message, text_color=col
+                )
                 if result.ok:
                     try:
                         from scraper.app_settings import (
@@ -126,30 +95,26 @@ class SettingsDbSyncMixin:
                         raw["db_sync_enabled"] = True
                         raw["db_sync_prompted"] = True
                         raw["db_sync_on_startup"] = True
-                        raw["db_sync_repo"] = repo
+                        if hasattr(self, "settings_db_sync_repo"):
+                            raw["db_sync_repo"] = (
+                                self.settings_db_sync_repo.get()
+                                or raw.get("db_sync_repo")
+                                or "HyperboreanSlug/SORPA"
+                            ).strip()
                         save_settings(raw)
                         self.app_settings = normalize_settings(raw)
-                        self.settings_db_sync_enabled.set(True)
+                        if hasattr(self, "settings_db_sync_enabled"):
+                            self.settings_db_sync_enabled.set(True)
                     except Exception:
                         pass
-                    try:
-                        self._after_db_data_changed()
-                    except Exception:
-                        try:
-                            self._refresh_header_db_path()
-                        except Exception:
-                            pass
                 else:
                     try:
                         messagebox.showerror("Database refresh", result.message)
                     except Exception:
                         pass
-
-            try:
-                self.after(0, done)
             except Exception:
                 pass
 
-        threading.Thread(target=worker, name="db-sync", daemon=True).start()
-
-
+        self._run_db_sync_background(
+            force=True, reason="manual", on_done=on_done
+        )
