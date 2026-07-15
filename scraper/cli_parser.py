@@ -117,14 +117,15 @@ Examples:
     p_misclassify.add_argument(
         "--ethnicity",
         choices=[
-            "all", "hispanic", "asian", "indian", "indian/mena",
-            "african_american", "african", "arabic", "mena", "jewish", "portuguese",
+            "all", "hispanic", "asian",
+            "indian", "mena", "indian/mena", "indian/mena (merged)", "merged",
+            "african_american", "african", "arabic", "jewish", "portuguese",
             "native_american", "european",
         ],
         default="all",
         help=(
-            "Type of ethnicity to check for misclassification "
-            "(indian/mena = South Asian incl. high-confidence + MENA)"
+            "Misclass filter: indian=Indic only; mena=Arabic only; "
+            "indian/mena (merged)=both"
         ),
     )
     p_misclassify.add_argument("--confidence", type=float, default=0.5, help="Minimum confidence threshold (0-1)")
@@ -304,15 +305,15 @@ Examples:
     p_nsopw.add_argument(
         "--ethnicity",
         choices=[
-            "all", "hispanic", "asian", "indian", "indian/mena",
+            "all", "hispanic", "asian",
+            "indian", "mena", "indian/mena", "indian/mena (merged)", "merged",
             "african_american", "african",
-            "arabic", "mena", "jewish", "portuguese", "native_american", "european",
+            "arabic", "jewish", "portuguese", "native_american", "european",
         ],
         default="hispanic",
         help=(
-            "Ethnic surname list (asian=East/SE Asian; "
-            "indian/mena=South Asian incl. high-confidence + MENA; "
-            "arabic/mena alias to indian/mena; default: hispanic)"
+            "Surname list: indian=Indic; mena=Arabic; "
+            "indian/mena (merged)=both; default: hispanic"
         ),
     )
     p_nsopw.add_argument(

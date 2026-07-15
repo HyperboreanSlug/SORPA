@@ -23,38 +23,10 @@ BULK_FLAG_MARKERS = ("tx_bulk", "csv_bulk", "bulk_import", "direct_import")
 
 
 def _ethnicity_family(likely_ethnicity: str) -> str:
-    """Normalize a classify_by_name label to a coarse family key.
+    """Normalize a classify_by_name label (delegates to searcher_race)."""
+    from scraper.searcher_race import _ethnicity_family as _fam
 
-    Indian + MENA/Arabic are one family (``indian``); display labels are
-    Indian/MENA. Filter aliases: indian, indian/mena, mena, arabic.
-    """
-    eth = (likely_ethnicity or "").strip().lower()
-    if (
-        eth == "indian"
-        or eth.startswith("indian")
-        or eth in ("arabic", "mena", "indian/mena", "indian_mena")
-        or eth.startswith("arabic")
-        or eth.startswith("mena")
-        or ("high_confidence" in eth and "indian" in eth)
-    ):
-        return "indian"
-    if eth.startswith("asian"):
-        return "asian"
-    if eth.startswith("european"):
-        return "european"
-    if eth.startswith("african (") or eth == "african":
-        return "african"
-    if eth in ("african american", "african-american"):
-        return "african_american"
-    if eth in ("native american", "native-american"):
-        return "native_american"
-    if eth == "hispanic":
-        return "hispanic"
-    if eth == "jewish":
-        return "jewish"
-    if eth == "portuguese":
-        return "portuguese"
-    return eth.replace(" ", "_")
+    return _fam(likely_ethnicity)
 
 
 def record_is_external_import(record: Dict[str, Any]) -> bool:
@@ -130,10 +102,9 @@ def record_matches_ethnicity_classifier(
     """
     True when the offender's name classifies into *ethnicity_filter*.
 
-    Uses the same family keys as Misclassify → Analyze (hispanic, asian,
-    indian/mena, african_american, …). ``all`` / empty matches every record.
-    ``indian/mena`` includes high-confidence Indic surnames; ``arabic`` /
-    ``mena`` alias to indian/mena.
+    Uses the same keys as Misclassify → Analyze: hispanic, asian, indian,
+    mena, indian/mena (merged), african_american, …. ``all`` / empty matches
+    every record.
     """
     filt = (ethnicity_filter or "").strip().lower()
     if not filt or filt == "all":
@@ -159,25 +130,10 @@ def record_matches_ethnicity_classifier(
     if confidence < float(min_confidence) or likely_eth == "Unknown":
         return False
 
+    from scraper.searcher_race import ethnicity_filter_matches
+
     family = _ethnicity_family(likely_eth)
-    # indian/mena (and legacy HC / arabic aliases) → one family; HC included
-    if filt in (
-        "indian",
-        "indian/mena",
-        "indian_mena",
-        "mena",
-        "arabic",
-        "middle_eastern",
-        "middle eastern",
-        "indian_high_confidence",
-        "high_confidence_indian",
-        "high-confidence indian",
-        "indian_hc",
-    ):
-        target = "indian"
-    else:
-        target = filt
-    return family == target
+    return ethnicity_filter_matches(family, filt)
 
 
 def filter_records_for_enrich(

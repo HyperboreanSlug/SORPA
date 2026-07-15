@@ -93,12 +93,14 @@ def name_ethnicity_to_face_labels(name_ethnicity: str) -> Set[str]:
         or eth.startswith("indian")
         or eth in ("mena", "arabic")
         or eth.startswith("arabic")
+        or eth.startswith("mena")
     ):
-        # Merged Indian/MENA family. Arabic branch: ME/White OK on US registries.
+        # Arabic/MENA branch vs Indic (labels still Indian/MENA (…))
         if (
             "(arabic)" in eth
             or eth in ("arabic", "mena")
             or eth.startswith("arabic")
+            or eth.startswith("mena")
         ):
             return {"middle_eastern", "white", "indian"}
         return {"indian", "asian", "middle_eastern"}

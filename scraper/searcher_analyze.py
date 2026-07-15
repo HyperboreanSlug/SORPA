@@ -11,6 +11,7 @@ from scraper.searcher_race import (  # noqa: F401
     _canonical_race_key,
     format_race_label,
     _ethnicity_family,
+    ethnicity_filter_matches,
     _is_other_or_other_asian,
     _has_hispanic_ethnicity,
     _is_compatible,
@@ -31,9 +32,9 @@ class SearcherAnalyzeMixin:
     ):
         """Find potential race/ethnicity misclassifications.
 
-        ethnicity_filter: optional family key such as 'hispanic', 'asian',
-        'indian'/'indian/mena' (includes high-confidence + MENA),
-        'african_american'. When set, only that family is considered.
+        ethnicity_filter: optional key such as 'hispanic', 'asian',
+        'indian' (Indic only), 'mena' (Arabic only),
+        'indian/mena (merged)' (both), 'african_american'.
 
         If return_base_count is True, returns
         ``(misclassifications, base_count)`` where *base_count* is how many
@@ -48,24 +49,6 @@ class SearcherAnalyzeMixin:
         misclassifications: List[Misclassification] = []
         base_count = 0
         filter_key = (ethnicity_filter or "").strip().lower() or None
-        # indian / indian/mena / mena / arabic / legacy HC → one merged family
-        # (high-confidence surnames are included, not a separate filter)
-        if filter_key in (
-            "indian",
-            "indian/mena",
-            "indian_mena",
-            "mena",
-            "arabic",
-            "middle_eastern",
-            "middle eastern",
-            "indian_high_confidence",
-            "high_confidence_indian",
-            "high-confidence indian",
-            "indian_hc",
-        ):
-            family_filter = "indian"
-        else:
-            family_filter = filter_key
         scan_limit = None if limit is None or int(limit) <= 0 else int(limit)
         # Cap set → prefer newest; unlimited → full table ASC is fine
         newest_first = bool(scan_limit)
@@ -100,7 +83,7 @@ class SearcherAnalyzeMixin:
                 continue
 
             family = _ethnicity_family(likely_eth)
-            if family_filter and family != family_filter:
+            if not ethnicity_filter_matches(family, filter_key):
                 continue
 
             # Matched selected ethnicity at threshold

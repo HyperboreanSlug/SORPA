@@ -560,10 +560,23 @@ class BuilderSurnameTests(unittest.TestCase):
             self.assertTrue(
                 all(lab == "Indian/MENA (high_confidence)" for _s, lab in pairs_hc)
             )
-            pairs_full = b.surnames_for_ethnicity("indian/mena", all_surnames=True)
+            pairs_full = b.surnames_for_ethnicity(
+                "indian/mena (merged)", all_surnames=True
+            )
             names_full = {s for s, _ in pairs_full}
             self.assertIn("Patel", names_full)
             self.assertTrue(names_hc.issubset(names_full))
+            pairs_ind = b.surnames_for_ethnicity("indian", all_surnames=True)
+            pairs_mena = b.surnames_for_ethnicity("mena", all_surnames=True)
+            self.assertTrue(all(lab.startswith("Indian/MENA") for _, lab in pairs_ind))
+            self.assertTrue(
+                all(lab == "Indian/MENA (arabic)" for _, lab in pairs_mena)
+                or len(pairs_mena) == 0
+            )
+            if pairs_mena:
+                self.assertTrue(
+                    {s for s, _ in pairs_mena}.issubset(names_full)
+                )
         finally:
             b.close()
 

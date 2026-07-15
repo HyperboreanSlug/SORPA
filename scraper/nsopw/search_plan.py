@@ -415,6 +415,8 @@ def last_prefix_whitelist_for(
         "indian",
         "indian/mena",
         "indian_mena",
+        "merged",
+        "indian/mena (merged)",
         "mena",
         "arabic",
         "indian_high_confidence",

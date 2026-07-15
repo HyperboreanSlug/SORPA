@@ -814,7 +814,11 @@ class EthnicAndSearchTests(unittest.TestCase):
 
     def test_indian_mena_white_compatible_only_for_arabic_branch(self):
         """MENA-arabic labels accept White; Indic subgroup White is still a mismatch."""
-        from scraper.searcher_race import _is_compatible
+        from scraper.searcher_race import (
+            _ethnicity_family,
+            _is_compatible,
+            ethnicity_filter_matches,
+        )
 
         self.assertTrue(
             _is_compatible("Indian/MENA (arabic)", "White")
@@ -825,6 +829,18 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertTrue(
             _is_compatible("Indian/MENA (india)", "Asian")
         )
+        self.assertEqual(_ethnicity_family("Indian/MENA (arabic)"), "mena")
+        self.assertEqual(_ethnicity_family("Indian/MENA (india)"), "indian")
+        self.assertTrue(
+            ethnicity_filter_matches("indian", "indian/mena (merged)")
+        )
+        self.assertTrue(
+            ethnicity_filter_matches("mena", "indian/mena (merged)")
+        )
+        self.assertTrue(ethnicity_filter_matches("indian", "indian"))
+        self.assertFalse(ethnicity_filter_matches("mena", "indian"))
+        self.assertTrue(ethnicity_filter_matches("mena", "mena"))
+        self.assertFalse(ethnicity_filter_matches("indian", "mena"))
 
     def test_ethnicity_review_flags_persist(self):
         """Sidebar confirmations store correct/incorrect on offenders.flags."""

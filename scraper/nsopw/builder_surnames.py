@@ -56,20 +56,20 @@ class BuilderSurnamesMixin:
                 if sub and group.lower() != sub:
                     continue
                 take(names, f"Asian ({group})", group_cap())
-        # Indian/MENA: regional Indic groups + high-confidence + Arabic (one filter)
+        # Indian / MENA / merged: separate pools; labels stay Indian/MENA (…)
         hc_names = getattr(self.ethnic_db, "indian_high_confidence_surnames", None) or set()
-        indianish = eth in (
-            "all",
-            "indian",
-            "indian/mena",
-            "indian_mena",
-            "mena",
-            "arabic",
-            "indian_high_confidence",  # legacy → full indian/mena pool
-            "high_confidence_indian",
-            "indian_hc",
+        want_indian = eth in (
+            "all", "indian", "indian/mena", "indian_mena", "merged",
+            "indian/mena (merged)", "indian_high_confidence",
+            "high_confidence_indian", "indian_hc",
         )
-        if indianish and sub != "high_confidence":
+        want_mena = eth in (
+            "all", "mena", "arabic", "indian/mena", "indian_mena", "merged",
+            "indian/mena (merged)", "middle_eastern", "middle eastern",
+        )
+        if want_indian and sub == "high_confidence":
+            take(hc_names, "Indian/MENA (high_confidence)", cap)
+        elif want_indian and sub != "high_confidence":
             by_group = getattr(self.ethnic_db, "indian_surnames_by_group", None) or {}
             if by_group:
                 for group, names in sorted(by_group.items()):
@@ -82,10 +82,8 @@ class BuilderSurnamesMixin:
                 take(self.ethnic_db.indian_surnames, "Indian/MENA", cap)
             if not sub:
                 take(hc_names, "Indian/MENA (high_confidence)", group_cap())
-                take(self.ethnic_db.arabic_surnames, "Indian/MENA (arabic)", cap)
-        elif indianish and sub == "high_confidence":
-            # Subcategory still allows HC-only harvest when explicitly chosen
-            take(hc_names, "Indian/MENA (high_confidence)", cap)
+        if want_mena and not sub:
+            take(self.ethnic_db.arabic_surnames, "Indian/MENA (arabic)", cap)
         if eth in ("all", "african_american") and not sub:
             take(self.ethnic_db.african_american_surnames, "African American", cap)
         if eth in ("all", "jewish") and not sub:

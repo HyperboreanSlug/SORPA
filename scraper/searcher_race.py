@@ -61,7 +61,8 @@ _ETHNICITY_COMPATIBLE_RACES = {
         "NATIVE AMERICAN", "AMERICAN INDIAN", "AMERICAN INDIAN OR ALASKA NATIVE",
         "ALASKA NATIVE", "I", "NATIVE",
     },
-    # Legacy key — same family as indian (Indian/MENA merge)
+    # MENA / Arabic (separate filter branch; also covered by indian/mena merged)
+    "mena": {"WHITE", "OTHER", "MIDDLE EASTERN", "ARAB", "UNKNOWN", "U"},
     "arabic": {"WHITE", "OTHER", "MIDDLE EASTERN", "ARAB", "UNKNOWN", "U"},
     "jewish": {"WHITE", "OTHER"},
     "portuguese": {"WHITE", "HISPANIC", "OTHER"},
@@ -212,19 +213,57 @@ def format_race_label(recorded_race: str) -> str:
     return _format_race_key(key)
 
 
+# UI / CLI filter keys (analyze, search, enrich, NSOPW)
+INDIAN_ONLY_FILTERS = frozenset({
+    "indian",
+    "indian_high_confidence",
+    "high_confidence_indian",
+    "high-confidence indian",
+    "indian_hc",
+})
+MENA_ONLY_FILTERS = frozenset({
+    "mena",
+    "arabic",
+    "middle_eastern",
+    "middle eastern",
+})
+# Merged Indian + MENA (labeled in UI as indian/mena (merged))
+INDIAN_MENA_MERGED_FILTERS = frozenset({
+    "indian/mena",
+    "indian_mena",
+    "merged",
+    "indian/mena (merged)",
+    "indian/mena_merged",
+    "indian_mena_merged",
+})
+
+
+def _is_mena_arabic_label(likely_ethnicity: str) -> bool:
+    """True when the name hit is MENA/Arabic-sourced (not Indic subgroup)."""
+    eth = (likely_ethnicity or "").strip().lower()
+    if eth in ("arabic", "indian/mena (arabic)"):
+        return True
+    if "(arabic)" in eth:
+        return True
+    return eth == "arabic" or eth.startswith("arabic")
+
+
 def _ethnicity_family(likely_ethnicity: str) -> str:
     """Normalize a classify_by_name label to a coarse family key.
 
-    Indian and MENA/Arabic are one family (``indian``) — labels display as
-    Indian/MENA; filters accept indian, indian/mena, mena, arabic.
+    Display labels stay ``Indian/MENA (…)``; families split for filters:
+    ``indian`` (Indic / HC) vs ``mena`` (Arabic). Use
+    ``ethnicity_filter_matches`` for the merged filter.
     """
     eth = (likely_ethnicity or "").strip().lower()
+    # MENA first — labels like Indian/MENA (arabic) also startswith "indian"
+    if _is_mena_arabic_label(likely_ethnicity) or eth in ("arabic", "mena") or (
+        eth.startswith("arabic") or eth.startswith("mena")
+    ):
+        return "mena"
     if (
         eth == "indian"
         or eth.startswith("indian")
-        or eth in ("arabic", "mena", "indian/mena", "indian_mena")
-        or eth.startswith("arabic")
-        or eth.startswith("mena")
         or ("high_confidence" in eth and "indian" in eth)
     ):
         return "indian"
@@ -247,15 +286,22 @@ def _ethnicity_family(likely_ethnicity: str) -> str:
     return eth.replace(" ", "_")
 
 
-def _is_mena_arabic_label(likely_ethnicity: str) -> bool:
-    """True when the name hit is MENA/Arabic-sourced (not Indic subgroup)."""
-    eth = (likely_ethnicity or "").strip().lower()
-    if eth in ("arabic", "indian/mena (arabic)"):
+def ethnicity_filter_matches(
+    family: str,
+    filter_key: Optional[str],
+) -> bool:
+    """True when *family* (from ``_ethnicity_family``) matches a UI/CLI filter."""
+    key = (filter_key or "").strip().lower() or None
+    if not key or key == "all":
         return True
-    if "(arabic)" in eth:
-        return True
-    # Plain legacy Arabic label
-    return eth == "arabic" or eth.startswith("arabic")
+    fam = (family or "").strip().lower()
+    if key in INDIAN_MENA_MERGED_FILTERS:
+        return fam in ("indian", "mena")
+    if key in INDIAN_ONLY_FILTERS:
+        return fam == "indian"
+    if key in MENA_ONLY_FILTERS:
+        return fam == "mena"
+    return fam == key
 
 
 def _is_other_or_other_asian(race_key: str) -> bool:
@@ -303,14 +349,15 @@ def _is_compatible(
     family = _ethnicity_family(likely_ethnicity)
     race = _canonical_race_key(recorded_race)
 
-    # Indian surnames: Other / Other Asian are common registry codes — not mismatches
+    # Indic: Other / Other Asian are common registry codes — not mismatches
     if family == "indian" and _is_other_or_other_asian(race):
         return True
 
-    # MENA/Arabic branch of Indian/MENA: US registries usually code White
-    if family == "indian" and _is_mena_arabic_label(likely_ethnicity):
-        if race in ("WHITE", "OTHER", "MIDDLE EASTERN", "ARAB", "UNKNOWN"):
-            return True
+    # MENA: US registries usually code White / Other / ME
+    if family == "mena" and race in (
+        "WHITE", "OTHER", "MIDDLE EASTERN", "ARAB", "UNKNOWN",
+    ):
+        return True
 
     # Hispanic surnames: empty / unknown race are not useful mismatch signals
     if family == "hispanic" and race in ("UNKNOWN", "OTHER"):

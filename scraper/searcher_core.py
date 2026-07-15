@@ -73,32 +73,40 @@ class SearcherCoreMixin:
         state: Optional[str] = None,
         limit: int = 1000,
     ) -> SearchResults:
-        """Search by curated surname-ethnicity lists (e.g. indian/mena, hispanic)."""
+        """Search by curated surname-ethnicity lists (indian, mena, merged, …)."""
         start = time.time()
         eth = (ethnicity or "").strip().lower()
         surnames: List[str] = []
-        if eth in (
-            "indian",
-            "indian/mena",
-            "indian_mena",
-            "mena",
-            "arabic",
-            "middle_eastern",
-            "middle eastern",
-            # legacy aliases → same merged pool (HC is already in indian_surnames)
-            "indian_high_confidence",
-            "high_confidence_indian",
-            "indian_hc",
-        ):
-            # Merged Indian/MENA pool (Indic incl. high-confidence + Arabic lists)
+
+        def _unique(names) -> List[str]:
             seen: set = set()
-            for n in list(self.ethnic_db.indian_surnames or []) + list(
-                self.ethnic_db.arabic_surnames or []
-            ) + list(self.ethnic_db.indian_high_confidence_surnames or []):
+            out: List[str] = []
+            for n in names:
                 key = (n or "").strip().lower()
                 if key and key not in seen:
                     seen.add(key)
-                    surnames.append(n)
+                    out.append(n)
+            return out
+
+        from scraper.searcher_race import (
+            INDIAN_MENA_MERGED_FILTERS,
+            INDIAN_ONLY_FILTERS,
+            MENA_ONLY_FILTERS,
+        )
+
+        if eth in INDIAN_MENA_MERGED_FILTERS:
+            surnames = _unique(
+                list(self.ethnic_db.indian_surnames or [])
+                + list(self.ethnic_db.indian_high_confidence_surnames or [])
+                + list(self.ethnic_db.arabic_surnames or [])
+            )
+        elif eth in INDIAN_ONLY_FILTERS:
+            surnames = _unique(
+                list(self.ethnic_db.indian_surnames or [])
+                + list(self.ethnic_db.indian_high_confidence_surnames or [])
+            )
+        elif eth in MENA_ONLY_FILTERS:
+            surnames = _unique(list(self.ethnic_db.arabic_surnames or []))
         elif eth == "hispanic":
             surnames = list(self.ethnic_db.hispanic_surnames or [])
         elif eth == "asian":
