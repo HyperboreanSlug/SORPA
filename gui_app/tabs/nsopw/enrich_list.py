@@ -74,7 +74,9 @@ class NsopwEnrichListMixin:
 
             db = Database(db_path)
             try:
-                rows = db.find_incomplete_reports(
+                # Preview list stays capped; total uses unlimited query so
+                # Limit 0 enrich matches the real pending count.
+                preview = db.find_incomplete_reports(
                     need_race=need_race,
                     need_crime=need_crime,
                     need_photo=need_photo,
@@ -83,7 +85,21 @@ class NsopwEnrichListMixin:
                     limit=500,
                     state=state,
                 )
-                return [dict(r) for r in rows]
+                if len(preview) < 500:
+                    total = len(preview)
+                else:
+                    total = db.count_incomplete_reports(
+                        need_race=need_race,
+                        need_crime=need_crime,
+                        need_photo=need_photo,
+                        need_html=need_html,
+                        require_url=True,
+                        state=state,
+                    )
+                return {
+                    "rows": [dict(r) for r in preview],
+                    "total": int(total),
+                }
             finally:
                 db.close()
 
@@ -94,18 +110,36 @@ class NsopwEnrichListMixin:
                 except Exception:
                     pass
                 return
-            rows = result or []
+            payload = result or {}
+            rows = payload.get("rows") if isinstance(payload, dict) else (result or [])
+            rows = rows or []
+            total = (
+                int(payload.get("total") or len(rows))
+                if isinstance(payload, dict)
+                else len(rows)
+            )
             self._nsopw_enrich_fill_tree(rows)
             try:
-                self.nsopw_enrich_stats_label.configure(
-                    text=(
-                        f"Incomplete listed: {len(rows):,} (cap 500) · "
-                        f"state={state or 'all'}"
+                listed = len(rows)
+                if total > listed:
+                    stats = (
+                        f"Incomplete: {total:,} pending · "
+                        f"list shows {listed:,} · state={state or 'all'}"
                     )
-                )
-                self.nsopw_enrich_status.configure(
-                    text=f"Ready · {len(rows):,} incomplete with URL for {state or 'all'}"
-                )
+                    status = (
+                        f"Ready · {total:,} incomplete for {state or 'all'} "
+                        f"(list preview {listed:,}; Limit 0 processes all)"
+                    )
+                else:
+                    stats = (
+                        f"Incomplete: {total:,} pending · state={state or 'all'}"
+                    )
+                    status = (
+                        f"Ready · {total:,} incomplete with URL for "
+                        f"{state or 'all'}"
+                    )
+                self.nsopw_enrich_stats_label.configure(text=stats)
+                self.nsopw_enrich_status.configure(text=status)
             except Exception:
                 pass
 

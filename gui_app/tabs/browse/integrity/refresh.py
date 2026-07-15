@@ -47,7 +47,7 @@ class IntegrityRefreshMixin:
                     need_crime=True,
                     need_photo=True,
                     need_html=False,
-                    limit=5000,
+                    limit=0,  # full pending count (no artificial 5k cap)
                 )
                 dup_summary = None
                 if want_dupes:

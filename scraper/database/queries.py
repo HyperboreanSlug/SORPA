@@ -332,7 +332,7 @@ class QueryMixin:
 
         return {"overall": overall, "by_state": by_state}
 
-    def find_incomplete_reports(
+    def _incomplete_report_filters(
         self,
         *,
         need_race: bool = True,
@@ -340,14 +340,9 @@ class QueryMixin:
         need_photo: bool = True,
         need_html: bool = False,
         require_url: bool = True,
-        limit: int = 500,
         state: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Records that have a report URL but are missing selected enrichments.
-        Used for failed-report requeue.
-        """
-        limit = max(1, min(int(limit), 5000))
+    ) -> Tuple[str, List[Any]]:
+        """Return (where_sql_with_leading_WHERE, params) for incomplete rows."""
         clauses = ["1=1"]
         params: List[Any] = []
         if require_url:
@@ -369,11 +364,71 @@ class QueryMixin:
             missing.append("(report_html_path IS NULL OR TRIM(report_html_path) = '')")
         if missing:
             clauses.append("(" + " OR ".join(missing) + ")")
-        sql = f"SELECT * FROM offenders WHERE {' AND '.join(clauses)}"
-        if state and state.upper() != "ALL":
-            sql = self._append_state_filter(sql, params, state)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
+        where = "WHERE " + " AND ".join(clauses)
+        if state and str(state).upper() != "ALL":
+            # _append_state_filter appends AND (…) and extends params
+            where = self._append_state_filter(where, params, state)
+        return where, params
+
+    def count_incomplete_reports(
+        self,
+        *,
+        need_race: bool = True,
+        need_crime: bool = True,
+        need_photo: bool = True,
+        need_html: bool = False,
+        require_url: bool = True,
+        state: Optional[str] = None,
+    ) -> int:
+        """Count rows that would be returned by ``find_incomplete_reports``."""
+        where, params = self._incomplete_report_filters(
+            need_race=need_race,
+            need_crime=need_crime,
+            need_photo=need_photo,
+            need_html=need_html,
+            require_url=require_url,
+            state=state,
+        )
+        row = self._conn.execute(
+            f"SELECT COUNT(*) FROM offenders {where}", params
+        ).fetchone()
+        return int(row[0] if row else 0)
+
+    def find_incomplete_reports(
+        self,
+        *,
+        need_race: bool = True,
+        need_crime: bool = True,
+        need_photo: bool = True,
+        need_html: bool = False,
+        require_url: bool = True,
+        limit: int = 500,
+        state: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Records that have a report URL but are missing selected enrichments.
+        Used for failed-report requeue / enrich.
+
+        *limit*:
+          - ``> 0`` — return at most that many rows
+          - ``<= 0`` — no row cap (process / list all matching rows)
+        """
+        try:
+            lim = int(limit)
+        except (TypeError, ValueError):
+            lim = 500
+        where, params = self._incomplete_report_filters(
+            need_race=need_race,
+            need_crime=need_crime,
+            need_photo=need_photo,
+            need_html=need_html,
+            require_url=require_url,
+            state=state,
+        )
+        sql = f"SELECT * FROM offenders {where} ORDER BY id DESC"
+        if lim > 0:
+            sql += " LIMIT ?"
+            params = list(params) + [lim]
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 

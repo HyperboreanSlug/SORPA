@@ -47,8 +47,9 @@ class NsopwEnrichRunMixin:
             else None
         )
         scope = (self.nsopw_enrich_scope_var.get() or "all").strip().lower()
-        # 0 = large pass for this state (builder requires positive limit)
-        run_limit = limit if limit > 0 else 5000
+        # 0 = process all incomplete rows for this state (no batch cap).
+        run_limit = limit if limit > 0 else 0
+        limit_label = "all pending" if run_limit == 0 else str(run_limit)
 
         self._nsopw_enrich_cancel = False
         self._nsopw_enrich_busy = True
@@ -60,7 +61,7 @@ class NsopwEnrichRunMixin:
         self.nsopw_enrich_status.configure(
             text=(
                 f"Enriching {state or 'all states'} "
-                f"(limit {run_limit}, {threads} threads)…"
+                f"(limit {limit_label}, {threads} threads)…"
             )
         )
         db_path = str(

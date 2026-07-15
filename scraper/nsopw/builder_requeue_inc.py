@@ -50,14 +50,23 @@ class BuilderRequeueIncMixin:
             else:
                 print(msg)
 
-        fetch_limit = max(int(limit), 1)
+        try:
+            want = int(limit)
+        except (TypeError, ValueError):
+            want = 100
+        # limit <= 0 → process every incomplete row (no artificial 5k/500 cap).
+        unlimited = want <= 0
+        if unlimited:
+            fetch_limit = 0
+        else:
+            fetch_limit = max(want, 1)
         scope = (source_scope or "all").strip().lower()
         eth_filt = (ethnicity_filter or "").strip().lower() or None
         if eth_filt == "all":
             eth_filt = None
-        if scope != "all" or eth_filt:
+        if (scope != "all" or eth_filt) and not unlimited:
             # Over-fetch then filter so the final batch still reaches *limit*.
-            fetch_limit = min(max(fetch_limit * 8, fetch_limit), 5000)
+            fetch_limit = max(fetch_limit * 8, fetch_limit)
 
         rows = self.db.find_incomplete_reports(
             need_race=need_race,
@@ -75,8 +84,8 @@ class BuilderRequeueIncMixin:
             min_confidence=min_confidence,
             ethnic_db=self.ethnic_db,
         )
-        if int(limit) > 0:
-            filtered = filtered[: int(limit)]
+        if not unlimited and want > 0:
+            filtered = filtered[:want]
 
         summary: Dict[str, Any] = {
             "queued": len(filtered),
