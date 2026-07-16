@@ -53,12 +53,15 @@ class ImportRecordsCsvMixin:
             record = dict(row)
             self._normalize_record(record)
             if state:
-                # Bulk registry CSV: source_state = publishing jurisdiction;
-                # residential state may differ (FL SOR lists out-of-state addresses).
-                record.setdefault("source_state", state)
-                if not record.get("state"):
-                    record["state"] = state
-            if not record.get("source_state") and record.get("state"):
+                # Bulk registry CSV: source_state = *publishing* jurisdiction.
+                # Residential state may already be set from PERM_STATE / address
+                # (FL SOR lists many out-of-state addresses) — do not overwrite
+                # source_state with the residence code.
+                pub = str(state).strip().upper()
+                record["source_state"] = pub
+                if not (record.get("state") or "").strip():
+                    record["state"] = pub
+            elif not record.get("source_state") and record.get("state"):
                 record["source_state"] = record["state"]
             if (
                 not record.get("state")

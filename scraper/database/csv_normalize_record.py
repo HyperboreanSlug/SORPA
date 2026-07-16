@@ -147,9 +147,9 @@ class NormalizeRecordCsvMixin:
             if parts:
                 new_record["full_name"] = " ".join(parts)
 
-        # Keep source_state in sync when only state is present
-        if new_record.get("state") and not new_record.get("source_state"):
-            new_record["source_state"] = new_record["state"]
+        # Do NOT copy residential state (e.g. PERM_STATE) into source_state
+        # here — bulk CSV import sets source_state to the *publishing*
+        # jurisdiction (FL for fl_sor.csv) after normalize.
 
         # Preserve already-attached sources_json if present on the dict
         if record.get("sources_json") and not new_record.get("sources_json"):

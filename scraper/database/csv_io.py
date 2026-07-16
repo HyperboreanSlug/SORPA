@@ -27,6 +27,7 @@ from scraper.database.csv_import_csv_directory import ImportCsvDirectoryCsvMixin
 from scraper.database.csv_backfill_sources import BackfillSourcesCsvMixin
 from scraper.database.csv_export_to_csv import ExportToCsvCsvMixin
 from scraper.database.csv_normalize_record import NormalizeRecordCsvMixin
+from scraper.database.csv_repair_fl_sor import RepairFlSorCsvMixin
 
 
 class CsvMixin(
@@ -41,5 +42,6 @@ class CsvMixin(
     BackfillSourcesCsvMixin,
     ExportToCsvCsvMixin,
     NormalizeRecordCsvMixin,
+    RepairFlSorCsvMixin,
 ):
     """CSV import/export with multi-source merge."""

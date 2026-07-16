@@ -100,7 +100,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 
 | Package | Composition |
 |---------|-------------|
-| `database/` | schema, inserts, queries, `dedupe_*`, `csv_*`, sources, deepface_scans |
+| `database/` | schema, inserts, queries, `dedupe_*`, `csv_*` (incl. `csv_repair_fl_sor`), sources, deepface_scans |
 | `nsopw/` | `client_*`, `builder_*` (requeue_inc + requeue_work), search_plan, parallel (same-jurisdiction concurrency) |
 | `reports/` | `fetcher_*`, util, photos, parse_html |
 | `searcher_*` | race helpers + core/analyze/export + appearance (eye/hair) |

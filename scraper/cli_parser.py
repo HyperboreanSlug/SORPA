@@ -33,7 +33,13 @@ from scraper.searcher_race import ETHNICITY_FILTER_CLI
 from pathlib import Path
 
 
-from scraper.cli_cmds_scrape import cmd_scrape, cmd_import, cmd_tag_sources, cmd_status
+from scraper.cli_cmds_scrape import (
+    cmd_scrape,
+    cmd_import,
+    cmd_tag_sources,
+    cmd_repair_fl_sor,
+    cmd_status,
+)
 from scraper.cli_cmds_search import cmd_search, cmd_misclassify, cmd_export
 from scraper.cli_cmds_mugshot import (
     cmd_mugshot_verify,
@@ -238,6 +244,23 @@ Examples:
     p_tag.add_argument("--state", type=str, help="Limit HTML verify to one state")
     _add_database_arg(p_tag)
 
+    # Repair incomplete FL SOR bulk import
+    p_fl = subparsers.add_parser(
+        "repair-fl-sor",
+        help="Re-apply fl_sor.csv: PERSON_NBR, FL source_state, flyer URLs on all rows",
+    )
+    p_fl.add_argument(
+        "--input", "-i",
+        default="data/downloads/fl_sor.csv",
+        help="Path to FDLE fl_sor.csv (default: data/downloads/fl_sor.csv)",
+    )
+    p_fl.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="Skip automatic DB backup before repair",
+    )
+    _add_database_arg(p_fl)
+
     # Dedupe command
     p_dedupe = subparsers.add_parser(
         "dedupe",
@@ -429,6 +452,7 @@ Examples:
         "export": cmd_export,
         "import": cmd_import,
         "tag-sources": cmd_tag_sources,
+        "repair-fl-sor": cmd_repair_fl_sor,
         "dedupe": cmd_dedupe,
         "status": cmd_status,
         "nsopw": cmd_nsopw,

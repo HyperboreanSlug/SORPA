@@ -231,6 +231,35 @@ def cmd_tag_sources(args: argparse.Namespace) -> None:
         db.close()
 
 
+def cmd_repair_fl_sor(args: argparse.Namespace) -> None:
+    """Re-apply fl_sor.csv so every FDLE person has id, FL source, URL."""
+    from pathlib import Path
+
+    from .database import Database
+    from .database.backup import backup_database_file
+
+    db_path = args.database or "data/offenders.db"
+    csv_path = (
+        getattr(args, "input", None)
+        or "data/downloads/fl_sor.csv"
+    )
+    if not getattr(args, "no_backup", False):
+        try:
+            bak_dir = Path(db_path).resolve().parent / "backups"
+            bak, note = backup_database_file(db_path, bak_dir)
+            print(f"Backup: {bak}" + (f" ({note})" if note else ""))
+        except Exception as e:
+            print(f"Backup skipped/failed: {e}")
+
+    db = Database(db_path)
+    try:
+        print(f"Repairing FL SOR from {csv_path} → {db_path}")
+        result = db.repair_fl_sor_from_csv(csv_path, log=print)
+        print(f"Result: {result}")
+    finally:
+        db.close()
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     """Show scrape support matrix for all registries."""
     from .config import REGISTRIES
