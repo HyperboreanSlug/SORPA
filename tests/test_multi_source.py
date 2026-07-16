@@ -58,6 +58,7 @@ class MultiSourceTests(unittest.TestCase):
             row,
             {
                 "report_fetch_ok": True,
+                "full_name": "NIRAJ PATEL",
                 "race": "Asian or Pacific Islander",
                 "gender": "M",
                 "report_html_path": "data/report_pages/CO/x.html",
@@ -317,8 +318,10 @@ class MultiSourceTests(unittest.TestCase):
                         "report_url": url,
                         "report_final_url": url,
                         "report_fetch_ok": True,
+                        "full_name": "JACKSON WILLIAM ALEXANDER",
                         "race": "Black",
                         "gender": "Male",
+                        "identity_ok": True,
                     }
                 }
             ),

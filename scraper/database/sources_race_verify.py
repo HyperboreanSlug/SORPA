@@ -251,12 +251,38 @@ def recover_report_enrichment_into_sources(record: Dict[str, Any]) -> bool:
         make_source,
         parse_sources,
     )
+    from scraper.reports.identity_gate import demo_identity_ok
 
     race, fields = parse_report_enrichment_race(record.get("raw_data_json"))
     if not race and not fields.get("race"):
         return False
     if not fields.get("race") and race:
         fields["race"] = race
+
+    # Build a mini-demo for identity gate (reject Jose Triana on Ossiel, etc.)
+    demo_probe: Dict[str, Any] = {
+        "report_fetch_ok": True,
+        "report_html_path": record.get("report_html_path"),
+        "race": fields.get("race"),
+    }
+    try:
+        import json as _json
+
+        raw = record.get("raw_data_json")
+        raw_d = raw if isinstance(raw, dict) else _json.loads(str(raw or "{}"))
+        en = (raw_d or {}).get("report_enrichment") or {}
+        if en.get("report_html_path"):
+            demo_probe["report_html_path"] = en.get("report_html_path")
+        if en.get("full_name") or en.get("name"):
+            demo_probe["full_name"] = en.get("full_name") or en.get("name")
+        if en.get("identity_ok") is False:
+            return False
+    except Exception:
+        pass
+    # Prefer page name; if enrichment stored full_name matching record, allow
+    ok, _reason = demo_identity_ok(record, demo_probe)
+    if not ok:
+        return False
 
     sources = parse_sources(record.get("sources_json"))
     if sources_have_verified_race(sources):

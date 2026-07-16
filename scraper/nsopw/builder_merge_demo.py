@@ -51,22 +51,40 @@ class BuilderMergeDemoMixin:
             jur = jur.split(" | ", 1)[0].strip()
         jur = str(jur or "").strip().upper()
 
+        # Identity gate: never merge demographics from a different person's flyer
+        from scraper.reports.identity_gate import demo_identity_ok
+
+        id_ok, id_reason = demo_identity_ok(record, demo)
+        if report_ok and not id_ok:
+            # Reject wrong-person HTML (e.g. PERSON_NBR flyer → Jose Triana for Ossiel)
+            report_ok = False
+            demo = dict(demo)
+            demo["report_fetch_ok"] = False
+            demo["report_block_reason"] = f"identity:{id_reason}"
+            # Do not keep wrong photo/html as primary on the record
+            for poison in ("photo_path", "photo_url", "report_html_path"):
+                # only clear if demo was about to set them from this fetch
+                pass
+
         # Field values observed on this report fetch (only non-empty)
         demo_fields: Dict[str, Any] = {}
-        for key in TRACKED_FIELDS:
-            val = demo.get(key)
-            if val is None or val == "":
-                continue
-            demo_fields[key] = val if not isinstance(val, str) else val.strip()
-        # Also pull crime aliases
-        if not demo_fields.get("crime"):
-            for k in ("offense_description", "offense_type"):
-                if demo.get(k):
-                    demo_fields["crime"] = str(demo.get(k)).strip()
-                    break
+        if id_ok:
+            for key in TRACKED_FIELDS:
+                val = demo.get(key)
+                if val is None or val == "":
+                    continue
+                demo_fields[key] = val if not isinstance(val, str) else val.strip()
+            # Also pull crime aliases
+            if not demo_fields.get("crime"):
+                for k in ("offense_description", "offense_type"):
+                    if demo.get(k):
+                        demo_fields["crime"] = str(demo.get(k)).strip()
+                        break
 
-        html_status = "ok" if report_ok else "empty"
-        if demo.get("report_block_reason"):
+        html_status = "ok" if (report_ok and id_ok) else "empty"
+        if not id_ok and id_reason:
+            html_status = f"identity:{id_reason}"
+        elif demo.get("report_block_reason"):
             html_status = f"blocked:{demo.get('report_block_reason')}"
         elif str(demo.get("report_fetch_status") or "").startswith("error"):
             html_status = str(demo.get("report_fetch_status"))
@@ -74,47 +92,56 @@ class BuilderMergeDemoMixin:
             html_status = str(demo.get("report_fetch_status"))
 
         report_src = make_source(
-            source_type="report_html" if report_ok else "nsopw_report",
+            source_type="report_html" if (report_ok and id_ok) else "nsopw_report",
             jurisdiction=jur,
             origin="report_fetch",
             label=f"{jur or 'Registry'} report HTML",
             external_id=str(record.get("external_id") or ""),
             source_url=url,
             fields=demo_fields,
-            html_path=(demo.get("report_html_path") or record.get("report_html_path") or None),
-            html_verified=report_ok and bool(demo_fields.get("race") or demo_fields.get("crime")),
+            html_path=(
+                (demo.get("report_html_path") or record.get("report_html_path") or None)
+                if id_ok
+                else None
+            ),
+            html_verified=bool(report_ok and id_ok and demo_fields.get("race")),
             html_status=html_status,
         )
         # Preserve any pre-existing sources (e.g. FL CSV) and add/update this one
-        attach_source_to_record(record, report_src, prefer_new_fields=True)
+        attach_source_to_record(record, report_src, prefer_new_fields=bool(id_ok))
 
-        # Top-level fill: never overwrite a different source's race with blank;
-        # multi-source display already applied. Fill blanks for other fields.
-        for key in (
-            "ethnicity", "gender", "height", "weight",
-            "eye_color", "hair_color", "skin_tone", "build", "age",
-            "date_of_birth", "county", "city", "address", "risk_level",
-            "offense_type", "offense_description", "crime",
-            "photo_path", "photo_url", "report_html_path",
-        ):
-            val = demo.get(key)
-            if val is None or val == "":
-                continue
-            if key in ("crime", "offense_type", "offense_description"):
-                if not record.get(key):
+        # Top-level fill only when identity matched — never copy wrong person
+        if id_ok:
+            for key in (
+                "ethnicity", "gender", "height", "weight",
+                "eye_color", "hair_color", "skin_tone", "build", "age",
+                "date_of_birth", "county", "city", "address", "risk_level",
+                "offense_type", "offense_description", "crime",
+                "photo_path", "photo_url", "report_html_path",
+            ):
+                val = demo.get(key)
+                if val is None or val == "":
+                    continue
+                if key in ("crime", "offense_type", "offense_description"):
+                    if not record.get(key):
+                        record[key] = val
+                elif not record.get(key):
                     record[key] = val
-            elif not record.get(key):
-                record[key] = val
-            elif key in ("photo_path", "photo_url", "report_html_path"):
-                if not record.get(key):
-                    record[key] = val
+                elif key in ("photo_path", "photo_url", "report_html_path"):
+                    if not record.get(key):
+                        record[key] = val
 
-        # Keep crime in sync with offense fields if only one side was set
-        if not record.get("crime"):
-            odesc = (record.get("offense_description") or "").strip()
-            otype = (record.get("offense_type") or "").strip()
-            if odesc or otype:
-                record["crime"] = odesc or otype
+            # Keep crime in sync with offense fields if only one side was set
+            if not record.get("crime"):
+                odesc = (record.get("offense_description") or "").strip()
+                otype = (record.get("offense_type") or "").strip()
+                if odesc or otype:
+                    record["crime"] = odesc or otype
+        else:
+            # Drop any previously attached wrong HTML for this poisoned URL
+            from scraper.reports.identity_gate import strip_wrong_person_html
+
+            strip_wrong_person_html(record, reason=id_reason)
 
         try:
             raw = json.loads(record.get("raw_data_json") or "{}")
@@ -123,7 +150,7 @@ class BuilderMergeDemoMixin:
         except json.JSONDecodeError:
             raw = {}
         # Preserve original NSOPW payload if present; nest enrichment
-        raw["report_enrichment"] = {
+        enr = {
             k: demo.get(k)
             for k in (
                 "report_url", "report_final_url", "report_resolved_url",
@@ -134,6 +161,17 @@ class BuilderMergeDemoMixin:
             )
             if k in demo
         }
+        enr["identity_ok"] = bool(id_ok)
+        enr["identity_reason"] = id_reason
+        if not id_ok:
+            # Do not store wrong-person demographics as enrichment
+            for k in (
+                "race", "ethnicity", "gender", "height", "weight",
+                "hair_color", "eye_color", "photo_path", "photo_url",
+                "report_html_path",
+            ):
+                enr.pop(k, None)
+        raw["report_enrichment"] = enr
         record["raw_data_json"] = json.dumps(raw, ensure_ascii=False)[:50000]
 
         try:
@@ -159,12 +197,19 @@ class BuilderMergeDemoMixin:
             if t not in tags:
                 tags.append(t)
 
-        if demo.get("report_html_path"):
+        if id_ok and demo.get("report_html_path"):
             _tag("html_archived")
-        if demo.get("photo_path"):
+        if id_ok and demo.get("photo_path"):
             _tag("photo_archived")
-        if demo.get("report_fetch_ok"):
+        if id_ok and demo.get("report_fetch_ok"):
             _tag("report_enriched")
+        elif not id_ok:
+            _tag("identity_html_mismatch")
+            _tag(f"identity:{id_reason}"[:80])
+            # Clear wrong-person archive pointers if still set
+            if record.get("report_html_path") and not id_ok:
+                # strip_wrong_person_html already ran; ensure no re-tag as enriched
+                pass
         else:
             _tag("report_link_saved")
             if demo.get("report_block_reason"):

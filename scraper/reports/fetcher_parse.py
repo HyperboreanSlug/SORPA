@@ -331,6 +331,17 @@ class FetcherParseMixin:
         if race_val and not is_plausible_race_value(race_val):
             found.pop("race", None)
 
+        # Person name for identity gate (must match DB record before attach)
+        if not found.get("full_name"):
+            try:
+                from scraper.reports.identity_gate import extract_person_name_from_html
+
+                pn = extract_person_name_from_html(raw_html)
+                if pn:
+                    found["full_name"] = pn
+            except Exception:
+                pass
+
         # CA and others often use Ethnicity where Race is expected
         if not found.get("race") and found.get("ethnicity"):
             eth = str(found["ethnicity"]).strip()

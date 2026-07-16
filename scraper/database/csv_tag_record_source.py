@@ -30,7 +30,6 @@ class TagRecordSourceCsvMixin:
         """Attach a sources_json entry for this import and refresh multi-source race."""
         from scraper.database.sources import (
             attach_source_to_record,
-            fl_person_url,
             make_source,
             extract_tracked_fields,
         )
@@ -48,11 +47,8 @@ class TagRecordSourceCsvMixin:
         origin = (source_hint or "").strip() or "import"
         ext = str(record.get("external_id") or record.get("person_nbr") or "").strip()
         url = str(record.get("source_url") or "").strip()
-        # FDLE bulk: synthesize flyer URL when we only have PERSON_NBR
-        if not url and jur == "FL" and ext and ext.isdigit():
-            url = fl_person_url(ext)
-            if url and not record.get("source_url"):
-                record["source_url"] = url
+        # Never invent FDLE flyer URLs from PERSON_NBR — that id is not personId
+        # and causes wrong-person scrapes (Ossiel Zuniga → Jose Triana).
 
         fields = extract_tracked_fields(record)
         src = make_source(

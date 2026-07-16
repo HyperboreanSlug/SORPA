@@ -51,7 +51,6 @@ class RepairFlSorCsvMixin:
         from scraper.database.sources import (
             apply_sources_to_record,
             dumps_sources,
-            fl_person_url,
             make_source,
             merge_sources_lists,
             parse_sources,
@@ -128,9 +127,8 @@ class RepairFlSorCsvMixin:
                     rec["state"] = "FL"
                 # else keep PERM_STATE as residential state
 
-                url = fl_person_url(ext)
-                if url and not rec.get("source_url"):
-                    rec["source_url"] = url
+                # Do NOT set source_url from PERSON_NBR (≠ flyer personId).
+                # Wrong flyer links poison HTML scrapes with another person's data.
 
                 self._tag_record_source(
                     rec,

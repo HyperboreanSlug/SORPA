@@ -599,9 +599,27 @@ def infer_source_type(record: Dict[str, Any]) -> Tuple[str, str, str]:
 
 
 def fl_person_url(person_nbr: str) -> str:
-    """Best-effort FDLE flyer URL from PERSON_NBR (may need personId, not always equal)."""
-    n = (person_nbr or "").strip()
-    if not n:
+    """
+    FDLE flyer URL from an id.
+
+    **Do not call this with FL bulk PERSON_NBR.** PERSON_NBR is not flyer
+    ``personId`` — synthesizing ``flyer.jsf?personId=<PERSON_NBR>`` attaches
+    the wrong person (e.g. Ossiel Zuniga /5478 → Jose Triana flyer).
+
+    Only use when *person_nbr* is a confirmed flyer personId (NSOPW URI or
+    verified HTML). Prefer returning empty and leaving source_url unset for
+    bulk CSV imports.
+    """
+    # Disabled by default: callers that still pass PERSON_NBR must not invent URLs.
+    # Explicit opt-in only via fl_flyer_url_from_person_id().
+    _ = person_nbr
+    return ""
+
+
+def fl_flyer_url_from_person_id(person_id: str) -> str:
+    """Build FDLE flyer URL only from a confirmed flyer personId (not PERSON_NBR)."""
+    n = (person_id or "").strip()
+    if not n or not re.fullmatch(r"\d+", n):
         return ""
     return f"https://offender.fdle.state.fl.us/offender/sops/flyer.jsf?personId={n}"
 
