@@ -2,10 +2,13 @@
 
 Uses **local open-source** face models — nothing is sent to a cloud API.
 
-Primary backend: `DeepFace <https://github.com/serengil/deepface>`_ (race
-attribute model). Install once::
+Primary backend: **FairFace** via the standalone ``face-race`` package
+(shared with MAPA). Falls back to DeepFace, then CLIP.
 
-    pip install -r requirements-vision.txt
+Install::
+
+    cd face-race && pip install -e .
+    # optional legacy: pip install -r requirements-vision.txt
 
 Two workflows:
 

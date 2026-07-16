@@ -306,8 +306,10 @@ class ClipBackend(EthnicityBackend):
             )
 
 
-# Production backends only — mock is never in auto chain
+# Production backends — mock is never in auto chain.
+# Prefer FairFace (standalone face-race package) over DeepFace race.
 _BACKEND_CLASSES: List[Type[EthnicityBackend]] = [
+    # FairFace registered dynamically in create_backend
     DeepFaceBackend,
     ClipBackend,
 ]
@@ -317,7 +319,13 @@ def list_backend_status() -> Dict[str, bool]:
     """Fast presence check via find_spec — never import torch/keras on the UI thread."""
     import importlib.util
 
-    out: Dict[str, bool] = {"mock": True}
+    out: Dict[str, bool] = {"mock": True, "fairface": False}
+    try:
+        from scraper.mugshot_ethnicity.backends_fairface import FairFaceBackend
+
+        out["fairface"] = FairFaceBackend().is_available()
+    except Exception:
+        out["fairface"] = False
     try:
         out["deepface"] = importlib.util.find_spec("deepface") is not None
     except Exception:
@@ -341,9 +349,10 @@ def create_backend(
     """
     Create a backend by name.
 
-    ``auto`` / ``deepface`` → ensure DeepFace is installed (pip + model warm-up)
-    then use it. Falls back to CLIP only if DeepFace setup fails.
-    ``mock`` → tests only (never auto-installed as production).
+    ``auto`` → FairFace (face-race) if available, else DeepFace, else CLIP.
+    ``fairface`` → standalone FairFace package only.
+    ``deepface`` → DeepFace race head (legacy).
+    ``mock`` → tests only.
     """
     from scraper.mugshot_ethnicity.setup import ensure_deepface
 
@@ -351,8 +360,45 @@ def create_backend(
     if key == "mock":
         return MockBackend()
 
+    if key in ("auto", "fairface"):
+        try:
+            from scraper.mugshot_ethnicity.backends_fairface import FairFaceBackend
+
+            fb = FairFaceBackend(log=log)
+            if fb.is_available():
+                try:
+                    # Touch scorer so weights download early when auto_install
+                    if auto_install:
+                        fb._get_scorer()
+                    return fb
+                except Exception as e:
+                    if key == "fairface":
+                        raise RuntimeError(
+                            "FairFace (face-race) setup failed.\n"
+                            "  cd face-race && pip install -e .\n"
+                            f"Detail: {e}"
+                        ) from e
+                    if log:
+                        try:
+                            log(f"FairFace unavailable ({e}); trying DeepFace…")
+                        except Exception:
+                            pass
+            elif key == "fairface":
+                raise RuntimeError(
+                    "FairFace backend not available.\n"
+                    "Install the standalone package:\n"
+                    "  cd face-race && pip install -e .\n"
+                    "Weights download on first score into ~/.face_race/weights/"
+                )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            if key == "fairface":
+                raise RuntimeError(f"FairFace backend error: {e}") from e
+        if key == "fairface":
+            raise RuntimeError("FairFace backend not available")
+
     if key in ("auto", "deepface"):
-        # Auto-install DeepFace into this interpreter when missing
         if auto_install:
             ensure_deepface(auto_install=True, warm=True, log=log)
         b = DeepFaceBackend()
@@ -366,7 +412,6 @@ def create_backend(
                 "  python -m pip install -r requirements-vision.txt\n"
                 "Or set SOR_SKIP_DEEPFACE_INSTALL=1 only to disable auto-install."
             )
-        # auto: try CLIP before giving up
         try:
             c = ClipBackend()
             if c.is_available():
@@ -375,8 +420,9 @@ def create_backend(
             pass
         status = list_backend_status()
         raise RuntimeError(
-            "No local vision backend available after DeepFace auto-setup.\n"
+            "No local vision backend available.\n"
             f"Status: {status}\n"
+            "  cd face-race && pip install -e .\n"
             "  python -m pip install -r requirements-vision.txt"
         )
 

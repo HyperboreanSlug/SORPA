@@ -1,23 +1,22 @@
 # Local face / race analysis for scraper.mugshot_ethnicity
-# Fully offline after first model download (weights under ~/.deepface/).
+# Fully offline after first model download.
 #
 #   python -m pip install --user -r requirements-vision.txt
+#   cd ../face-race && python -m pip install -e .
 #
 # Pin numpy below 2.3: newer wheels (2.4+) often break prebuilt
 # tensorflow/keras/pandas binaries ("numpy.dtype size changed").
 numpy>=1.26.0,<2.3
 
-# Primary stack — DeepFace (https://github.com/serengil/deepface)
-# Open-source face attribute pipeline with built-in race model
-# (White, Black, Asian, Indian, Middle Eastern, Latino Hispanic).
+# Primary race model — standalone FairFace package (shared with MAPA)
+# Install from sibling repo:  cd ../face-race && pip install -e .
+# Weights: ~/.face_race/weights/  (auto-download on first score)
+# torch + torchvision come from face-race requirements.
+
+# Legacy / fallback — DeepFace race head
 deepface>=0.0.93
 tensorflow>=2.15.0
 tf-keras>=2.15.0
-# Full opencv (not headless): ships Haar cascade XMLs DeepFace's opencv detector needs
 opencv-python>=4.8.0
 pillow>=10.0.0
 # RetinaFace works with TF 2.16+ only when TF_USE_LEGACY_KERAS=1 (set by the app).
-
-# Optional fallback (not required if deepface works):
-# torch>=2.0.0
-# transformers>=4.36.0
