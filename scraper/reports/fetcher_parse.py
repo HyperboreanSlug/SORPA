@@ -24,6 +24,10 @@ from scraper.reports.util import (  # noqa: F401
     extract_dedicated_photo_urls,
 )
 from scraper.reports.race_value import is_plausible_race_value
+from scraper.reports.fetcher_crime import (
+    extract_crime_from_tables,
+    is_demographic_crime_junk,
+)
 
 class FetcherParseMixin:
     def _from_html(self, html: str, base_url: str = "") -> Dict[str, Any]:
@@ -46,6 +50,9 @@ class FetcherParseMixin:
             if len(ths) < 2:
                 continue
             headers = [_normalize_label(c.get_text(" ", strip=True)) for c in ths]
+            # Nested outer wrappers glue many header groups — skip those
+            if len(headers) > 10 or any(len(h) > 60 for h in headers):
+                continue
             mapped_n = sum(1 for h in headers if h in _LABEL_MAP)
             if mapped_n < 2:
                 continue
@@ -66,7 +73,7 @@ class FetcherParseMixin:
                 if crime_parts:
                     joined = " — ".join(crime_parts)[:_MAX_CRIME_LEN]
                     prev = found.get("crime") or ""
-                    if not prev:
+                    if not prev or is_demographic_crime_junk(prev):
                         found["crime"] = joined
                     elif joined not in prev:
                         found["crime"] = f"{prev}; {joined}"[:_MAX_CRIME_LEN]
@@ -138,21 +145,35 @@ class FetcherParseMixin:
             if dd and label in _LABEL_MAP:
                 found.setdefault(_LABEL_MAP[label], _clean_value(dd.get_text(" ", strip=True)))
 
+        _header_like_values = frozenset({
+            "type", "row", "jurisdiction", "chapter/section", "live", "work",
+            "address", "name", "level", "age", "sex", "race", "height", "weight",
+            "no. of convictions", "conviction/adjudication date",
+        })
         for row in soup.find_all("tr"):
             cells = row.find_all(["th", "td"])
+            # Skip pure header rows (e.g. Address | Type → would set address="Type")
+            if cells and all(getattr(c, "name", "") == "th" for c in cells):
+                continue
             # Pair adjacent cells: [label, value, label, value, ...]
             # (iCrimeWatch rows often pack two fields per <tr>)
             i = 0
             while i < len(cells) - 1:
+                # Do not pair a data label with a <th> column header
+                if getattr(cells[i + 1], "name", "") == "th":
+                    i += 1
+                    continue
                 label = _normalize_label(cells[i].get_text(" ", strip=True))
                 value = _clean_value(cells[i + 1].get_text(" ", strip=True))
                 key = _LABEL_MAP.get(label)
                 max_len = _MAX_CRIME_LEN if key in _LONG_VALUE_KEYS else 200
+                val_norm = _normalize_label(value)
                 if (
                     key
                     and value
                     and len(value) <= max_len
-                    and _normalize_label(value) not in _LABEL_MAP
+                    and val_norm not in _LABEL_MAP
+                    and val_norm not in _header_like_values
                 ):
                     found.setdefault(key, value[:max_len])
                     i += 2
@@ -160,10 +181,10 @@ class FetcherParseMixin:
                     i += 1
 
         # Offense / crime tables (column headers like Offense, Charge, Statute)
-        crime_bits = self._extract_crime_from_tables(soup)
+        crime_bits = extract_crime_from_tables(soup)
         if crime_bits:
             prev = (found.get("crime") or "").strip()
-            if not prev:
+            if not prev or is_demographic_crime_junk(prev):
                 found["crime"] = crime_bits
             elif len(crime_bits) > len(prev):
                 found["crime"] = crime_bits
@@ -189,6 +210,9 @@ class FetcherParseMixin:
                     if key:
                         found.setdefault(key, m.group(2).strip()[:120])
                 continue
+            # Never pair table header cells with each other (Address | Type)
+            if getattr(lab_el, "name", "") == "th":
+                continue
             # empty value on label node → look next
             if ":" in raw and not re.search(r":\s*\S", raw):
                 # parent then next sibling
@@ -199,6 +223,8 @@ class FetcherParseMixin:
                 candidates.append(lab_el.find_next_sibling())
                 for nxt in candidates:
                     if not nxt or not hasattr(nxt, "get_text"):
+                        continue
+                    if getattr(nxt, "name", "") == "th":
                         continue
                     val = nxt.get_text(" ", strip=True)
                     if val and len(val) < 80 and _normalize_label(val) not in _LABEL_MAP:
@@ -326,59 +352,7 @@ class FetcherParseMixin:
     @staticmethod
     def _extract_crime_from_tables(soup: BeautifulSoup) -> str:
         """Pull offense/charge text from multi-row offense tables."""
-        crime_header_keys = {
-            "offense", "offenses", "offense description", "offense type",
-            "charge", "charges", "crime", "crimes", "statute",
-            "qualifying offense", "registerable offense", "registrable offense",
-            "description", "violation",
-        }
-        collected: List[str] = []
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if len(rows) < 2:
-                continue
-            headers = [
-                _normalize_label(c.get_text(" ", strip=True))
-                for c in rows[0].find_all(["th", "td"])
-            ]
-            # Find offense-like columns
-            idxs = [i for i, h in enumerate(headers) if h in crime_header_keys]
-            if not idxs:
-                # Header might be a caption / first cell "Offense Information"
-                head_blob = " ".join(headers).lower()
-                if not any(k in head_blob for k in ("offense", "charge", "crime", "statute")):
-                    continue
-                # Use all non-empty data cells as crime text
-                for data_row in rows[1:]:
-                    tds = data_row.find_all("td")
-                    for td in tds:
-                        t = _clean_value(td.get_text(" ", strip=True))
-                        if t and len(t) > 3 and _normalize_label(t) not in _LABEL_MAP:
-                            collected.append(t)
-                continue
-            for data_row in rows[1:]:
-                tds = data_row.find_all(["td", "th"])
-                parts = []
-                for i in idxs:
-                    if i < len(tds):
-                        t = _clean_value(tds[i].get_text(" ", strip=True))
-                        if t and _normalize_label(t) not in crime_header_keys:
-                            parts.append(t)
-                if parts:
-                    collected.append(" — ".join(parts))
-        # Deduplicate preserving order
-        seen = set()
-        uniq: List[str] = []
-        for c in collected:
-            key = c.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            uniq.append(c)
-            if len(uniq) >= 8:
-                break
-        return "; ".join(uniq)[:_MAX_CRIME_LEN]
-
+        return extract_crime_from_tables(soup)
 
     @staticmethod
     def _finalize_crime_fields(found: Dict[str, Any]) -> None:
@@ -386,11 +360,25 @@ class FetcherParseMixin:
         crime = (found.get("crime") or "").strip()
         otype = (found.get("offense_type") or "").strip()
         odesc = (found.get("offense_description") or "").strip()
+        if crime and is_demographic_crime_junk(crime):
+            crime = ""
+            found.pop("crime", None)
+        if otype and is_demographic_crime_junk(otype):
+            otype = ""
+            found.pop("offense_type", None)
+        if odesc and is_demographic_crime_junk(odesc):
+            odesc = ""
+            found.pop("offense_description", None)
         if not crime:
             if odesc and otype and odesc.lower() != otype.lower():
                 crime = f"{otype}: {odesc}"
             else:
                 crime = odesc or otype
+        if crime and is_demographic_crime_junk(crime):
+            found.pop("crime", None)
+            found.pop("offense_type", None)
+            found.pop("offense_description", None)
+            return
         if crime:
             found["crime"] = crime[:_MAX_CRIME_LEN]
             if not odesc:

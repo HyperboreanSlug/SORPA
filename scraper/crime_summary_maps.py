@@ -26,7 +26,11 @@ CODE_MAP = [
 ]
 
 OFFENSE_MAP = [
+    (r"rape\s+of\s+(?:a\s+)?child\s+with\s+force", "Rape of child with force"),
+    (r"rape\s+and\s+abuse\s+of\s+(?:a\s+)?child", "Rape and abuse of child"),
+    (r"rape\s+of\s+(?:a\s+)?child", "Rape of a child"),
     (r"\brape\b.*\b1st\b|\b1st\s+degree\s+rape\b", "Rape 1st degree"),
+    (r"\brape\b.*\b2nd\b|\b2nd\s+degree\s+rape\b", "Rape 2nd degree"),
     (r"\brape\b.*\b3rd\b|\b3rd\s+degree\s+rape\b", "Rape 3rd degree"),
     (r"\brape\b", "Rape"),
     (r"sodomy", "Sodomy"),

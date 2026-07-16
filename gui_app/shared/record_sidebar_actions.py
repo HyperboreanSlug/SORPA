@@ -16,7 +16,15 @@ class RecordSidebarActionsMixin:
 
     def _open_source(self) -> None:
         rec = self._record or {}
-        url = str(rec.get("source_url") or "").strip()
+        url = ""
+        try:
+            from scraper.public_links import openable_url_for_record
+
+            url = openable_url_for_record(rec) or ""
+        except Exception:
+            url = str(rec.get("source_url") or "").strip()
+        if not url:
+            url = str(rec.get("source_url") or "").strip()
         if url:
             webbrowser.open(url)
             return

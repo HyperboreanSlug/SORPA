@@ -183,6 +183,66 @@ class ReportFetcherTests(unittest.TestCase):
         self.assertIn("288", crime)
         fetcher.close()
 
+    def test_ma_sorb_offense_table_and_url(self):
+        """MA SORB: Jurisdiction column is the offense; path casing is significant."""
+        html = """
+        <html><body>
+        <table class="data-table">
+          <tr><td class="label">Name:</td><td class="data">AMAYA, JAIME</td>
+              <td class="label">Level:</td><td class="data">Level 2</td></tr>
+          <tr><td class="label">Race:</td><td class="data">White</td></tr>
+        </table>
+        <table class="data-table-list">
+          <caption class="accessibility">Offense(s)</caption>
+          <thead><tr>
+            <th>Row</th><th>Jurisdiction</th><th>Chapter/Section</th>
+            <th>Conviction/Adjudication Date</th><th>No. of Convictions</th>
+          </tr></thead>
+          <tbody>
+            <tr class="odd">
+              <td>1</td><td>Rape of child with force</td><td>265/22A</td>
+              <td>12/16/2021</td><td>1</td>
+            </tr>
+            <tr class="even">
+              <td>2</td><td>Rape and abuse of child</td><td>265/23</td>
+              <td>12/16/2021</td><td>3</td>
+            </tr>
+          </tbody>
+        </table>
+        </body></html>
+        """
+        fetcher = ReportFetcher(delay=0)
+        data = fetcher._from_html(html)
+        crime = data.get("crime") or ""
+        self.assertIn("Rape of child with force", crime)
+        self.assertIn("Rape and abuse of child", crime)
+        self.assertNotIn("Photo Date", crime)
+        self.assertNotIn("Year Of Birth", crime)
+        self.assertEqual(data.get("race"), "White")
+        fetcher.close()
+
+        from scraper.public_links import (
+            normalize_ma_sorb_url,
+            openable_url_for_record,
+        )
+        from scraper.database import Database
+
+        bad = (
+            "https://sorb.chs.state.ma.us/sorbpublic/direct/"
+            "viewnsoproffenderdetails.action?m=view&son=528253"
+        )
+        good = normalize_ma_sorb_url(bad)
+        self.assertIn("viewNsoprOffenderDetails.action", good)
+        self.assertNotIn("viewnsoproffenderdetails", good)
+        self.assertEqual(
+            openable_url_for_record({"source_url": bad, "state": "MA"}),
+            good,
+        )
+        self.assertIn(
+            "viewNsoprOffenderDetails.action",
+            Database.normalize_identity_url(bad),
+        )
+
     def test_fl_border_panel_cells(self):
         """Florida FDLE flyer: alternating borderPanelCell label/value."""
         html = """

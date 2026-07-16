@@ -142,6 +142,23 @@ def _normalize_url(url: str) -> str:
         "colorado.gov/apps/cdps/sor",
         "apps.colorado.gov/apps/dps/sor",
     )
+    # MA SORB: restore case-sensitive action paths
+    if "sorb.chs.state.ma.us" in url.lower():
+        try:
+            from scraper.public_links import normalize_ma_sorb_url
+
+            url = normalize_ma_sorb_url(url)
+        except Exception:
+            url = re.sub(
+                r"(?i)/viewnsoproffenderdetails\.action",
+                "/viewNsoprOffenderDetails.action",
+                url,
+            )
+            url = re.sub(
+                r"(?i)/viewnsoproffenderimage\.action",
+                "/viewNsoprOffenderImage.action",
+                url,
+            )
     return url
 
 

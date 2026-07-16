@@ -84,6 +84,27 @@ class DedupeUrlNormMixin:
             # Safety: rewrite any personid= that slipped through
             out = re.sub(r"(?i)([?&])personid=", r"\1personId=", out)
             return out
+        # MA SORB: action paths are case-sensitive (lowercase → 404)
+        if "sorb.chs.state.ma.us" in host:
+            try:
+                from scraper.public_links import normalize_ma_sorb_url
+
+                return normalize_ma_sorb_url(
+                    f"{scheme}://{host}{path}" + (f"?{query}" if query else "")
+                )
+            except Exception:
+                out = f"{scheme}://{host}{path}" + (f"?{query}" if query else "")
+                out = re.sub(
+                    r"(?i)/viewnsoproffenderdetails\.action",
+                    "/viewNsoprOffenderDetails.action",
+                    out,
+                )
+                out = re.sub(
+                    r"(?i)/viewnsoproffenderimage\.action",
+                    "/viewNsoprOffenderImage.action",
+                    out,
+                )
+                return out
         return out.lower()
 
 

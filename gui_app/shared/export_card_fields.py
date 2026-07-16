@@ -139,11 +139,26 @@ def crime(record: Mapping[str, Any]) -> str:
         val = _clean_field(record.get(key))
         if not val:
             continue
+        # Guard: MA demographic misparse (Photo Date / Name / Level / YOB)
+        try:
+            from scraper.reports.fetcher_crime import is_demographic_crime_junk
+
+            if is_demographic_crime_junk(val):
+                continue
+        except Exception:
+            pass
         try:
             from scraper.crime_summary import summarize_crime
 
             out = _clean_field(summarize_crime(val) or val)
             if out:
+                try:
+                    from scraper.reports.fetcher_crime import is_demographic_crime_junk
+
+                    if is_demographic_crime_junk(out):
+                        continue
+                except Exception:
+                    pass
                 return out
         except Exception:
             return val

@@ -102,7 +102,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 |---------|-------------|
 | `database/` | schema, inserts, queries, `dedupe_*`, `csv_*` (incl. `csv_repair_fl_sor`), sources, deepface_scans |
 | `nsopw/` | `client_*`, `builder_*` (requeue_inc + requeue_work), search_plan, parallel (same-jurisdiction concurrency) |
-| `reports/` | `fetcher_*`, util, photos, parse_html |
+| `reports/` | `fetcher_*` (incl. `fetcher_crime` MA/offense tables), util, photos, parse_html; `public_links` (FDLE + MA URL fixes) |
 | `searcher_*` | race helpers + core/analyze/export + appearance (eye/hair) |
 | `ethnic_names_*` | load, signals, classify, confidence |
 | `cli_cmds_*` + `cli_parser` | CLI commands |

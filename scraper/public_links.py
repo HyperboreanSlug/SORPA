@@ -23,6 +23,13 @@ _FDLE_HOST_MARKERS = (
     "fdle.state.fl.us",
 )
 
+# MA SORB: Tomcat action paths are case-sensitive (lowercase → 404)
+_MA_SORB_HOST = "sorb.chs.state.ma.us"
+_MA_PATH_FIXES = (
+    (re.compile(r"(?i)/viewnsoproffenderdetails\.action"), "/viewNsoprOffenderDetails.action"),
+    (re.compile(r"(?i)/viewnsoproffenderimage\.action"), "/viewNsoprOffenderImage.action"),
+)
+
 _MULTI_URL_SPLIT = re.compile(r"\s*\|\s*")
 _PERSON_ID_RE = re.compile(r"(?i)(?:[?&])personid=([^&#\s]+)")
 
@@ -90,6 +97,28 @@ def normalize_fdle_flyer_url(url: str) -> Optional[str]:
     return f"{FL_FDLE_FLYER_BASE}?personId={pid}"
 
 
+def _is_ma_sorb_url(url: str) -> bool:
+    return _MA_SORB_HOST in (url or "").lower()
+
+
+def normalize_ma_sorb_url(url: str) -> str:
+    """Restore case-sensitive MA SORB action paths (lowercase → 404)."""
+    u = (url or "").strip()
+    if not u or not _is_ma_sorb_url(u):
+        return u
+    try:
+        p = urlparse(u)
+    except Exception:
+        return u
+    path = p.path or ""
+    for pat, repl in _MA_PATH_FIXES:
+        path = pat.sub(repl, path)
+    scheme = (p.scheme or "https").lower()
+    host = (p.netloc or "").lower()
+    query = p.query or ""
+    return urlunparse((scheme, host, path, "", query, ""))
+
+
 def resolve_public_source_url(
     raw_url: Optional[str],
     *,
@@ -101,6 +130,7 @@ def resolve_public_source_url(
 
     - Splits multi-URL merges
     - Fixes Florida FDLE personId casing / empty flyers
+    - Fixes Massachusetts SORB action-path casing
     - Falls back to FL search home for Florida when no valid link exists
     """
     urls = split_source_urls(raw_url)
@@ -110,6 +140,8 @@ def resolve_public_source_url(
         hosts = [h.lower() for h in prefer_hosts if h]
     elif st == "FL":
         hosts = list(_FDLE_HOST_MARKERS)
+    elif st == "MA":
+        hosts = [_MA_SORB_HOST]
     else:
         hosts = []
 
@@ -132,6 +164,11 @@ def resolve_public_source_url(
                 return fixed
             # bad FDLE segment — try next
             continue
+        if _is_ma_sorb_url(u):
+            cleaned = normalize_ma_sorb_url(_strip_jsessionid(u))
+            if cleaned:
+                return cleaned
+            continue
         # Non-FDLE: strip jsessionid noise from path for cleanliness
         cleaned = _strip_jsessionid(u)
         if cleaned:
@@ -145,8 +182,14 @@ def resolve_public_source_url(
 
     # Last resort: first raw piece or empty
     if ordered:
-        return ordered[0]
-    return (raw_url or "").strip()
+        u0 = ordered[0]
+        if _is_ma_sorb_url(u0):
+            return normalize_ma_sorb_url(u0)
+        return u0
+    raw = (raw_url or "").strip()
+    if _is_ma_sorb_url(raw):
+        return normalize_ma_sorb_url(raw)
+    return raw
 
 
 def _strip_jsessionid(url: str) -> str:
