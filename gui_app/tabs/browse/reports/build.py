@@ -274,6 +274,10 @@ class ReportsBuildMixin:
         line2 = _FlowRow(top, padx=4, pady=2)
         self._report_page = 0
         self._report_pool: list = []
+        # Full-DB surname mismatches owned by Reports (not Misclassify tab)
+        self._report_analyze_results: list = []
+        self._report_analyze_meta: dict = {}
+        self._reports_analyzing = False
         line2.add(
             ctk.CTkButton(
                 line2.host, text="◀", width=36, height=26,

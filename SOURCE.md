@@ -82,7 +82,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `tabs/browse/misclassify/` | build (Likely ethnicity, Listed as, photo filter), filters, run |
 | `reports/race_value.py` | Reject alias/address junk in parsed race fields |
 | `tabs/browse/statistics/` | build, update |
-| `tabs/browse/reports/` | verdict_*, filter_* (Actual default Non-white), source_*, cards_*, grid_*, export_* |
+| `tabs/browse/reports/` | Independent full-DB Analyze & build (`_report_analyze_results`); Listed/Actual/Show/Photos filters; verdicts; cards; export |
 | `shared/export_card_grid.py` | Watermarked 1×2 / 2×2 card collages (mapa seal + @DoDeportations) |
 | `tabs/browse/deepface_reports/` | build, data_*, photo_*, actions_*, review_* |
 | `tabs/nsopw/` | build (Search/Enrich tabs), enrich_*, options_* (state on Enrich), state_stats, progress_*, tree_*, run_* |

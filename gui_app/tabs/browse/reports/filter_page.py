@@ -142,7 +142,7 @@ class ReportsFilterPageMixin:
 
     def _reports_next_page(self) -> None:
         pool = getattr(self, "_report_pool", None) or []
-        if not pool and self._misclass_results:
+        if not pool and getattr(self, "_report_analyze_results", None):
             self._report_pool = self._reports_filtered_source()
             pool = self._report_pool
         page_size = self._reports_page_size()

@@ -55,7 +55,7 @@ class ReportsExportCsvMixin:
         pool = list(getattr(self, "_report_pool", None) or [])
         if pool:
             return pool
-        if self._misclass_results:
+        if getattr(self, "_report_analyze_results", None):
             return self._reports_filtered_source()
         return list(self._report_items or [])
 

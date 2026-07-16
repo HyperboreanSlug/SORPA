@@ -1,52 +1,7 @@
-"""SConfirm"""
+"""Reports confirm actions + independent full-DB Analyze & build."""
 from __future__ import annotations
 
-import csv
-import json
-import os
-import queue
-import re
-import subprocess
-import sys
-import threading
-import traceback
-import webbrowser
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-
-import customtkinter as ctk
-
-from gui_app.paths import ROOT
-from gui_app.theme import (
-    C,
-    FONT_BOLD,
-    FONT_MONO,
-    FONT_SECTION,
-    FONT_SM,
-    FONT_TITLE,
-    FONT_UI,
-)
-from gui_app.widgets import (
-    _bind_tree_scroll_isolation,
-    _card,
-    _enable_tree_column_sort,
-    _format_race_display,
-    _format_state_display,
-    _hpaned,
-    _misclass_race_bucket,
-    _muted,
-    _render_bar_chart,
-    _render_pie_chart,
-    _section_label,
-    _stretch_columns,
-    _tree_frame,
-    _vpaned,
-    _wire_wide_scroll,
-)
+from tkinter import messagebox
 
 
 class ReportsSourceConfirmMixin:
@@ -69,7 +24,7 @@ class ReportsSourceConfirmMixin:
         ok = messagebox.askyesno(
             "Confirm unchecked?",
             (
-                f"Mark {len(unchecked):,} unconfirmed _card(s) on this page "
+                f"Mark {len(unchecked):,} unconfirmed card(s) on this page "
                 f"as Confirmed incorrect?\n\n"
                 "They leave the Unconfirmed sheet (switch Show to see them).\n"
                 "Already marked cards are not changed."
@@ -90,7 +45,6 @@ class ReportsSourceConfirmMixin:
                 )
             )
 
-
     def _reports_confirm_others(self, keep_mc) -> None:
         """Confirm other visible unreviewed cards; leave *keep_mc* unchanged."""
         keep_key = self._report_item_key(keep_mc)
@@ -99,7 +53,7 @@ class ReportsSourceConfirmMixin:
             if self._report_item_key(mc) == keep_key:
                 continue
             if self._verdict_for_mc(mc) != "unreviewed":
-                continue  # only unchecked; never overwrite Correct/Confirmed/Skip
+                continue
             self._set_verdict_for_mc(mc, "confirmed", save=False)
             n += 1
         self._save_report_verdicts()
@@ -110,55 +64,103 @@ class ReportsSourceConfirmMixin:
                 text=f"Confirmed {n:,} other unchecked visible cards"
             )
 
+    def _reports_analyze_min_conf(self) -> float:
+        """Min surname confidence for Reports full-DB scan (independent of Misclassify)."""
+        for attr in ("report_min_conf_var",):
+            if hasattr(self, attr):
+                try:
+                    return float(getattr(self, attr).get())
+                except Exception:
+                    pass
+        return 0.5
 
     def _reports_build_list(self):
-        """Run Analyze off UI (shared filters), then merge DeepFace hits + cards."""
-        try:
-            if hasattr(self, "_ensure_misclass_filter_vars"):
-                self._ensure_misclass_filter_vars()
-        except Exception as e:
-            messagebox.showerror("Analyze & build", str(e))
+        """Full-DB surname mismatch scan, then apply Reports filters (not Misclassify)."""
+        if getattr(self, "_reports_analyzing", False):
+            if hasattr(self, "report_status"):
+                try:
+                    self.report_status.configure(text="Analyze already running…")
+                except Exception:
+                    pass
             return
+
+        self._reports_analyzing = True
+        min_conf = self._reports_analyze_min_conf()
+        db_path = str(getattr(self, "db_path", None) or "data/offenders.db")
+
+        try:
+            snap = self._reports_filter_snapshot()
+            snap_all = dict(snap)
+            snap_all["vfilter"] = "all"
+        except Exception:
+            snap = {
+                "photos_only": True,
+                "include_deepface": False,
+                "vfilter": "unreviewed",
+                "race_allow": {"White"},
+                "actual": "Non-white",
+                "listed": "White",
+            }
+            snap_all = dict(snap)
+            snap_all["vfilter"] = "all"
+
         if hasattr(self, "report_status"):
             try:
                 self.report_status.configure(
-                    text="Analyzing… (UI stays responsive)"
+                    text=(
+                        "Analyzing full DB (all ethnicities, no scan cap)… "
+                        "UI stays responsive"
+                    )
                 )
             except Exception:
                 pass
 
-        def after_analyze() -> None:
-            """Misclass done — build full report pool (DB) off the UI thread."""
-            raw_n = len(getattr(self, "_misclass_results", None) or [])
+        def analyze_work():
+            from scraper.searcher import SexOffenderSearcher
+
+            searcher = SexOffenderSearcher(db_path=db_path)
+            try:
+                results = searcher.analyze_ethnicities(
+                    min_confidence=min_conf,
+                    limit=0,
+                    ethnicity_filter=None,
+                )
+                return list(results or [])
+            finally:
+                searcher.close()
+
+        def after_analyze(result=None, error=None):
+            if error is not None:
+                self._reports_analyzing = False
+                if hasattr(self, "report_status"):
+                    try:
+                        self.report_status.configure(text=f"Analyze error: {error}")
+                    except Exception:
+                        pass
+                messagebox.showerror("Analyze & build", str(error))
+                return
+
+            raw = list(result or [])
+            self._report_analyze_results = raw
+            self._report_analyze_meta = {
+                "min_conf": min_conf,
+                "ethnicity": "all",
+                "limit": 0,
+                "raw_n": len(raw),
+            }
+            raw_n = len(raw)
             if hasattr(self, "report_status"):
                 try:
                     self.report_status.configure(
                         text=(
-                            f"Analyze found {raw_n:,} mismatches · "
-                            "building report pool…"
+                            f"Full-DB analyze: {raw_n:,} mismatches · "
+                            "applying Reports filters…"
                         )
                     )
                 except Exception:
                     pass
 
-            # Snapshot Tk filters on the main thread; worker must not touch widgets
-            try:
-                snap = self._reports_filter_snapshot()
-                snap_all = dict(snap)
-                snap_all["vfilter"] = "all"
-            except Exception:
-                snap = {
-                    "photos_only": True,
-                    "include_deepface": False,
-                    "vfilter": "unreviewed",
-                    "race_allow": {"White"},
-                    "actual": "Non-white",
-                    "listed": "White",
-                }
-                snap_all = dict(snap)
-                snap_all["vfilter"] = "all"
-
-            def work():
+            def pool_work():
                 base = self._reports_filtered_source(
                     verdict_key="all", snapshot=snap_all
                 )
@@ -173,17 +175,23 @@ class ReportsSourceConfirmMixin:
                             self._verdict_for_mc(mc), vfilter
                         )
                     ]
-                return {"base": base, "sheet": sheet, "snap": snap, "raw_n": raw_n}
+                return {
+                    "base": base,
+                    "sheet": sheet,
+                    "snap": snap,
+                    "raw_n": raw_n,
+                }
 
-            def done(result=None, error=None):
+            def pool_done(payload=None, error=None):
+                self._reports_analyzing = False
                 if error is not None:
                     messagebox.showerror("Analyze & build", str(error))
                     return
-                payload = result if isinstance(result, dict) else {}
-                base = list(payload.get("base") or [])
-                sheet = list(payload.get("sheet") or [])
-                snap_used = payload.get("snap") or snap
-                raw = int(payload.get("raw_n") or raw_n)
+                data = payload if isinstance(payload, dict) else {}
+                base = list(data.get("base") or [])
+                sheet = list(data.get("sheet") or [])
+                snap_used = data.get("snap") or snap
+                raw_count = int(data.get("raw_n") or raw_n)
                 self._report_page = 0
                 self._report_metrics_base = base
                 self._report_pool = sheet
@@ -192,18 +200,15 @@ class ReportsSourceConfirmMixin:
                     photos = "on" if snap_used.get("photos_only") else "off"
                     show = snap_used.get("vfilter") or "?"
                     actual = snap_used.get("actual") or "All"
-                    if raw <= 0:
+                    if raw_count <= 0:
                         msg = (
-                            "Analyze found 0 surname mismatches.\n\n"
-                            "On Misclassify / Statistics, try:\n"
-                            "• lower Min conf. (e.g. 0.5)\n"
-                            "• ethnicity = all\n"
-                            "• Scan cap = 0 (entire DB) or a larger cap\n\n"
-                            "Or enable DeepFace hits after running DeepFace → Scan."
+                            "Full-DB analyze found 0 surname mismatches.\n\n"
+                            "Try a lower min confidence, or enable DeepFace hits "
+                            "after DeepFace → Scan."
                         )
                     elif base:
                         msg = (
-                            f"Analyze found {raw:,} mismatches, and "
+                            f"Full-DB analyze found {raw_count:,} mismatches, and "
                             f"{len(base):,} match Listed/Photos/Actual — "
                             f"but 0 match Show={show}.\n\n"
                             "Switch Show to All (or Confirmed incorrect / "
@@ -211,8 +216,8 @@ class ReportsSourceConfirmMixin:
                         )
                     else:
                         msg = (
-                            f"Analyze found {raw:,} mismatches, but none match "
-                            "the current Reports filters:\n"
+                            f"Full-DB analyze found {raw_count:,} mismatches, "
+                            "but none match the current Reports filters:\n"
                             f"• Listed as: {listed}\n"
                             f"• Photos only: {photos}\n"
                             f"• Actual: {actual}\n"
@@ -233,23 +238,25 @@ class ReportsSourceConfirmMixin:
                             text=(
                                 f"Report ready · {len(sheet):,} on sheet "
                                 f"· {len(base):,} in filter · "
-                                f"{raw:,} analyzed"
+                                f"{raw_count:,} full-DB mismatches "
+                                f"(min conf {min_conf})"
                             )
                         )
                     except Exception:
                         pass
 
             if hasattr(self, "run_bg"):
-                self.run_bg(work, done, name="reports-pool")
+                self.run_bg(pool_work, pool_done, name="reports-pool")
             else:
                 try:
-                    done(result=work(), error=None)
+                    pool_done(payload=pool_work(), error=None)
                 except Exception as e:
-                    done(result=None, error=e)
+                    pool_done(payload=None, error=e)
 
-        try:
-            self._run_misclassification(on_done=after_analyze)
-        except Exception as e:
-            messagebox.showerror("Analyze & build", str(e))
-
-
+        if hasattr(self, "run_bg"):
+            self.run_bg(analyze_work, after_analyze, name="reports-analyze")
+        else:
+            try:
+                after_analyze(result=analyze_work(), error=None)
+            except Exception as e:
+                after_analyze(result=None, error=e)

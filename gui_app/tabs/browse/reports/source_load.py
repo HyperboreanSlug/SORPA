@@ -276,7 +276,8 @@ class ReportsSourceLoadMixin:
         race_allow = set(snap.get("race_allow") or {"White", "Black", "Other"})
         actual_want = str(snap.get("actual") or "All")
 
-        surname = list(self._misclass_results or [])
+        # Reports owns its own full-DB analyze pool — never the Misclassify tab run
+        surname = list(getattr(self, "_report_analyze_results", None) or [])
         deepface: list = []
         if bool(snap.get("include_deepface")):
             deepface = self._reports_load_deepface_hits()

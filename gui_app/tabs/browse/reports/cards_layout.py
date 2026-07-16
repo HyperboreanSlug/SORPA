@@ -57,7 +57,7 @@ class ReportsCardsLayoutMixin:
             return
 
         if refilter and (
-            self._misclass_results
+            getattr(self, "_report_analyze_results", None)
             or bool(
                 getattr(self, "report_include_deepface", None)
                 and self.report_include_deepface.get()
