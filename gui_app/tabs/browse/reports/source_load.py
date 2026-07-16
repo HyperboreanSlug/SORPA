@@ -228,7 +228,7 @@ class ReportsSourceLoadMixin:
         try:
             actual = self._reports_actual_filter_value()
         except Exception:
-            actual = "All"
+            actual = "Non-white"
         try:
             listed = self._reports_listed_filter_value()
         except Exception:
@@ -337,11 +337,9 @@ class ReportsSourceLoadMixin:
         from scraper.database import Database
 
         def _actual_ok(mc) -> bool:
-            if not actual_want or actual_want == "All":
-                return True
             try:
                 got = self._reports_actual_bucket(self._reports_actual_label_for_mc(mc))
-                return got == actual_want
+                return self._reports_actual_bucket_passes(got, actual_want)
             except Exception:
                 return True
 

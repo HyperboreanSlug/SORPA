@@ -50,6 +50,9 @@ from gui_app.widgets import (
 
 
 class ReportsFilterActualMixin:
+    # Actual ethnicity buckets treated as white / white-coded for Non-white filter
+    _ACTUAL_WHITE_BUCKETS = frozenset({"European", "Jewish", "Portuguese"})
+
     def _reports_listed_filter_value(self) -> str:
         """Selected Listed-as dropdown: All | White | Black | Other."""
         if hasattr(self, "report_listed_filter") and self.report_listed_filter is not None:
@@ -73,13 +76,16 @@ class ReportsFilterActualMixin:
 
 
     def _reports_actual_filter_value(self) -> str:
-        """Selected Actual (likely ethnicity) dropdown."""
+        """Selected Actual (likely ethnicity) dropdown. Default: Non-white."""
         if hasattr(self, "report_actual_filter") and self.report_actual_filter is not None:
             try:
-                return (self.report_actual_filter.get() or "All").strip() or "All"
+                return (
+                    (self.report_actual_filter.get() or "Non-white").strip()
+                    or "Non-white"
+                )
             except Exception:
                 pass
-        return "All"
+        return "Non-white"
 
 
     def _reports_race_buckets_allowed(self) -> set:
@@ -161,11 +167,22 @@ class ReportsFilterActualMixin:
         return eth or "Unknown"
 
 
+    def _reports_actual_bucket_passes(self, got: str, want: str) -> bool:
+        """Whether an Actual bucket passes the dropdown selection."""
+        w = (want or "").strip() or "Non-white"
+        if not w or w == "All":
+            return True
+        g = (got or "").strip() or "Other"
+        if w in ("Non-white", "Non white", "non-white"):
+            white = getattr(self, "_ACTUAL_WHITE_BUCKETS", None) or frozenset(
+                {"European", "Jewish", "Portuguese"}
+            )
+            return g not in white
+        return g == w
+
     def _reports_actual_passes(self, mc) -> bool:
         want = self._reports_actual_filter_value()
-        if not want or want == "All":
-            return True
         got = self._reports_actual_bucket(self._reports_actual_label_for_mc(mc))
-        return got == want
+        return self._reports_actual_bucket_passes(got, want)
 
 

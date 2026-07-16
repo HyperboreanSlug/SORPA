@@ -152,7 +152,7 @@ class ReportsSourceConfirmMixin:
                     "include_deepface": False,
                     "vfilter": "unreviewed",
                     "race_allow": {"White"},
-                    "actual": "All",
+                    "actual": "Non-white",
                     "listed": "White",
                 }
                 snap_all = dict(snap)

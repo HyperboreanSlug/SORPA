@@ -954,6 +954,31 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertTrue(ok2, err2)
         self.assertEqual(verification_label(rec), "Confirmed correct")
 
+    def test_reports_actual_non_white_filter(self):
+        """Actual → Non-white excludes European/Jewish/Portuguese buckets."""
+        from gui_app.tabs.browse.reports.filter_actual import ReportsFilterActualMixin
+
+        m = ReportsFilterActualMixin()
+        passes = m._reports_actual_bucket_passes
+        for eth in (
+            "Hispanic",
+            "Indian/MENA",
+            "Asian",
+            "African American",
+            "Native American",
+            "Other",
+        ):
+            self.assertTrue(passes(eth, "Non-white"), eth)
+        for eth in ("European", "Jewish", "Portuguese"):
+            self.assertFalse(passes(eth, "Non-white"), eth)
+        self.assertTrue(passes("European", "All"))
+        self.assertTrue(passes("Hispanic", "Hispanic"))
+        self.assertFalse(passes("Asian", "Hispanic"))
+        self.assertEqual(
+            m._reports_actual_bucket("Patel Indian"), "Indian/MENA"
+        )
+        self.assertEqual(m._reports_actual_bucket("white"), "European")
+
     def test_indian_other_and_other_asian_not_mismatch(self):
         from scraper.searcher import (
             _is_compatible,

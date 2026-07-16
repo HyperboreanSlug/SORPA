@@ -161,15 +161,24 @@ class ReportsBuildMixin:
         flow.add(listed)
 
         actual = _lbl_chip("Actual")
-        self.report_actual_filter = ctk.StringVar(value="All")
+        # Default Non-white: listed-White review focuses on non-European actuals
+        self.report_actual_filter = ctk.StringVar(value="Non-white")
         ctk.CTkComboBox(
             actual,
             variable=self.report_actual_filter,
             width=168,
             values=[
-                "All", "Hispanic", "Indian/MENA", "Asian", "African American",
-                "European", "Jewish", "Portuguese",
-                "Native American", "Other",
+                "Non-white",
+                "All",
+                "Hispanic",
+                "Indian/MENA",
+                "Asian",
+                "African American",
+                "European",
+                "Jewish",
+                "Portuguese",
+                "Native American",
+                "Other",
             ],
             fg_color=C["bg"],
             border_color=C["border"],
