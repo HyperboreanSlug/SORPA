@@ -108,7 +108,18 @@ class MugshotEthnicityScorer:
         return result
 
     def score_record(self, record: dict) -> FaceEthnicityScore:
-        return self.score_path(str((record or {}).get("photo_path") or ""))
+        raw = str((record or {}).get("photo_path") or "").strip()
+        if not raw:
+            return self.score_path("")
+        try:
+            from scraper.mugshot_ethnicity.photo_resolve import resolve_local_photo
+
+            resolved = resolve_local_photo(raw)
+            if resolved is not None:
+                return self.score_path(str(resolved))
+        except Exception:
+            pass
+        return self.score_path(raw)
 
     def clear_cache(self) -> None:
         self._cache.clear()

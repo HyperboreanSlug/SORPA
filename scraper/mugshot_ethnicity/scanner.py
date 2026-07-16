@@ -428,6 +428,21 @@ def scan_gross_misclassifications(
         f"{', rescan' if force_rescan or not skip_scanned else ''})"
     )
 
+    # Refresh hit flags from current race (race often edits after first scan)
+    try:
+        stats = db.recompute_deepface_hits(
+            recorded_races=list(targets) if targets else ["WHITE"],
+            face_labels=list(want_faces) if want_faces else ["black", "indian", "asian"],
+            min_confidence=float(min_confidence),
+        )
+        if stats.get("promoted") or stats.get("demoted"):
+            _log(
+                f"Recomputed hit flags: +{stats.get('promoted', 0)} "
+                f"-{stats.get('demoted', 0)} → {stats.get('hits', 0)} hits"
+            )
+    except Exception as e:
+        _log(f"Could not recompute DeepFace hit flags: {e}")
+
     # Also surface prior hits when skipping (so UI list is complete)
     hits: List[GrossMisclassHit] = []
     if skip_scanned and not force_rescan and skipped:
@@ -435,6 +450,7 @@ def scan_gross_misclassifications(
             for rec in db.list_deepface_hits(
                 min_confidence=float(min_confidence),
                 state=state,
+                recompute=False,  # already recomputed above
             ):
                 if limit and int(limit) > 0 and len(hits) >= int(limit) * 2:
                     break

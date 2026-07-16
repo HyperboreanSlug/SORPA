@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from scraper.database.constants import _utc_now_iso
+from scraper.database.deepface_scan_hits import DeepfaceScanHitsMixin
 
 
 def photo_fingerprint(photo_path: Optional[str]) -> Optional[str]:
@@ -28,7 +29,7 @@ def photo_fingerprint(photo_path: Optional[str]) -> Optional[str]:
         return None
 
 
-class DeepfaceScanMixin:
+class DeepfaceScanMixin(DeepfaceScanHitsMixin):
     """CRUD for ``deepface_scans`` table (one latest row per offender)."""
 
     def _ensure_deepface_scans_table(self, cursor: Optional[sqlite3.Cursor] = None) -> None:
@@ -223,71 +224,6 @@ class DeepfaceScanMixin:
                 except (TypeError, ValueError):
                     continue
                 out[oid] = d
-        return out
-
-    def list_deepface_hits(
-        self,
-        *,
-        limit: int = 0,
-        min_confidence: float = 0.0,
-        state: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Return hit rows joined with offender records for Reports."""
-        self._ensure_deepface_scans_table()
-        sql = """
-            SELECT s.offender_id
-            FROM deepface_scans s
-            JOIN offenders o ON o.id = s.offender_id
-            WHERE s.is_hit = 1
-              AND COALESCE(s.top_confidence, 0) >= ?
-        """
-        params: list = [float(min_confidence or 0.0)]
-        if state:
-            sql += " AND (UPPER(o.state) = UPPER(?) OR UPPER(o.source_state) = UPPER(?))"
-            params.extend([state, state])
-        sql += " ORDER BY s.top_confidence DESC, s.scanned_at DESC"
-        if limit and int(limit) > 0:
-            sql += " LIMIT ?"
-            params.append(int(limit))
-        ids = [int(r[0]) for r in self._conn.execute(sql, params).fetchall()]
-        out: List[Dict[str, Any]] = []
-        try:
-            from scraper.mugshot_ethnicity.photo_resolve import photo_usable_for_scan
-        except Exception:
-            photo_usable_for_scan = None  # type: ignore[assignment]
-        for oid in ids:
-            scan = self.get_deepface_scan(oid)
-            rec = self.get_offender_by_id(oid)
-            if not scan or not rec:
-                continue
-            rec = dict(rec)
-            photo = (rec.get("photo_path") or "").strip()
-            scan_photo = (scan.get("photo_path") or "").strip()
-            # Never surface hits whose current mugshot is gone or is site chrome.
-            # (Shared SC help icons / noimage stubs used to score as face hits.)
-            if photo_usable_for_scan is not None:
-                if not photo_usable_for_scan(photo):
-                    continue
-                if scan_photo and not photo_usable_for_scan(scan_photo):
-                    continue
-            elif not photo:
-                continue
-            rec["_deepface"] = {
-                "top_label": scan.get("top_label"),
-                "top_confidence": scan.get("top_confidence"),
-                "scores": scan.get("scores") or {},
-                "backend": scan.get("backend"),
-                "detector": scan.get("detector"),
-                "is_hit": scan.get("is_hit"),
-                "severity": scan.get("severity"),
-                "reason": scan.get("reason"),
-                "scanned_at": scan.get("scanned_at"),
-                "predicted_label": scan.get("predicted_label"),
-                "recorded_race_scan": scan.get("recorded_race"),
-                "scan_photo_path": scan_photo or None,
-            }
-            rec["_deepface_is_hit"] = True
-            out.append(rec)
         return out
 
     def clear_deepface_scans(

@@ -331,6 +331,56 @@ class VerifyAndScanTests(unittest.TestCase):
             KNOWN_CHROME_MD5.discard(digest)
             clear_placeholder_cache()
 
+    def test_recompute_hits_after_race_collapse(self):
+        """Race collapsing Black|White → White ✓ must promote stored face hits."""
+        photo = self._photo("subject_black__0.97.jpg")
+        self.db.insert_offenders_batch(
+            [
+                {
+                    "first_name": "MARLY",
+                    "last_name": "CENELUS",
+                    "race": "Black | White",
+                    "photo_path": photo,
+                    "state": "FL",
+                }
+            ]
+        )
+        oid = int(
+            self.db._conn.execute(
+                "SELECT id FROM offenders WHERE last_name='CENELUS'"
+            ).fetchone()[0]
+        )
+        # Simulate first scan while multi-race (face black agrees with Black → not a hit)
+        self.db.upsert_deepface_scan(
+            oid,
+            photo_path=photo,
+            top_label="black",
+            top_confidence=0.97,
+            scores={"black": 0.97, "white": 0.03},
+            backend="mock",
+            is_hit=False,
+            recorded_race="Black | White",
+            predicted_label="black",
+            scan_min_conf=0.85,
+        )
+        self.assertEqual(self.db.count_deepface_scans()["hits"], 0)
+        # Later race display collapses to verified White only
+        self.db._conn.execute(
+            "UPDATE offenders SET race = ? WHERE id = ?",
+            ("White ✓", oid),
+        )
+        self.db._conn.commit()
+        stats = self.db.recompute_deepface_hits(
+            recorded_races=["WHITE"],
+            face_labels=["black", "indian", "asian"],
+            min_confidence=0.85,
+        )
+        self.assertEqual(stats["promoted"], 1)
+        self.assertEqual(self.db.count_deepface_scans()["hits"], 1)
+        hits = self.db.list_deepface_hits(min_confidence=0.85, recompute=False)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].get("last_name"), "CENELUS")
+
     def test_verify_misclass_list(self):
         photo = self._photo("indian__0.92.jpg")
         mc = Misclassification(
