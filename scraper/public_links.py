@@ -5,6 +5,11 @@ Florida FDLE quirks:
   - flyer.jsf requires camelCase ``personId=`` (lowercase ``personid=`` shows an empty/invalid flyer)
   - merged multi-jurisdiction URLs like ``https://…fdle… | https://…other…`` 404 if opened whole
   - when no valid person id is present, fall back to the FDLE search home
+
+Michigan mspsor.com:
+  - live site uses path-style ``/Home/OffenderDetails/{uuid}`` (search grid + maps)
+  - older rows stored ``/Home/OffenderDetails?id={uuid}`` — still rewrite to path form
+  - prefer mspsor.com when jurisdiction is MI (avoid WI captcha / foreign hosts)
 """
 
 from __future__ import annotations
@@ -28,6 +33,15 @@ _MA_SORB_HOST = "sorb.chs.state.ma.us"
 _MA_PATH_FIXES = (
     (re.compile(r"(?i)/viewnsoproffenderdetails\.action"), "/viewNsoprOffenderDetails.action"),
     (re.compile(r"(?i)/viewnsoproffenderimage\.action"), "/viewNsoprOffenderImage.action"),
+)
+
+from scraper.public_links_mi import (  # noqa: E402
+    MI_MSPSOR_DETAILS_BASE,
+    MI_MSPSOR_HOST,
+    MI_MSPSOR_SEARCH_HOME,
+    extract_mspsor_offender_id,
+    is_mspsor_url as _is_mspsor_url,
+    normalize_mspsor_url,
 )
 
 _MULTI_URL_SPLIT = re.compile(r"\s*\|\s*")
@@ -231,6 +245,8 @@ def resolve_public_source_url(
         hosts = list(_FDLE_HOST_MARKERS)
     elif st == "MA":
         hosts = [_MA_SORB_HOST]
+    elif st == "MI":
+        hosts = [MI_MSPSOR_HOST]
     else:
         hosts = []
 
@@ -262,6 +278,14 @@ def resolve_public_source_url(
             if cleaned:
                 return cleaned
             continue
+        if _is_mspsor_url(u):
+            cleaned = normalize_mspsor_url(_strip_jsessionid(u))
+            if cleaned:
+                return cleaned
+            continue
+        # MI rows sometimes hold foreign hosts (WI captcha, etc.) — skip those
+        if st == "MI":
+            continue
         # Non-FDLE: strip jsessionid noise from path for cleanliness
         cleaned = _strip_jsessionid(u)
         if cleaned:
@@ -273,6 +297,12 @@ def resolve_public_source_url(
     ):
         return FL_FDLE_SEARCH_HOME
 
+    # Michigan with no usable deep link → public search
+    if st == "MI" or any(_is_mspsor_url(u) for u in urls) or (
+        raw_url and _is_mspsor_url(raw_url)
+    ):
+        return MI_MSPSOR_SEARCH_HOME
+
     # Last resort: first raw piece or empty (never error404)
     if ordered:
         u0 = ordered[0]
@@ -280,12 +310,16 @@ def resolve_public_source_url(
             return FL_FDLE_SEARCH_HOME if st == "FL" else ""
         if _is_ma_sorb_url(u0):
             return normalize_ma_sorb_url(u0)
+        if _is_mspsor_url(u0):
+            return normalize_mspsor_url(u0)
         return u0
     raw = (raw_url or "").strip()
     if _is_fdle_error_page(raw):
         return FL_FDLE_SEARCH_HOME if st == "FL" else ""
     if _is_ma_sorb_url(raw):
         return normalize_ma_sorb_url(raw)
+    if _is_mspsor_url(raw):
+        return normalize_mspsor_url(raw)
     return raw
 
 

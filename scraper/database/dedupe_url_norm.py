@@ -105,6 +105,15 @@ class DedupeUrlNormMixin:
                     out,
                 )
                 return out
+        # Michigan mspsor: path-style /Home/OffenderDetails/{uuid}
+        if "mspsor.com" in host:
+            try:
+                from scraper.public_links import normalize_mspsor_url
+
+                rebuilt = f"{scheme}://{host}{path}" + (f"?{query}" if query else "")
+                return normalize_mspsor_url(rebuilt)
+            except Exception:
+                pass
         return out.lower()
 
 
