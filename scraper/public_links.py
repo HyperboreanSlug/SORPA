@@ -119,11 +119,82 @@ def normalize_ma_sorb_url(url: str) -> str:
     return urlunparse((scheme, host, path, "", query, ""))
 
 
+def _is_fdle_error_page(url: str) -> bool:
+    """True for FDLE error404 / error landings (not a usable flyer)."""
+    low = (url or "").lower()
+    if not low:
+        return False
+    if "error404" in low or "/error/error" in low:
+        return True
+    if "error.jsf" in low and _is_fdle_url(low):
+        return True
+    return False
+
+
+def _record_flags_list(record: Optional[dict]) -> List[str]:
+    """Normalize offenders.flags (list JSON or dict.tags) to string tags."""
+    if not record:
+        return []
+    raw = record.get("flags")
+    if isinstance(raw, list):
+        return [str(t) for t in raw]
+    if isinstance(raw, dict):
+        tags = raw.get("tags")
+        if isinstance(tags, list):
+            return [str(t) for t in tags]
+        return []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            import json
+
+            parsed = json.loads(raw)
+        except Exception:
+            return [raw] if raw.startswith("blocked:") else []
+        if isinstance(parsed, list):
+            return [str(t) for t in parsed]
+        if isinstance(parsed, dict):
+            tags = parsed.get("tags")
+            if isinstance(tags, list):
+                return [str(t) for t in tags]
+    return []
+
+
+def _record_has_http_404_block(record: Optional[dict]) -> bool:
+    """Prior report fetch marked this listing as HTTP 404."""
+    for t in _record_flags_list(record):
+        tl = t.lower()
+        if "blocked:http_404" in tl or tl in ("http_404", "blocked:404"):
+            return True
+    # sources_json html_status
+    raw = (record or {}).get("sources_json")
+    if not raw:
+        return False
+    try:
+        import json
+
+        srcs = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return False
+    if not isinstance(srcs, list):
+        return False
+    for s in srcs:
+        if not isinstance(s, dict):
+            continue
+        st = str(s.get("html_status") or "").lower()
+        if "http_404" in st or st.endswith(":404"):
+            return True
+        su = str(s.get("source_url") or "").lower()
+        if _is_fdle_error_page(su):
+            return True
+    return False
+
+
 def resolve_public_source_url(
     raw_url: Optional[str],
     *,
     state: Optional[str] = None,
     prefer_hosts: Optional[Sequence[str]] = None,
+    skip_fdle_flyers: bool = False,
 ) -> str:
     """
     Pick a single browser-safe URL from a stored source_url field.
@@ -131,10 +202,15 @@ def resolve_public_source_url(
     - Splits multi-URL merges
     - Fixes Florida FDLE personId casing / empty flyers
     - Fixes Massachusetts SORB action-path casing
+    - Skips FDLE error404 landings
     - Falls back to FL search home for Florida when no valid link exists
     """
     urls = split_source_urls(raw_url)
     st = (state or "").strip().upper()
+    if " | " in st:
+        # multi-jurisdiction tags like "YY | FL"
+        parts = [p.strip() for p in st.split("|") if p.strip()]
+        st = "FL" if "FL" in parts else (parts[-1] if parts else st)
     # Prefer state-relevant hosts when known
     if prefer_hosts:
         hosts = [h.lower() for h in prefer_hosts if h]
@@ -158,9 +234,13 @@ def resolve_public_source_url(
         ordered = list(urls)
 
     for u in ordered:
+        if _is_fdle_error_page(u):
+            continue
         if _is_fdle_url(u):
+            if skip_fdle_flyers and "flyer" in u.lower():
+                continue
             fixed = normalize_fdle_flyer_url(u)
-            if fixed:
+            if fixed and not _is_fdle_error_page(fixed):
                 return fixed
             # bad FDLE segment — try next
             continue
@@ -180,13 +260,17 @@ def resolve_public_source_url(
     ):
         return FL_FDLE_SEARCH_HOME
 
-    # Last resort: first raw piece or empty
+    # Last resort: first raw piece or empty (never error404)
     if ordered:
         u0 = ordered[0]
+        if _is_fdle_error_page(u0):
+            return FL_FDLE_SEARCH_HOME if st == "FL" else ""
         if _is_ma_sorb_url(u0):
             return normalize_ma_sorb_url(u0)
         return u0
     raw = (raw_url or "").strip()
+    if _is_fdle_error_page(raw):
+        return FL_FDLE_SEARCH_HOME if st == "FL" else ""
     if _is_ma_sorb_url(raw):
         return normalize_ma_sorb_url(raw)
     return raw
@@ -203,9 +287,20 @@ def _strip_jsessionid(url: str) -> str:
 
 
 def openable_url_for_record(record: Optional[dict]) -> str:
-    """Convenience: resolve from an offender/misclass record dict."""
+    """Convenience: resolve from an offender/misclass record dict.
+
+    Known-dead FDLE flyers (prior ``blocked:http_404`` / error404 URL) open the
+    FDLE search home instead of the error page — PERSON_NBR is not always a
+    valid flyer ``personId`` (e.g. Carlos Gabriel Ramirez / 19184).
+    """
     rec = record or {}
-    return resolve_public_source_url(
+    state = rec.get("state") or rec.get("source_state")
+    skip_flyers = _record_has_http_404_block(rec)
+    url = resolve_public_source_url(
         rec.get("source_url"),
-        state=rec.get("state") or rec.get("source_state"),
+        state=state,
+        skip_fdle_flyers=skip_flyers,
     )
+    if url and _is_fdle_error_page(url):
+        return FL_FDLE_SEARCH_HOME
+    return url
