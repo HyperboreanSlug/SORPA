@@ -225,39 +225,62 @@ def _draw_footer(
     font,
     number_font=None,
 ) -> None:
-    draw.line((margin, y, _CARD_W - margin, y), fill=_LINE, width=2)
-    ty = y + 12
-    left = (loc or "")[:40]
-    right = (release_label or "")[:28]
-    handle = _WATERMARK
-    num_font = number_font or load_font(_NUMBER_SIZE, bold=True)
-    if left:
-        draw.text((margin, ty + 6), left.upper(), font=font, fill=_MUTED)
-    if right:
-        rb = draw.textbbox((0, 0), right, font=num_font)
-        rw = rb[2] - rb[0]
-        # Brighter + larger so export No. reads clearly on the card
+    try:
+        draw.line((margin, y, _CARD_W - margin, y), fill=_LINE, width=2)
+        ty = y + 12
+        left = (loc or "")[:40]
+        right = (release_label or "")[:28]
+        handle = _WATERMARK
+        try:
+            num_font = number_font or load_font(_NUMBER_SIZE, bold=True)
+        except Exception:
+            num_font = font
+        if left:
+            draw.text((margin, ty + 6), left.upper(), font=font, fill=_MUTED)
+        if right:
+            try:
+                rb = draw.textbbox((0, 0), right, font=num_font)
+                rw = int(rb[2] - rb[0])
+            except Exception:
+                rw = max(8, len(right) * 14)
+            # Brighter + larger so export No. reads clearly on the card
+            draw.text(
+                (_CARD_W - margin - rw, ty),
+                right,
+                font=num_font,
+                fill=(235, 235, 240, 255),
+            )
+        # Brand mark centered in footer (same handle as photo watermark)
+        try:
+            handle_font = load_font(20, bold=True)
+            hb = draw.textbbox((0, 0), handle, font=handle_font)
+            hw = int(hb[2] - hb[0])
+        except Exception:
+            handle_font = font
+            hw = max(8, len(handle) * 10)
         draw.text(
-            (_CARD_W - margin - rw, ty),
-            right,
-            font=num_font,
-            fill=(235, 235, 240, 255),
+            ((_CARD_W - hw) // 2, ty + 6),
+            handle,
+            font=handle_font,
+            fill=(200, 200, 210, 255),
         )
-    # Brand mark centered in footer (same handle as photo watermark)
-    handle_font = load_font(20, bold=True)
-    hb = draw.textbbox((0, 0), handle, font=handle_font)
-    hw = hb[2] - hb[0]
-    draw.text(
-        ((_CARD_W - hw) // 2, ty + 6),
-        handle,
-        font=handle_font,
-        fill=(200, 200, 210, 255),
-    )
+    except Exception:
+        # Never let footer paint kill a card export / UI thread
+        pass
 
 
 def export_record_card_to_desktop(record: Mapping[str, Any]) -> Path:
     """Render and save a PNG card to the user's Desktop; return the path."""
-    img = render_export_card(record)
+    try:
+        img = render_export_card(record)
+    except Exception as exc:
+        try:
+            from gui_app.crash_log import log_exception
+
+            log_exception("export_record_card_to_desktop", exc)
+        except Exception:
+            pass
+        raise
     desktop = desktop_dir()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = safe_filename(person_name(record) or "offender")

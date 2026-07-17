@@ -180,6 +180,14 @@ def _start_deepface_setup_background(app_settings: Optional[dict] = None) -> Non
 
 
 def main() -> None:
+    # Capture uncaught errors for pythonw launches (no console)
+    try:
+        from gui_app.crash_log import install_crash_logging, log_exception
+
+        install_crash_logging()
+    except Exception:
+        log_exception = None  # type: ignore[assignment]
+
     # GitHub auto-update before loading the full GUI (may exit + relaunch)
     try:
         from gui_app.auto_update import maybe_update_and_relaunch
@@ -195,7 +203,19 @@ def main() -> None:
             f"Failed to import GUI:\n\n{e}\n\n{traceback.format_exc()}\n\n{sys.executable}"
         )
         raise SystemExit(1) from e
-    app = ArchiverApp()
+    try:
+        app = ArchiverApp()
+    except Exception as e:
+        import traceback
+
+        msg = f"Failed to start GUI:\n\n{e}\n\n{traceback.format_exc()}\n\n{sys.executable}"
+        if log_exception is not None:
+            try:
+                log_exception("ArchiverApp()", e)
+            except Exception:
+                pass
+        _fatal(msg)
+        raise SystemExit(1) from e
     # Background install only if enabled on DeepFace tab / settings
     sett = getattr(app, "app_settings", None) or {}
     _start_deepface_setup_background(sett if isinstance(sett, dict) else {})

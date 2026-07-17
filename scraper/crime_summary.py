@@ -50,6 +50,23 @@ def summarize_crime(text: Optional[str], *, max_len: int = 200) -> str:
 
         → Sexual battery · Victim under 12/force · Unclothed genitals
     """
+    try:
+        return _summarize_crime_impl(text, max_len=max_len)
+    except Exception:
+        # Never let a bad registry string take down the GUI
+        try:
+            fallback = norm(text or "")
+            if not fallback:
+                return ""
+            from scraper.crime_summary_clause import to_regular_case
+
+            cut = fallback[: max_len]
+            return to_regular_case(cut)
+        except Exception:
+            return ""
+
+
+def _summarize_crime_impl(text: Optional[str], *, max_len: int = 200) -> str:
     raw = norm(text or "")
     if not raw:
         return ""
