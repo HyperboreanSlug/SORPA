@@ -210,8 +210,8 @@ class ReportsGridTileMixin:
             anchor="center",
         ).pack(fill="x", padx=2, pady=(2, 1))
 
-        # Crime only (summarized); use full card width so text is not clipped
-        crime_short = self._reports_summarize_crime(crime, max_len=96)
+        # Crime only (summarized, hard-capped) so bottom action row stays full height
+        crime_short = self._reports_summarize_crime(crime, max_len=72)
         crime_lbl = ctk.CTkLabel(
             card,
             text=crime_short or "—",
@@ -219,8 +219,8 @@ class ReportsGridTileMixin:
             text_color=C["text"] if crime_short else C["dim"],
             anchor="nw",
             justify="left",
-            wraplength=_W - 4,
-            height=40,
+            wraplength=_W - 8,
+            height=32,
         )
         crime_lbl.pack(fill="x", padx=2, pady=(1, 0))
 
@@ -257,7 +257,8 @@ class ReportsGridTileMixin:
         status_lbl.pack(side="right")
 
         # Bottom: [select] · ✗ · ✓ · Export · Skip · Open (online listing)
-        actions = ctk.CTkFrame(card, fg_color="transparent", height=24)
+        # Fixed row height so long crime never steals space from controls
+        actions = ctk.CTkFrame(card, fg_color="transparent", height=28)
         actions.pack(fill="x", padx=2, pady=(1, 2), side="bottom")
         actions.pack_propagate(False)
 
@@ -308,13 +309,13 @@ class ReportsGridTileMixin:
             self._reports_update_metrics()
 
         ctk.CTkButton(
-            actions, text="✗", width=26, height=20,
+            actions, text="✗", width=28, height=24,
             command=lambda: _set("confirmed"),
             fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
             font=("Segoe UI", 11),
         ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="✓", width=26, height=20,
+            actions, text="✓", width=28, height=24,
             command=lambda: _set("correct"),
             fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
             font=("Segoe UI", 11),
@@ -323,8 +324,8 @@ class ReportsGridTileMixin:
         export_btn = ctk.CTkButton(
             actions,
             text="Export",
-            width=48,
-            height=20,
+            width=52,
+            height=24,
             font=("Segoe UI", 9),
             fg_color=C["accent"],
             hover_color=C["accent_hover"],
@@ -336,13 +337,13 @@ class ReportsGridTileMixin:
         )
         export_btn.pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="Skip", width=30, height=20,
+            actions, text="Skip", width=36, height=24,
             command=lambda: _set("skip"),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
             border_width=1, border_color=C["border"], font=("Segoe UI", 9),
         ).pack(side="left", padx=(0, 2))
         ctk.CTkButton(
-            actions, text="Open", width=36, height=20,
+            actions, text="Open", width=40, height=24,
             command=lambda m=mc: self._reports_open_online_listing(m),
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
             border_width=1, border_color=C["border"], font=("Segoe UI", 9),

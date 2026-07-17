@@ -47,6 +47,7 @@ from gui_app.widgets import (
     _vpaned,
     _wire_wide_scroll,
 )
+from gui_app.widgets_flow import FlowRow
 
 
 class ReportsCardsAddMixin:
@@ -118,17 +119,17 @@ class ReportsCardsAddMixin:
             )
 
         # ---- Compact list row (larger mugshot) ----
+        # Height follows content so long crime lines never crush the action buttons.
         card = ctk.CTkFrame(
             parent,
             fg_color=C["panel"],
             border_color=border,
             border_width=1,
             corner_radius=8,
-            height=148,
         )
         card.pack(fill="x", padx=6, pady=3)
-        card.pack_propagate(False)
         card.grid_columnconfigure(1, weight=1)
+        card.grid_rowconfigure(0, weight=1)
 
         # Mugshot
         photo_wrap = ctk.CTkFrame(
@@ -212,24 +213,25 @@ class ReportsCardsAddMixin:
             height=22,
         ).pack(fill="x", pady=(2, 2))
 
-        # Crime summarized (no locations / statute dumps); full body width
-        crime_sum = self._reports_summarize_crime(crime, max_len=180)
+        # Crime: hard-cap length + 2-line wrap so action buttons never get crushed
+        crime_sum = self._reports_summarize_crime(crime, max_len=110)
         crime_lbl = ctk.CTkLabel(
             body,
             text=crime_sum or "—",
             font=FONT_SM,
             text_color=C["text"] if crime_sum else C["dim"],
-            anchor="w",
+            anchor="nw",
             justify="left",
-            wraplength=900,
-            height=40,
+            wraplength=480,
+            height=36,
         )
-        crime_lbl.pack(fill="x", expand=True)
+        crime_lbl.pack(fill="x", pady=(0, 2))
 
         def _fit_crime_wrap(_event=None, lbl=crime_lbl, host=body):
             try:
-                w = max(int(host.winfo_width()) - 4, 200)
-                lbl.configure(wraplength=w)
+                w = max(int(host.winfo_width()) - 8, 200)
+                # Keep ~2 lines; label height stays fixed so chrome below is stable
+                lbl.configure(wraplength=w, height=36)
             except Exception:
                 pass
 
@@ -248,8 +250,9 @@ class ReportsCardsAddMixin:
             anchor="w",
         ).pack(fill="x")
 
-        actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.pack(fill="x", pady=(4, 0))
+        # Flowing action bar — wraps fully visible on narrow widths
+        flow = FlowRow(body, padx=3, pady=3)
+        actions = flow.host
 
         def _set(v: str, m=mc, card_widget=card, status=status_lbl):
             self._set_verdict_for_mc(m, v, save=True)
@@ -277,24 +280,28 @@ class ReportsCardsAddMixin:
                 pass
             self._reports_update_metrics()
 
-        ctk.CTkButton(
-            actions, text="Incorrect", width=78, height=26,
-            command=lambda: _set("confirmed"),
-            fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
-            font=FONT_SM,
-        ).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(
-            actions, text="Correct", width=70, height=26,
-            command=lambda: _set("correct"),
-            fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
-            font=FONT_SM,
-        ).pack(side="left", padx=(0, 4))
-        # Immediate single name-card export to Desktop
+        # Widths sized for full label text (never shrink past readable full words)
+        flow.add(
+            ctk.CTkButton(
+                actions, text="Incorrect", width=88, height=28,
+                command=lambda: _set("confirmed"),
+                fg_color="#5c3030", hover_color="#7a4040", text_color=C["text"],
+                font=FONT_SM,
+            )
+        )
+        flow.add(
+            ctk.CTkButton(
+                actions, text="Correct", width=78, height=28,
+                command=lambda: _set("correct"),
+                fg_color="#2a4a38", hover_color="#356348", text_color=C["text"],
+                font=FONT_SM,
+            )
+        )
         list_export_btn = ctk.CTkButton(
             actions,
             text="Export",
-            width=64,
-            height=26,
+            width=72,
+            height=28,
             font=FONT_SM,
             fg_color=C["accent"],
             hover_color=C["accent_hover"],
@@ -306,21 +313,25 @@ class ReportsCardsAddMixin:
                 m, b
             )
         )
-        list_export_btn.pack(side="left", padx=(0, 4))
-        ctk.CTkButton(
-            actions, text="Skip", width=50, height=26,
-            command=lambda: _set("skip"),
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
-            border_width=1, border_color=C["border"], font=FONT_SM,
-        ).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(
-            actions, text="Open", width=52, height=26,
-            command=lambda m=mc: self._reports_open_online_listing(m),
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"], font=FONT_SM,
-        ).pack(side="left", padx=(0, 4))
+        flow.add(list_export_btn)
+        flow.add(
+            ctk.CTkButton(
+                actions, text="Skip", width=56, height=28,
+                command=lambda: _set("skip"),
+                fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
+                border_width=1, border_color=C["border"], font=FONT_SM,
+            )
+        )
+        flow.add(
+            ctk.CTkButton(
+                actions, text="Open", width=58, height=28,
+                command=lambda m=mc: self._reports_open_online_listing(m),
+                fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+                border_width=1, border_color=C["border"], font=FONT_SM,
+            )
+        )
 
-        # Compact ethnicity override
+        # Compact ethnicity override — size for longest ethnicity label
         eth_opts = list(self._ETHNICITY_OPTIONS)
         eth_cur = str(eth or "Unknown").strip() or "Unknown"
         if eth_cur not in eth_opts:
@@ -330,8 +341,8 @@ class ReportsCardsAddMixin:
             actions,
             variable=eth_var,
             values=eth_opts,
-            width=130,
-            height=26,
+            width=148,
+            height=28,
             fg_color=C["bg"],
             border_color=C["border"],
             button_color=C["elevated"],
@@ -340,7 +351,7 @@ class ReportsCardsAddMixin:
             state="readonly",
             font=FONT_SM,
         )
-        eth_combo.pack(side="left", padx=(8, 0))
+        flow.add(eth_combo)
 
         def _on_eth(choice: str, m=mc, card_widget=card):
             new_eth = (choice or eth_var.get() or "").strip() or "Unknown"
@@ -370,14 +381,20 @@ class ReportsCardsAddMixin:
             f"HTML: {html_raw or '—'}\n"
             f"URL: {url_disp}"
         )
-        ctk.CTkButton(
-            actions, text="Copy", width=50, height=26,
-            command=lambda t=copy_blob, n=name: self._copy_to_clipboard(
-                t, toast=f"Copied {n}"
-            ),
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
-            border_width=1, border_color=C["border"], font=FONT_SM,
-        ).pack(side="right", padx=(0, 4))
+        flow.add(
+            ctk.CTkButton(
+                actions, text="Copy", width=56, height=28,
+                command=lambda t=copy_blob, n=name: self._copy_to_clipboard(
+                    t, toast=f"Copied {n}"
+                ),
+                fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+                border_width=1, border_color=C["border"], font=FONT_SM,
+            )
+        )
+        try:
+            flow.reflow()
+        except Exception:
+            pass
         # Double-click card → archived HTML, else live URL, else photo
         try:
             card.bind(
