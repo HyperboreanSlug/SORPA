@@ -36,8 +36,10 @@ from scraper.searcher import format_race_label
 
 _PAD = 48
 _NAME_SIZE = 52
-_CRIME_H = 100
-_BANNER_H = 96
+_CRIME_H = 128
+_BANNER_H = 120
+# Race banner slightly wider than text stack (extends toward card edges)
+_BANNER_INSET = 28
 _FOOTER_H = 44
 
 
@@ -60,11 +62,12 @@ def render_export_card(record: Mapping[str, Any]) -> Image.Image:
     arrest_dt = arrest_datetime(record)
 
     name_font = load_font(_NAME_SIZE, bold=True)
-    # Crime: slightly larger + bold so charges read clearly on the card
-    crime_font = load_font(34, bold=True)
+    # Crime: large bold charge lines
+    crime_font = load_font(42, bold=True)
     footer_font = load_font(22)
-    reported_font = load_font(22, bold=True)
-    race_font = _load_display_font(48)
+    # "Reported As" + race value — large display weight
+    reported_font = load_font(28, bold=True)
+    race_font = _load_display_font(58)
 
     max_text_w = _CARD_W - _PAD * 2
     banner_on = bool(race)
@@ -156,9 +159,14 @@ def _draw_race_banner(
     draw, race: str, y: int, margin: int, max_w: int, label_font, race_font
 ) -> int:
     top = y
+    # Wider than the photo/text margin so WHITE / race fills more of the card
+    inset = min(margin, _BANNER_INSET)
+    ban_left = inset
+    ban_right = _CARD_W - inset
+    ban_w = ban_right - ban_left
     draw.rounded_rectangle(
-        (margin, top, _CARD_W - margin, top + _BANNER_H),
-        radius=14,
+        (ban_left, top, ban_right, top + _BANNER_H),
+        radius=16,
         fill=_BANNER_RED,
         outline=(178, 58, 58, 255),
         width=2,
@@ -167,21 +175,21 @@ def _draw_race_banner(
     race_txt = race.upper()
     lb = draw.textbbox((0, 0), label, font=label_font)
     lw, lh = lb[2] - lb[0], lb[3] - lb[1]
-    race_lines = wrap_text(draw, race_txt, race_font, max_w - 40)[:1]
+    race_lines = wrap_text(draw, race_txt, race_font, ban_w - 48)[:1]
     rb = draw.textbbox((0, 0), race_lines[0], font=race_font)
     rw, rh = rb[2] - rb[0], rb[3] - rb[1]
-    gap = 4
+    gap = 6
     block = lh + gap + rh
     cy = top + max(0, (_BANNER_H - block) // 2)
     draw.text(
-        ((_CARD_W - lw) // 2, cy - lb[1]),
+        ((ban_left + ban_right - lw) // 2, cy - lb[1]),
         label,
         font=label_font,
         fill=(245, 217, 217, 255),
     )
     cy += lh + gap
     draw.text(
-        ((_CARD_W - rw) // 2, cy - rb[1]),
+        ((ban_left + ban_right - rw) // 2, cy - rb[1]),
         race_lines[0],
         font=race_font,
         fill=_BANNER_TEXT,
@@ -193,11 +201,13 @@ def _draw_crime_panel(draw, text: str, y: int, margin: int, max_w: int, font) ->
     box = (margin, y, _CARD_W - margin, y + _CRIME_H)
     draw.rounded_rectangle(box, radius=18, fill=_CRIME_PANEL, outline=_LINE, width=2)
     lines = wrap_text(draw, text or "", font, max_w - 36)[:3]
-    ty = y + 18
+    line_h = 36
+    ty = y + 20
     for line in lines:
         if line:
-            draw.text((margin + 18, ty), line, font=font, fill=_MUTED)
-            ty += 28
+            # Brighter + bold font for readability
+            draw.text((margin + 18, ty), line, font=font, fill=_BANNER_TEXT)
+            ty += line_h
     return y + _CRIME_H
 
 
