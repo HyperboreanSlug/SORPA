@@ -162,6 +162,22 @@ def _resolve_remote_tip(root: Path, branch: str) -> str:
     return ""
 
 
+def _gui_executable() -> str:
+    """Prefer pythonw on Windows so relaunch does not open a console."""
+    exe = sys.executable or "python"
+    if sys.platform != "win32" or getattr(sys, "frozen", False):
+        return exe
+    try:
+        p = Path(exe)
+        if p.name.lower() == "python.exe":
+            pyw = p.with_name("pythonw.exe")
+            if pyw.is_file():
+                return str(pyw)
+    except Exception:
+        pass
+    return exe
+
+
 def _relaunch(root: Path) -> None:
     env = os.environ.copy()
     env[_SKIP_ENV] = "1"
@@ -173,11 +189,13 @@ def _relaunch(root: Path) -> None:
             cand = root / argv[0]
             if cand.is_file():
                 argv[0] = str(cand.resolve())
-        cmd = [sys.executable, *argv]
+        cmd = [_gui_executable(), *argv]
     kwargs: dict = {"cwd": str(root), "env": env, "close_fds": True}
     if sys.platform == "win32":
-        # Detach so this process can hard-exit without killing the child GUI
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_GROUP
+        # DETACHED + NEW_GROUP + no console (python.exe would otherwise flash)
+        kwargs["creationflags"] = (
+            0x00000008 | 0x00000200 | _no_window()
+        )
     try:
         subprocess.Popen(cmd, **kwargs)
     except Exception as e:

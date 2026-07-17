@@ -290,6 +290,13 @@ def _is_abi_error(text: str) -> bool:
     return "numpy.dtype size changed" in t or "binary incompatibility" in t
 
 
+def _no_window_flags() -> int:
+    """Hide console windows when pip is spawned from pythonw GUI."""
+    if sys.platform == "win32":
+        return int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+    return 0
+
+
 def _pip_install(
     packages_or_req: List[str],
     *,
@@ -317,6 +324,7 @@ def _pip_install(
                 capture_output=True,
                 text=True,
                 timeout=int(os.environ.get("SOR_DEEPFACE_PIP_TIMEOUT", "1800")),
+                creationflags=_no_window_flags(),
             )
         except subprocess.TimeoutExpired:
             _log(log, "DeepFace pip install timed out")

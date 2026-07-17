@@ -95,6 +95,12 @@ def fairface_available() -> bool:
     return fairface_runtime_ok()[0]
 
 
+def _no_window_flags() -> int:
+    if sys.platform == "win32":
+        return int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+    return 0
+
+
 def _pip_install(
     packages_or_req: List[str],
     *,
@@ -114,6 +120,7 @@ def _pip_install(
                 capture_output=True,
                 text=True,
                 timeout=int(os.environ.get("SOR_FAIRFACE_PIP_TIMEOUT", "3600")),
+                creationflags=_no_window_flags(),
             )
         except subprocess.TimeoutExpired:
             _log(log, "FairFace pip install timed out")
