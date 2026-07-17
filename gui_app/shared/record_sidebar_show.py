@@ -62,21 +62,42 @@ class RecordSidebarShowMixin:
             color = C["muted"]
         self.verdict_status.configure(text=label or "", text_color=color)
 
-    def _pump_ui(self) -> None:
+    def _drain_ui_queue(self) -> int:
+        drained = 0
         try:
             while True:
                 fn = self._ui_q.get_nowait()
+                drained += 1
                 try:
                     fn()
                 except Exception:
                     pass
         except Exception:
             pass
+        return drained
+
+    def _pump_ui(self) -> None:
+        drained = self._drain_ui_queue()
         if self._after:
-            self._after(50, self._pump_ui)
+            # Fast poll while photo apply callbacks are queued; idle slower.
+            delay = 8 if drained else 30
+            self._after(delay, self._pump_ui)
 
     def _schedule(self, fn: Callable[[], None]) -> None:
         self._ui_q.put(fn)
+        # Drain ASAP without starting a second continuous pump chain.
+        if self._after and not getattr(self, "_flush_pending", False):
+            self._flush_pending = True
+
+            def _kick() -> None:
+                self._flush_pending = False
+                self._drain_ui_queue()
+
+            try:
+                self._after(1, _kick)
+            except Exception:
+                self._flush_pending = False
+
 
     def _on_sidebar_configure(self, _event=None) -> None:
         if not self._after:
@@ -150,8 +171,14 @@ class RecordSidebarShowMixin:
         if not record:
             self.clear()
             return
+        prev = self._record
+        prev_path = str((prev or {}).get("photo_path") or "").strip()
+        new_path = str(record.get("photo_path") or "").strip()
+        # Same disk path → keep in-flight/cached load (bg enrich must not cancel it).
+        same_photo = bool(prev_path and new_path and prev_path == new_path)
         self._record = dict(record)
-        self._load_token += 1
+        if not same_photo:
+            self._load_token += 1
         token = self._load_token
         self.photo_size = self._target_photo_size()
         self.photo.configure(width=self.photo_size[0], height=self.photo_size[1])
@@ -202,4 +229,15 @@ class RecordSidebarShowMixin:
             self.actual_race.set(likely)
         finally:
             self._syncing_actual = False
+        if same_photo:
+            # Flags/text only — do not cancel an in-flight decode of this path.
+            if getattr(self, "_pil_source", None) is not None and hasattr(
+                self, "_refit_current_photo"
+            ):
+                try:
+                    self._refit_current_photo()
+                except Exception:
+                    pass
+            return
         self._load_photo(self._record, token)
+

@@ -168,9 +168,21 @@ class MisclassifySidebarActionsMixin:
         if hasattr(self, "log_queue"):
             self.log_queue.put(f"Misclassify verification: {name} → {label}")
 
+        # Patch one row (or drop if correct) — avoid full tree + DeepFace rebuild
+        # so the next mugshot can start loading immediately.
+        if hasattr(self, "_misclass_patch_tree_verdict"):
+            try:
+                self._misclass_patch_tree_verdict(record, verdict)
+            except Exception:
+                pass
         if hasattr(self, "_refresh_stats_from_verdicts"):
             try:
-                self._refresh_stats_from_verdicts()
+                self._refresh_stats_from_verdicts(repaint_tree=False)
+            except TypeError:
+                try:
+                    self._refresh_stats_from_verdicts()
+                except Exception:
+                    pass
             except Exception:
                 pass
         elif hasattr(self, "_populate_misclass_tree") and hasattr(

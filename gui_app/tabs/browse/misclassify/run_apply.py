@@ -19,6 +19,9 @@ class MisclassifyApplyMixin:
             "eth_filter": eth,
             "eth_base_count": eth_base,
         }
+        # New Analyze set → invalidate cached DeepFace column map.
+        self._misclass_df_map_cache = None
+
         stats_results = self._results_excluding_correct(results)
         n_correct = len(results) - len(stats_results)
         if hasattr(self, "_misclass_filter_breakdown"):

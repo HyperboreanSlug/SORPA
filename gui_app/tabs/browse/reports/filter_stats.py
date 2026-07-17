@@ -24,8 +24,12 @@ class ReportsFilterStatsMixin:
             out.append(mc)
         return out
 
-    def _refresh_stats_from_verdicts(self) -> None:
-        """Recompute Statistics after Correct labels change."""
+    def _refresh_stats_from_verdicts(self, *, repaint_tree: bool = True) -> None:
+        """Recompute Statistics after Correct labels change.
+
+        *repaint_tree*=False skips the heavy tree rebuild (used after a single
+        sidebar confirmation that already patches the row in place).
+        """
         meta = getattr(self, "_misclass_meta", None) or {}
         if not meta and not self._misclass_results:
             return
@@ -41,11 +45,55 @@ class ReportsFilterStatsMixin:
             )
         except Exception:
             pass
-        if hasattr(self, "misclass_tree"):
+        if repaint_tree and hasattr(self, "misclass_tree"):
             try:
                 self._populate_misclass_tree(filtered)
             except Exception:
                 pass
+
+    def _misclass_patch_tree_verdict(
+        self, record: dict, verdict: str
+    ) -> None:
+        """Update or drop one Misclassify row after confirm (no full rebuild)."""
+        tree = getattr(self, "misclass_tree", None)
+        by_iid = getattr(self, "_misclass_records_by_iid", None)
+        if tree is None or by_iid is None:
+            return
+        rid = record.get("id")
+        url = str(record.get("source_url") or "")
+        pick = None
+        for iid, rec in by_iid.items():
+            if rid is not None and rec.get("id") == rid:
+                pick = iid
+                break
+            if url and rec.get("source_url") == url:
+                pick = iid
+                break
+        if pick is None:
+            return
+        # Keep cached row flags/ethnicity in sync with the sidebar record.
+        cached = by_iid.get(pick)
+        if isinstance(cached, dict):
+            for key in ("flags", "likely_ethnicity", "id"):
+                if record.get(key) is not None:
+                    cached[key] = record.get(key)
+        if verdict == "correct":
+            try:
+                tree.delete(pick)
+            except Exception:
+                pass
+            by_iid.pop(pick, None)
+            mc_map = getattr(self, "_misclass_mc_by_iid", None)
+            if isinstance(mc_map, dict):
+                mc_map.pop(pick, None)
+            return
+        try:
+            from gui_app.tabs.browse.misclassify.constants import verification_label
+
+            label = verification_label(cached or record)
+            tree.set(pick, "confirmation", label)
+        except Exception:
+            pass
 
     def _populate_misclass_tree(self, results: list) -> None:
         if not hasattr(self, "misclass_tree"):
@@ -66,31 +114,41 @@ class ReportsFilterStatsMixin:
         from scraper.confidence_display import combine_name_face_confidence
         from scraper.crime_summary import summarize_crime
 
-        # Bulk DeepFace scores for visible rows (one query)
-        df_map: dict = {}
-        try:
-            from scraper.database import Database
-
-            oids = []
-            for mc in display[:500]:
-                rid = (getattr(mc, "record", None) or {}).get("id")
-                if rid is not None:
-                    try:
-                        oids.append(int(rid))
-                    except (TypeError, ValueError):
-                        pass
-            if oids:
-                db_path = str(
-                    getattr(self, "db_path", None) or "data/offenders.db"
-                )
-                db = Database(db_path)
+        # Reuse DeepFace map across confirm rebuilds; refresh on Analyze.
+        oids = []
+        for mc in display[:500]:
+            rid = (getattr(mc, "record", None) or {}).get("id")
+            if rid is not None:
                 try:
-                    if hasattr(db, "get_deepface_scans_map"):
-                        df_map = db.get_deepface_scans_map(oids)
-                finally:
-                    db.close()
-        except Exception:
-            df_map = {}
+                    oids.append(int(rid))
+                except (TypeError, ValueError):
+                    pass
+        oids_key = tuple(oids)
+        df_map: dict = {}
+        cache = getattr(self, "_misclass_df_map_cache", None)
+        if (
+            isinstance(cache, dict)
+            and cache.get("key") == oids_key
+            and isinstance(cache.get("map"), dict)
+        ):
+            df_map = cache["map"]
+        else:
+            try:
+                from scraper.database import Database
+
+                if oids:
+                    db_path = str(
+                        getattr(self, "db_path", None) or "data/offenders.db"
+                    )
+                    db = Database(db_path)
+                    try:
+                        if hasattr(db, "get_deepface_scans_map"):
+                            df_map = db.get_deepface_scans_map(oids) or {}
+                    finally:
+                        db.close()
+            except Exception:
+                df_map = {}
+            self._misclass_df_map_cache = {"key": oids_key, "map": df_map}
 
         for mc in display[:500]:
             rec = dict(mc.record or {})
