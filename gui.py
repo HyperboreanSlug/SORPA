@@ -90,7 +90,7 @@ _ensure_dependencies()
 
 
 def _start_deepface_setup_background(app_settings: Optional[dict] = None) -> None:
-    """Install DeepFace + race weights in a daemon thread (never blocks GUI launch).
+    """Install FairFace (primary) then DeepFace fallback in a daemon thread.
 
     Honors Settings / DeepFace tab flags: deepface_auto_setup, deepface_auto_warm.
     """
@@ -121,12 +121,18 @@ def _start_deepface_setup_background(app_settings: Optional[dict] = None) -> Non
             import time
 
             time.sleep(3)
+            from scraper.mugshot_ethnicity.setup_fairface import ensure_fairface
             from scraper.mugshot_ethnicity.setup import (
                 ensure_deepface,
                 download_selected_weights,
                 deepface_available,
             )
 
+            # Primary race model — face-race / FairFace
+            ff_ok = ensure_fairface(auto_install=True, warm=warm, log=_log)
+            _log(f"FairFace auto-setup: {'OK' if ff_ok else 'failed / incomplete'}")
+
+            # Legacy fallback stack (optional if FairFace ready)
             ok = ensure_deepface(auto_install=True, warm=False, log=_log)
             if ok and warm and deepface_available():
                 # Skip TF model load when weights already on disk — re-warm
@@ -145,8 +151,8 @@ def _start_deepface_setup_background(app_settings: Optional[dict] = None) -> Non
                     det_ok = detector_local_status(detector).get("downloaded")
                     if not need and det_ok:
                         _log(
-                            f"Weights already cached ({', '.join(models or ['Race'])}"
-                            f" + {detector}) — skip auto warm"
+                            f"DeepFace weights already cached "
+                            f"({', '.join(models or ['Race'])} + {detector}) — skip warm"
                         )
                         return
                     if not need and not det_ok:
@@ -159,12 +165,12 @@ def _start_deepface_setup_background(app_settings: Optional[dict] = None) -> Non
                     log=_log,
                 )
         except Exception as e:
-            _log(f"Background DeepFace setup error: {e}")
+            _log(f"Background vision setup error: {e}")
 
     try:
         import threading
 
-        threading.Thread(target=_run, name="deepface-setup", daemon=True).start()
+        threading.Thread(target=_run, name="vision-setup", daemon=True).start()
     except Exception:
         pass
 

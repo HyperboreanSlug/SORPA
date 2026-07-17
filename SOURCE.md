@@ -107,7 +107,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `ethnic_names_*` | load, signals, classify, confidence |
 | `cli_cmds_*` + `cli_parser` | CLI commands |
 | `paths.py` + `app_settings.py` | Install-root path resolution; portable `db_path` across machines |
-| `mugshot_ethnicity/` | face ethnicity scan; **primary race backend = FairFace** via standalone `face-race` package (`backends_fairface`); DeepFace/CLIP fallback; `photo_quality` + `photo_resolve` |
+| `mugshot_ethnicity/` | face ethnicity scan; **primary = FairFace** via `face-race` (`backends_fairface` + `setup_fairface` auto-install/weights); DeepFace/CLIP fallback; `photo_quality` + `photo_resolve` |
 | `db_sync*` | GitHub public DB sync (base + deltas + selective photos; overall % progress) |
 | `db_sync_progress` | Byte-weighted overall progress for sync/publish UI |
 | `db_publish_*` | Publisher-only: gate, row index, delta package, selective upload (this machine) |

@@ -114,42 +114,70 @@ class DeepfaceSetupRunMixin:
         def worker():
             ok = False
             try:
+                from scraper.mugshot_ethnicity.setup_fairface import (
+                    ensure_fairface,
+                    fairface_available,
+                )
                 from scraper.mugshot_ethnicity.setup import (
                     ensure_deepface,
-                    warm_deepface_models,
                     download_selected_weights,
                     deepface_available,
                 )
 
                 if install:
-                    ok = ensure_deepface(
+                    ff_ok = ensure_fairface(
+                        auto_install=True,
+                        warm=True,
+                        log=self._deepface_append_log,
+                        force_reinstall=False,
+                    )
+                    self._deepface_append_log(
+                        f"FairFace (primary): {'OK' if ff_ok else 'failed'}"
+                    )
+                    df_ok = ensure_deepface(
                         auto_install=True,
                         warm=False,  # download selected models next
                         log=self._deepface_append_log,
                         force_reinstall=False,
                     )
-                    if ok and warm:
+                    ok = bool(ff_ok or df_ok)
+                    if df_ok and warm:
                         results = download_selected_weights(
                             models,
                             detector_backend=detector,
                             log=self._deepface_append_log,
                         )
-                        ok = bool(results.get("Race") or any(results.values()))
+                        ok = bool(
+                            ff_ok
+                            or results.get("Race")
+                            or any(results.values())
+                        )
                 elif warm or weights_only:
-                    if not deepface_available():
+                    ff_ok = ensure_fairface(
+                        auto_install=False,
+                        warm=True,
+                        log=self._deepface_append_log,
+                    )
+                    if not deepface_available() and not fairface_available():
                         self._deepface_append_log(
-                            "DeepFace not installed — use Install / repair packages first"
+                            "No vision backend — use Install / repair packages first"
                         )
                         ok = False
                     else:
-                        results = download_selected_weights(
-                            models,
-                            detector_backend=detector,
-                            log=self._deepface_append_log,
+                        results = {}
+                        if deepface_available():
+                            results = download_selected_weights(
+                                models,
+                                detector_backend=detector,
+                                log=self._deepface_append_log,
+                            )
+                        ok = bool(
+                            ff_ok
+                            or results.get("Race")
+                            or any(results.values())
                         )
-                        ok = bool(results.get("Race") or any(results.values()))
                 else:
-                    ok = deepface_available()
+                    ok = fairface_available() or deepface_available()
             except Exception as e:
                 self._deepface_append_log(f"ERROR: {e}")
                 ok = False

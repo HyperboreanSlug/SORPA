@@ -37,6 +37,10 @@ from scraper.mugshot_ethnicity.setup import (
     download_selected_weights,
     ensure_deepface,
     ensure_deepface_background,
+    ensure_fairface,
+    ensure_fairface_background,
+    fairface_available,
+    fairface_runtime_ok,
     warm_deepface_models,
 )
 
@@ -55,6 +59,10 @@ __all__ = [
     "download_selected_weights",
     "ensure_deepface",
     "ensure_deepface_background",
+    "ensure_fairface",
+    "ensure_fairface_background",
+    "fairface_available",
+    "fairface_runtime_ok",
     "warm_deepface_models",
     "verify_record",
     "verify_misclassifications",

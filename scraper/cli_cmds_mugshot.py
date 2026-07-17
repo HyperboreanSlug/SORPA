@@ -254,19 +254,28 @@ def cmd_mugshot_scan(args: argparse.Namespace) -> None:
 
 
 def cmd_mugshot_setup(args: argparse.Namespace) -> None:
-    """Install DeepFace into this interpreter and warm the race model."""
-    from .mugshot_ethnicity import ensure_deepface, get_available_backends
+    """Install FairFace (primary) + DeepFace fallback; warm race weights."""
+    from .mugshot_ethnicity import (
+        ensure_deepface,
+        ensure_fairface,
+        get_available_backends,
+    )
 
     print(f"\n{'='*60}")
-    print("  DeepFace auto-setup (local)")
+    print("  Vision auto-setup (FairFace primary, DeepFace fallback)")
     print(f"{'='*60}")
     print(f"  Interpreter: {__import__('sys').executable}")
-    ok = ensure_deepface(
+    warm = not getattr(args, "no_warm", False)
+    ff_ok = ensure_fairface(auto_install=True, warm=warm, log=print)
+    df_ok = ensure_deepface(
         auto_install=True,
-        warm=not getattr(args, "no_warm", False),
+        warm=warm,
         log=print,
         force_reinstall=False,
     )
+    ok = bool(ff_ok or df_ok)
+    print(f"  FairFace: {'OK' if ff_ok else 'FAILED'}")
+    print(f"  DeepFace: {'OK' if df_ok else 'FAILED'}")
     print(f"  Backends: {get_available_backends()}")
     print(f"  Result: {'OK' if ok else 'FAILED'}")
     print(f"{'='*60}\n")

@@ -1,8 +1,7 @@
-"""Ensure DeepFace (local race model) is installed and ready.
+"""Ensure local race models are installed and ready.
 
-Called automatically when mugshot scoring starts with backend auto/deepface.
-Installs from ``requirements-vision.txt`` into the current interpreter, then
-optionally warms the race model (downloads weights to ``~/.deepface/weights/``).
+Primary: FairFace via ``setup_fairface.ensure_fairface`` (face-race package).
+Legacy: DeepFace from ``requirements-vision.txt`` + ``~/.deepface/weights/``.
 
 Hardening:
   * pip always targets *this* process's site-packages (pythonw → python.exe)
@@ -741,3 +740,11 @@ def ensure_deepface_background(
     t = threading.Thread(target=_run, name="deepface-setup", daemon=True)
     t.start()
     return t
+
+# FairFace re-exports (primary backend auto-setup)
+from scraper.mugshot_ethnicity.setup_fairface import (
+    ensure_fairface,
+    ensure_fairface_background,
+    fairface_available,
+    fairface_runtime_ok,
+)
