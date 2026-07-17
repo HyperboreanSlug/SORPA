@@ -170,18 +170,9 @@ def crime(record: Mapping[str, Any]) -> str:
 
 
 def arrest_datetime(record: Mapping[str, Any]) -> str:
-    """Best available date, or empty (never 'Unknown')."""
-    for key in (
-        "registration_date",
-        "conviction_date",
-        "last_verified",
-        "arrest_date",
-        "booking_date",
-        "scraped_at",
-    ):
-        date = _clean_field(record.get(key))
-        if date:
-            if "T" in date:
-                date = date.partition("T")[0]
-            return date
+    """SORPA export cards never show a date (registry data, not arrests).
+
+    Kept as a stub so the shared card chassis (footer signature) stays compatible
+    with mapa; always returns empty so the footer right side stays blank.
+    """
     return ""

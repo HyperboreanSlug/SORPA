@@ -42,7 +42,7 @@ _FOOTER_H = 44
 
 
 def render_export_card(record: Mapping[str, Any]) -> Image.Image:
-    """Premium watermarked card: large photo, race banner, crime, location/date."""
+    """Premium watermarked card: large photo, race banner, crime, location (no date)."""
     canvas = Image.new("RGBA", (_CARD_W, _CARD_H), _BG)
     draw = ImageDraw.Draw(canvas)
     _draw_foil_sheen(canvas)
@@ -56,6 +56,7 @@ def render_export_card(record: Mapping[str, Any]) -> Image.Image:
             race = ""
     loc = last_known_location(record)
     cr = crime(record)
+    # SORPA: never show a date on export cards (see arrest_datetime stub).
     arrest_dt = arrest_datetime(record)
 
     name_font = load_font(_NAME_SIZE, bold=True)
