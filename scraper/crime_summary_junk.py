@@ -20,9 +20,13 @@ _STATUTE_ONLY = re.compile(
 )
 
 # Federal / state docket tokens embedded in free text
+# FL circuit: 23-CF-017184 · 2023-CF-001234 · 23CF017184 · bare 23-CF remnant
 _DOCKET_TOKEN = re.compile(
     r"(?ix)\b(?:"
     r"\d{1,2}:\d+:\d+-\d+-cr-[a-z0-9\-]+"
+    r"|(?:19|20)\d{2}-?(?:cf|mm|ct|dr|dp|cj|ca|sc)-\d{3,}"
+    r"|\d{2}-?(?:cf|mm|ct|dr|dp|cj|ca|sc)-\d{3,}"
+    r"|\d{2,4}-?(?:cf|mm|ct|dr|dp|cj|ca|sc)(?!\w)"  # bare 23-CF left after digit strip
     r"|(?:cr|case|docket)[- ]?\d{3,}"
     r")\b"
 )
@@ -85,6 +89,12 @@ def strip_statute_cites(s: str) -> str:
     # Orphan subsection crumbs left after cite strip: "(1)(b)" / "1 — b —"
     t = re.sub(r"(?:\s*\([a-z0-9]+\)\s*)+", " ", t, flags=re.I)
     t = re.sub(r"(?i)^\s*\d{1,2}\s*[—\-]\s*[a-z]\s*[—\-]\s*", "", t)
+    # FL case remnants glued by title-case: "23-Cf" / "23 - Cf" / "23‑Cf"
+    t = re.sub(
+        r"(?i)\b\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr|dp|cj|ca|sc)\b",
+        " ",
+        t,
+    )
     t = re.sub(r"\b\d{5,}\b", " ", t)  # long booking / case numbers
     # Collapse empty paren residue from stripped statutes: "( (10 COUNTS))" → "(10 COUNTS)"
     t = re.sub(r"\(\s*\(", "(", t)
@@ -108,11 +118,19 @@ def is_junk_label(label: str) -> bool:
     # Statute-subsection crumbs: "1 — b — SEX ASSAULT…" (stripped CRS cite)
     if re.match(r"(?i)^\d{1,2}\s*[—\-]\s*[a-z]\b", s) and len(s) < 80:
         return True
+    # Bare FL docket crumbs as a whole label: "23-Cf" / "23-CF-017184"
+    if re.fullmatch(
+        r"(?i)\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr|dp|cj|ca|sc)(?:\s*[-–—]?\s*\d+)?",
+        s,
+    ):
+        return True
     if is_statute_or_docket(s):
         return True
     if _DOCKET_RESIDUE.match(s):
         return True
     if re.search(r"(?i)\d:\d+", s):  # any federal docket remnant
+        return True
+    if re.search(r"(?i)\b\d{2,4}-?(?:cf|mm|ct|dr)\b", s) and len(s) < 24:
         return True
     letters = sum(1 for c in s if c.isalpha())
     digits = sum(1 for c in s if c.isdigit())

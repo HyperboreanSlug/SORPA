@@ -209,6 +209,25 @@ class CrimeSummaryTests(unittest.TestCase):
         )
         self.assertEqual(to_regular_case("Sexual battery"), "Sexual battery")
 
+    def test_fl_cf_case_number_not_in_description(self):
+        """ROGELIO DELEON: 23-CF-017184 must not appear as '23-Cf' on cards."""
+        raw = (
+            "10/15/2024; Lewd or lascivious conduct victim under 16 years old "
+            "by offender 18 years or older; F.S. 800.04(6)(b (2 Counts); "
+            "23-CF-017184; Lee, FL; Guilty/convict; Lewd or lascivious conduct "
+            "victim under 16 years old by offender 18 years or older; "
+            "F.S. 800.04(6)(b; 2317184; Commission of OR Attempt, Solicit, or "
+            "Conspire to Commit"
+        )
+        out = summarize_crime(raw)
+        self.assertIn("under 16", out.lower())
+        self.assertNotIn("23-cf", out.lower())
+        self.assertNotIn("23-Cf", out)
+        self.assertNotIn("cf", out.lower())
+        self.assertNotIn("017184", out)
+        self.assertNotIn("2317184", out)
+        self.assertNotIn("800.04", out)
+
 
 if __name__ == "__main__":
     unittest.main()
