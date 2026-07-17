@@ -300,8 +300,9 @@ REGISTRIES: List[RegistryConfig] = [
     ),
     RegistryConfig(
         name="Virginia", abbr="VA",
-        registry_url="https://www.vsp.virginia.gov/sex-offender-registry/",
+        registry_url="https://vspsor.com/",
         scrape_method="interactive",
+        notes="Public registry UI is vspsor.com (VSP landing page is not the SOR app).",
     ),
     RegistryConfig(
         name="Washington", abbr="WA",

@@ -107,12 +107,36 @@ class FetcherSessionMixin:
 
 
     def _get(self, url: str, **kwargs: Any) -> Any:
-        return self.session.get(
-            url,
-            timeout=self.timeout,
-            allow_redirects=True,
-            **kwargs,
-        )
+        """GET with automatic verify=False retry on TLS/cert failures.
+
+        Virginia vspsor.com (and some other SOR hosts) fail default CA verify
+        on Windows while the site is otherwise reachable — not a block page.
+        """
+        try:
+            return self.session.get(
+                url,
+                timeout=self.timeout,
+                allow_redirects=True,
+                **kwargs,
+            )
+        except Exception as e:
+            if kwargs.get("verify", True) is False:
+                raise
+            msg = str(e).lower()
+            if not (
+                "ssl" in msg
+                or "certificate" in msg
+                or "cert" in msg
+                or "certificate_verify" in msg
+            ):
+                raise
+            kwargs = {**kwargs, "verify": False}
+            return self.session.get(
+                url,
+                timeout=self.timeout,
+                allow_redirects=True,
+                **kwargs,
+            )
 
 
     def _post(self, url: str, data: Dict[str, str], referer: str = "") -> Any:

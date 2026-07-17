@@ -338,9 +338,9 @@
   {
     "jurisdiction": "Virginia",
     "abbr": "VA",
-    "registry_url": "https://www.vsp.virginia.gov/sex-offender-registry/",
+    "registry_url": "https://vspsor.com/",
     "direct_downloads": [],
-    "notes": "Search interface only. (Added; check current official link)"
+    "notes": "Search-only UI at vspsor.com (VSP landing page is not the SOR app). TLS often needs verify=False on Windows."
   },
   {
     "jurisdiction": "Washington",

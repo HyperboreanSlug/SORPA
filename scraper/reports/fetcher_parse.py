@@ -30,6 +30,7 @@ from scraper.reports.fetcher_crime import (
     is_demographic_crime_junk,
     is_label_chrome_value,
 )
+from scraper.reports.fetcher_crime_va import extract_va_card_offenses
 
 class FetcherParseMixin:
     def _from_html(self, html: str, base_url: str = "") -> Dict[str, Any]:
@@ -209,6 +210,15 @@ class FetcherParseMixin:
             elif label_crime not in prev and len(label_crime) > len(prev):
                 found["crime"] = label_crime
 
+        # Virginia vspsor.com gold card headers (statute + offense title)
+        va_crime = extract_va_card_offenses(soup)
+        if va_crime:
+            prev = (found.get("crime") or "").strip()
+            if not prev or is_demographic_crime_junk(prev):
+                found["crime"] = va_crime
+            elif va_crime not in prev and len(va_crime) > len(prev):
+                found["crime"] = va_crime
+
         # Label-only node → next sibling element holds value (common grid layouts)
         for lab_el in soup.find_all(["span", "div", "label", "strong", "b", "th", "td", "p"]):
             raw = lab_el.get_text(" ", strip=True)
@@ -351,10 +361,14 @@ class FetcherParseMixin:
                         found.setdefault(key, m.group(2)[:_MAX_CRIME_LEN])
 
         if "age" in found:
-            try:
-                found["age"] = int(re.sub(r"[^\d]", "", str(found["age"])) or 0) or found["age"]
-            except (TypeError, ValueError):
-                pass
+            age_raw = str(found.get("age") or "").strip()
+            if age_raw.lower() in ("unknown", "n/a", "none", "—", "-"):
+                found.pop("age", None)
+            else:
+                try:
+                    found["age"] = int(re.sub(r"[^\d]", "", age_raw) or 0) or found["age"]
+                except (TypeError, ValueError):
+                    pass
 
         # Drop bogus gender values
         g = str(found.get("gender") or "").strip().lower()
