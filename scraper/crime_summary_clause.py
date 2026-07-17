@@ -101,17 +101,62 @@ def strip_location_junk(s: str) -> str:
     return norm(t.strip(" ·;,"))
 
 
+def to_regular_case(s: str) -> str:
+    """Force readable regular case (never ALL CAPS registry dumps).
+
+    - Mostly-uppercase text → Title Case
+    - Already mixed → ensure first letter capital, leave the rest
+    - Multi-part labels split on · / — keep each segment regular
+    """
+    raw = (s or "").strip()
+    if not raw:
+        return raw
+
+    def _one(part: str) -> str:
+        t = part.strip(" ·;,|-")
+        if not t:
+            return t
+        letters = [c for c in t if c.isalpha()]
+        if not letters:
+            return t
+        upper_ratio = sum(1 for c in letters if c.isupper()) / len(letters)
+        # Registry ALL CAPS (or nearly) — never leave as SCREAMING
+        if upper_ratio >= 0.75:
+            t = t.title()
+            # Soft small words after title() mid-phrase
+            t = re.sub(
+                r"\b(Of|Or|And|The|A|An|To|In|For|On|By|With)\b",
+                lambda m: m.group(1).lower(),
+                t,
+            )
+            # Re-capitalize first char / after em dash
+            t = re.sub(
+                r"(^|[—\-·]\s*)([a-z])",
+                lambda m: m.group(1) + m.group(2).upper(),
+                t,
+            )
+            return t
+        # Mixed/lower: sentence-style first capital only
+        if t[0].islower():
+            return t[0].upper() + t[1:]
+        return t
+
+    # Keep multi-offense separators intact
+    if " · " in raw:
+        return " · ".join(_one(p) for p in raw.split(" · "))
+    return _one(raw)
+
+
 def title_offense(s: str) -> str:
-    s = s.strip()
+    s = (s or "").strip()
     if not s:
         return s
-    if s.isupper() and len(s) < 40:
-        return s.title()
     low = s.lower()
     if low.startswith("sexual battery"):
         rest = s[len("sexual battery") :].strip(" -:")
-        return ("Sexual battery " + rest).strip() if rest else "Sexual battery"
-    return s[0].upper() + s[1:] if len(s) > 1 else s.upper()
+        base = ("Sexual battery " + rest).strip() if rest else "Sexual battery"
+        return to_regular_case(base)
+    return to_regular_case(s)
 
 
 def summarize_lewd_clause(clause: str) -> Optional[str]:

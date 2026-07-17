@@ -1,6 +1,7 @@
 """Tests for SOR crime string summarization (Reports mode)."""
 from __future__ import annotations
 
+import re
 import unittest
 
 from scraper.crime_summary import summarize_crime
@@ -180,6 +181,33 @@ class CrimeSummaryTests(unittest.TestCase):
             out,
             "Attempted sexual assault — victim incapable of appraising condition",
         )
+
+    def test_always_regular_case_not_all_caps(self):
+        """LUIS ELADIO ALMONTE-style: never leave ALL CAPS on the card."""
+        raw = (
+            "01/17/2006; SEX OFFENSE, OTHER STATE (SEXUAL MISCONDUCT); 18866C-2005; "
+            "Bronx, NY; Guilty/convict; Commission of OR Attempt, Solicit, or "
+            "Conspire to Commit; Chapter 794; Sexual Battery *Excluding subsections "
+            "794.011(10)"
+        )
+        out = summarize_crime(raw)
+        self.assertTrue(out)
+        # No long run of 4+ consecutive uppercase letters (ALL CAPS words)
+        self.assertIsNone(
+            re.search(r"\b[A-Z]{4,}\b", out),
+            msg=f"still has ALL CAPS token: {out!r}",
+        )
+        self.assertIn("sexual", out.lower())
+        self.assertNotEqual(out, out.upper())
+
+    def test_to_regular_case_helper(self):
+        from scraper.crime_summary_clause import to_regular_case
+
+        self.assertEqual(
+            to_regular_case("SEX OFFENSE, OTHER STATE — SEXUAL MISCONDUCT"),
+            "Sex Offense, Other State — Sexual Misconduct",
+        )
+        self.assertEqual(to_regular_case("Sexual battery"), "Sexual battery")
 
 
 if __name__ == "__main__":

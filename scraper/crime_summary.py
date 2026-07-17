@@ -16,6 +16,7 @@ from scraper.crime_summary_clause import (
     norm,
     strip_dates,
     strip_location_junk,
+    to_regular_case,
 )
 from scraper.crime_summary_junk import (
     clean_label,
@@ -81,13 +82,14 @@ def summarize_crime(text: Optional[str], *, max_len: int = 200) -> str:
         cleaned = re.sub(r"(?i)\blewd/?\s*lascivious\b", " ", cleaned)
         cleaned = re.sub(r"(?i)\blewd\b|\blascivious\b", " ", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ·;,")
+        cleaned = to_regular_case(cleaned)
         if cleaned and len(cleaned) <= max_len:
             return cleaned
         if cleaned:
             cut = cleaned[: max_len - 1]
             if " " in cut:
                 cut = cut.rsplit(" ", 1)[0]
-            return cut.rstrip(" ,;:") + "…"
+            return to_regular_case(cut.rstrip(" ,;:") + "…")
         return ""
 
     labels = _dedupe_preserve(labels)
@@ -118,9 +120,10 @@ def summarize_crime(text: Optional[str], *, max_len: int = 200) -> str:
         labels = [x for x in labels if x.casefold() != "sexual battery"]
 
     summary = " · ".join(labels)
-    # Final guard: never ship parentheses in report/export crime text
+    # Final guard: never ship parentheses; always regular case (never ALL CAPS)
     summary = summary.replace("(", "").replace(")", "")
     summary = re.sub(r"\s{2,}", " ", summary).strip(" ·;,")
+    summary = to_regular_case(summary)
     if len(summary) <= max_len:
         return summary
 
@@ -129,9 +132,10 @@ def summarize_crime(text: Optional[str], *, max_len: int = 200) -> str:
     summary = " · ".join(labels)
     summary = summary.replace("(", "").replace(")", "")
     summary = re.sub(r"\s{2,}", " ", summary).strip(" ·;,")
+    summary = to_regular_case(summary)
     if len(summary) <= max_len:
         return summary
     cut = summary[: max_len - 1]
     if " " in cut:
         cut = cut.rsplit(" ", 1)[0]
-    return cut.rstrip(" ·,;:") + "…"
+    return to_regular_case(cut.rstrip(" ·,;:") + "…")

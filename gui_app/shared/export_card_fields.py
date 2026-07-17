@@ -153,8 +153,10 @@ def crime(record: Mapping[str, Any]) -> str:
             pass
         try:
             from scraper.crime_summary import summarize_crime
+            from scraper.crime_summary_clause import to_regular_case
 
-            out = _clean_field(summarize_crime(val) or val)
+            # Always regular case on cards (never ALL CAPS registry dumps)
+            out = _clean_field(to_regular_case(summarize_crime(val) or val))
             if out:
                 try:
                     from scraper.reports.fetcher_crime import is_demographic_crime_junk
