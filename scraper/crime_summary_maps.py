@@ -38,6 +38,11 @@ OFFENSE_MAP = [
     (r"sexual\s+exploitation\s+of\s+a\s+child", "Sexual exploitation of a child"),
     (r"aggravated\s+indecent\s+liberties", "Aggravated indecent liberties"),
     (r"indecent\s+liberties", "Indecent liberties"),
+    (r"indecent\s+exposure", "Indecent exposure"),
+    (r"indecency\s+with\s+(?:a\s+)?child", "Indecency with a child"),
+    # CA PC 647.6: ANNOY / MOLEST CHILDREN
+    (r"annoy\s*/?\s*molest\s+children", "Annoy/molest children"),
+    (r"annoy(?:ing)?\s+(?:or\s+)?molest(?:ing)?\s+(?:a\s+)?child", "Annoy/molest children"),
     (r"criminal\s+sexual\s+conduct", "Criminal sexual conduct"),
     # CO short form: SEX ASSAULT - VIC INCAPABLE APPRAIS COND - ATTEMPT
     (

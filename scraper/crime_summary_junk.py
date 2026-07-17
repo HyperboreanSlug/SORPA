@@ -39,12 +39,22 @@ _DOCKET_RESIDUE = re.compile(
     r")$"
 )
 
-# FL 800.04 / CO 18-3-402 / subsection crumbs (1)(b)
+# FL 800.04 / CO 18-3-402 / VA 18.2-370 / CA 647.6 PC / subsection crumbs
 _INLINE_STATUTE = re.compile(
     r"(?ix)\b(?:"
-    r"\d{3}\.\d{2,4}(?:\(\d+\))*"  # 800.04(5)
-    r"|\d{2,4}\.\d{2,}(?:\(\d+\))*"  # longer dotted cites
-    r"|\d{1,2}-\d{1,3}-\d{2,4}(?:\s*\([a-z0-9]+\))*"  # CRS 18-3-402(1)(b)
+    # California PC (prefix or suffix): PC 288(a) · 647.6 PC · 314.1 P.C.
+    r"(?:p\.?\s*c\.?|penal\s*code)\s*\d{1,4}(?:\.\d{1,4})?(?:\([a-z0-9]+\))*"
+    r"|\d{1,4}(?:\.\d{1,4})+\s*(?:p\.?\s*c\.?|penal\s*code)\b"
+    # VA Code 18.2-370 / 18.2-472.1 / 18.2-370.1
+    r"|\d{1,2}\.\d{1,2}(?:-\d+(?:\.\d+)*)+(?:\([a-z0-9]+\))*"
+    # FL 800.04(5) / longer dotted cites (require ≥2 digits after first dot
+    # so we do not eat residual decimals after a VA strip)
+    r"|\d{3}\.\d{2,4}(?:\(\d+\))*"
+    r"|\d{2,4}\.\d{2,}(?:\(\d+\))*"
+    # CRS 18-3-402(1)(b)
+    r"|\d{1,2}-\d{1,3}-\d{2,4}(?:\s*\([a-z0-9]+\))*"
+    # Bare offense / booking codes glued to a letter: 361411a2
+    r"|\d{5,}[a-z][a-z0-9]{0,6}"
     r")\b"
 )
 
@@ -86,6 +96,8 @@ def strip_statute_cites(s: str) -> str:
     t = re.sub(r"(?i)\b(?:PRINCIPAL|CHARGE CORRELATION PENDING)\b", " ", t)
     t = _DOCKET_TOKEN.sub(" ", t)
     t = _INLINE_STATUTE.sub(" ", t)
+    # Standalone CA "PC" / "P.C." left after the number was stripped
+    t = re.sub(r"(?i)\b(?:p\.?\s*c\.?|penal\s*code)\b", " ", t)
     # Orphan subsection crumbs left after cite strip: "(1)(b)" / "1 — b —"
     t = re.sub(r"(?:\s*\([a-z0-9]+\)\s*)+", " ", t, flags=re.I)
     t = re.sub(r"(?i)^\s*\d{1,2}\s*[—\-]\s*[a-z]\s*[—\-]\s*", "", t)
@@ -96,6 +108,10 @@ def strip_statute_cites(s: str) -> str:
         t,
     )
     t = re.sub(r"\b\d{5,}\b", " ", t)  # long booking / case numbers
+    # Leading statute residue + dash only: " - ANNOY / MOLEST…" (keep mid em-dashes)
+    t = re.sub(r"^\s*[-–—:|./]+\s*", "", t)
+    # Orphan slash/pipe left where a cite was: "ANNOY / MOLEST" ok; " / MOLEST" trim
+    t = re.sub(r"(?<=\s)[/|]\s+", " ", t)
     # Collapse empty paren residue from stripped statutes: "( (10 COUNTS))" → "(10 COUNTS)"
     t = re.sub(r"\(\s*\(", "(", t)
     t = re.sub(r"\)\s*\)", ")", t)
@@ -160,4 +176,14 @@ def clean_label(label: str) -> Optional[str]:
     s = re.sub(r"\s{2,}", " ", s).strip(" ·;,|—-")
     if is_junk_label(s):
         return None
+    # Export safety: never ship a label that still embeds a statute/code token
+    if re.search(r"(?i)\b\d{1,4}\.\d{1,4}\b", s) or re.search(
+        r"(?i)\b(?:p\.?\s*c\.?)\s*\d|\b\d{5,}[a-z]", s
+    ):
+        s2 = strip_statute_cites(s)
+        s2 = re.sub(r"^\s*[-–—:|./]+\s*", "", s2)
+        s2 = re.sub(r"\s{2,}", " ", s2).strip(" ·;,|—-")
+        if not s2 or is_junk_label(s2):
+            return None
+        s = s2
     return s

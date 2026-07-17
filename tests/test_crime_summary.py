@@ -228,6 +228,34 @@ class CrimeSummaryTests(unittest.TestCase):
         self.assertNotIn("2317184", out)
         self.assertNotIn("800.04", out)
 
+    def test_francisco_alvarado_ca_pc_statutes_not_exported(self):
+        """VA multi-state dump: CA 647.6 PC / 314.1 PC and VA 18.2-* must not ship."""
+        raw = (
+            "18.2-472.1 - VIOLENT SEX OFFENDER FAIL TO REGISTER; "
+            "18.2-370 - TAKING INDECENT LIBERTIES WITH CHILDREN; "
+            "647.6 PC - ANNOY / MOLEST CHILDREN; "
+            "314.1 PC - INDECENT EXPOSURE"
+        )
+        out = summarize_crime(raw)
+        self.assertEqual(
+            out,
+            "Fail to register · Indecent liberties · Annoy/molest children · Indecent exposure",
+        )
+        self.assertNotIn("647", out)
+        self.assertNotIn("314", out)
+        self.assertNotIn("18.2", out)
+        self.assertNotRegex(out, r"(?i)\bpc\b")
+        self.assertNotRegex(out, r"\d")
+
+    def test_bare_offense_code_token_stripped(self):
+        """TX-style alphanumeric booking/offense codes must not appear on cards."""
+        out = summarize_crime("361411a2 SEXUAL ASSAULT OF A CHILD")
+        self.assertEqual(out, "Sexual assault")
+        self.assertNotIn("361411", out)
+        out2 = summarize_crime("21.11 INDECENCY WITH A CHILD")
+        self.assertEqual(out2, "Indecency with a child")
+        self.assertNotIn("21.11", out2)
+
 
 if __name__ == "__main__":
     unittest.main()
