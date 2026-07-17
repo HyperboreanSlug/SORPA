@@ -35,8 +35,13 @@ _DOCKET_RESIDUE = re.compile(
     r")$"
 )
 
+# FL 800.04 / CO 18-3-402 / subsection crumbs (1)(b)
 _INLINE_STATUTE = re.compile(
-    r"(?ix)\b(?:\d{3}\.\d{2,4}(?:\(\d+\))?|\d{2,4}\.\d{2,}(?:\(\d+\))?)\b"
+    r"(?ix)\b(?:"
+    r"\d{3}\.\d{2,4}(?:\(\d+\))*"  # 800.04(5)
+    r"|\d{2,4}\.\d{2,}(?:\(\d+\))*"  # longer dotted cites
+    r"|\d{1,2}-\d{1,3}-\d{2,4}(?:\s*\([a-z0-9]+\))*"  # CRS 18-3-402(1)(b)
+    r")\b"
 )
 
 
@@ -73,9 +78,13 @@ def strip_statute_cites(s: str) -> str:
     t = re.sub(r"(?i)\bChapter\s+\d+\b", " ", t)
     t = re.sub(r"(?i)\bRCW\s+[\d\s.A-Z]+", " ", t)
     t = re.sub(r"(?i)\bTEXAS\s+PENAL\s+CODE\s*[\d.()/a-z]*", " ", t)
+    t = re.sub(r"(?i)\bC\.?R\.?S\.?\s*[\d.\-()a-z]+\b", " ", t)
     t = re.sub(r"(?i)\b(?:PRINCIPAL|CHARGE CORRELATION PENDING)\b", " ", t)
     t = _DOCKET_TOKEN.sub(" ", t)
     t = _INLINE_STATUTE.sub(" ", t)
+    # Orphan subsection crumbs left after cite strip: "(1)(b)" / "1 — b —"
+    t = re.sub(r"(?:\s*\([a-z0-9]+\)\s*)+", " ", t, flags=re.I)
+    t = re.sub(r"(?i)^\s*\d{1,2}\s*[—\-]\s*[a-z]\s*[—\-]\s*", "", t)
     t = re.sub(r"\b\d{5,}\b", " ", t)  # long booking / case numbers
     # Collapse empty paren residue from stripped statutes: "( (10 COUNTS))" → "(10 COUNTS)"
     t = re.sub(r"\(\s*\(", "(", t)
@@ -95,6 +104,9 @@ def is_junk_label(label: str) -> bool:
         r"(?i)[\u2022\u00b7•·\-\*]?\s*description\s*:?",
         s,
     ):
+        return True
+    # Statute-subsection crumbs: "1 — b — SEX ASSAULT…" (stripped CRS cite)
+    if re.match(r"(?i)^\d{1,2}\s*[—\-]\s*[a-z]\b", s) and len(s) < 80:
         return True
     if is_statute_or_docket(s):
         return True

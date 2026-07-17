@@ -159,6 +159,28 @@ class CrimeSummaryTests(unittest.TestCase):
         out = summarize_crime("288 (A) LEWD OR LASCIVIOUS ACTS W/ CHILD UNDER 14")
         self.assertEqual(out, "Victim under 14")
 
+    def test_co_crs_statute_not_eaten_as_date(self):
+        """ANTONIO JACOB CHAVARRIA: 18-3-402 must not become '1 — b — SEX ASSAULT…'."""
+        raw = (
+            "18-3-402(1)(b) — SEX ASSAULT - VIC INCAPABLE APPRAIS COND - ATTEMPT"
+        )
+        out = summarize_crime(raw)
+        self.assertNotIn("1 — b", out)
+        self.assertNotIn("1 - b", out)
+        self.assertNotIn("VIC INCAPABLE", out.upper())
+        self.assertNotRegex(out, r"^\d")
+        self.assertIn("sexual assault", out.lower())
+        self.assertIn("incapable", out.lower())
+        self.assertIn("attempt", out.lower())
+        self.assertIn("appraising condition", out.lower())
+        self.assertNotIn("18-3-402", out)
+        self.assertNotIn("(", out)
+        self.assertNotIn(")", out)
+        self.assertEqual(
+            out,
+            "Attempted sexual assault — victim incapable of appraising condition",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

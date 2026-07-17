@@ -39,7 +39,17 @@ OFFENSE_MAP = [
     (r"aggravated\s+indecent\s+liberties", "Aggravated indecent liberties"),
     (r"indecent\s+liberties", "Indecent liberties"),
     (r"criminal\s+sexual\s+conduct", "Criminal sexual conduct"),
-    (r"sexual\s+assault", "Sexual assault"),
+    # CO short form: SEX ASSAULT - VIC INCAPABLE APPRAIS COND - ATTEMPT
+    (
+        r"sex(?:ual)?\s*assault.{0,80}incapable\s+apprais.+\battempt\b"
+        r"|\battempt\b.{0,40}sex(?:ual)?\s*assault.{0,80}incapable\s+apprais",
+        "Attempted sexual assault — victim incapable of appraising condition",
+    ),
+    (
+        r"sex(?:ual)?\s*assault.{0,80}(?:vic(?:tim)?\s+)?incapable\s+apprais",
+        "Sexual assault — victim incapable of appraising condition",
+    ),
+    (r"\bsex(?:ual)?\s*assault\b", "Sexual assault"),
     (r"unlawful\s+sexual\s+activity", "Unlawful sexual activity with minor"),
     (
         r"(?:solicit|possess|control|intentionally\s+view).{0,40}child\s+porn"

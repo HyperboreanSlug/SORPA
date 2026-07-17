@@ -11,9 +11,16 @@ from scraper.crime_summary_junk import (
 )
 from scraper.crime_summary_maps import CODE_MAP, DROP_CLAUSE, OFFENSE_MAP
 
+# Date tokens only — never Colorado CRS-style statutes like 18-3-402
+# (old pattern \d{1,2}-\d{1,2}-\d{2,4} ate "18-3-402" → left "(1)(b) — SEX ASSAULT…").
 _DATE = re.compile(
     r"(?ix)\b(?:"
-    r"\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}"
+    # Slash dates: 12/09/2003 or 12/09/03
+    r"\d{1,2}/\d{1,2}/\d{2,4}"
+    # Dot dates: 12.09.2003
+    r"|\d{1,2}\.\d{1,2}\.\d{2,4}"
+    # Hyphen dates require a real year (19xx/20xx), not statute middle segments
+    r"|\d{1,2}-\d{1,2}-(?:19|20)\d{2}"
     r"|\d{4}-\d{1,2}-\d{1,2}"
     r"|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
@@ -231,11 +238,19 @@ def extract_from_clause(clause: str) -> Optional[str]:
         return summarize_lewd_clause(src)
 
     for pat, lab in OFFENSE_MAP:
-        if re.search(pat, c, re.I):
+        if re.search(pat, c, re.I) or re.search(pat, src, re.I):
             if "porn" in lab.lower():
                 m_c = re.search(r"\(\s*(\d+)\s*counts?\s*\)", src, re.I)
                 if m_c:
                     return f"{lab} — {m_c.group(1)} counts"
+            # Promote to "Attempted …" when source has ATTEMPT and label doesn't
+            if re.search(r"(?i)\battempt", src) and not re.search(
+                r"(?i)\battempt", lab
+            ):
+                if lab.lower().startswith("sexual assault"):
+                    lab = "Attempted " + lab[0].lower() + lab[1:]
+                elif not lab.lower().startswith("attempt"):
+                    lab = "Attempted " + lab[0].lower() + lab[1:]
             return lab
 
     c2 = _COURT_JUNK.sub("", c).strip(" ;,")
