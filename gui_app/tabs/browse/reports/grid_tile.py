@@ -92,38 +92,41 @@ class ReportsGridTileMixin:
     @staticmethod
     def _reports_summarize_crime(crime: str, *, max_len: int = 140) -> str:
         """Short human crime labels only — never statute dumps or registry junk."""
+        import re
+
         try:
             from scraper.crime_summary import summarize_crime
+            from scraper.crime_summary_junk import is_junk_label
 
             out = summarize_crime(crime, max_len=max_len)
         except Exception:
             out = ""
+            is_junk_label = lambda _s: False  # noqa: E731
         if out:
             s = " ".join(str(out).split())
+            # Never show FL docket crumbs (title-case can make 23-CF → 23-Cf)
+            if re.search(r"(?i)\b\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr)\b", s):
+                s = re.sub(
+                    r"(?i)\b\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr)(?:\s*[-–—]?\s*\d+)?\b",
+                    " ",
+                    s,
+                )
+                s = " ".join(s.split())
+            try:
+                if not s or is_junk_label(s):
+                    return ""
+            except Exception:
+                pass
+            if not s:
+                return ""
             if len(s) <= max_len:
                 return s
             cut = s[: max_len - 1]
             if " " in cut:
                 cut = cut.rsplit(" ", 1)[0]
             return cut.rstrip(" ,;:·") + "…"
-        s = " ".join((crime or "").split())
-        # Drop common non-crime noise if summarize failed
-        for pat in (
-            r"(?i)^scars,?\s*marks\s+and\s+tattoos\s*[—\-:]+\s*",
-            r"(?i)no\s+photograph\s+available[^.]*\.?",
-        ):
-            import re
-
-            s = re.sub(pat, " ", s)
-        s = " ".join(s.split())
-        if not s:
-            return ""
-        if len(s) <= max_len:
-            return s
-        cut = s[: max_len - 1]
-        if " " in cut:
-            cut = cut.rsplit(" ", 1)[0]
-        return cut.rstrip(" ,;:") + "…"
+        # No raw fallback — registry dumps embed case numbers / F.S. cites
+        return ""
 
 
     def _reports_add_grid_tile(

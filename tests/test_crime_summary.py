@@ -223,10 +223,22 @@ class CrimeSummaryTests(unittest.TestCase):
         self.assertIn("under 16", out.lower())
         self.assertNotIn("23-cf", out.lower())
         self.assertNotIn("23-Cf", out)
-        self.assertNotIn("cf", out.lower())
         self.assertNotIn("017184", out)
         self.assertNotIn("2317184", out)
         self.assertNotIn("800.04", out)
+        # Export card path must not fall back to raw title-cased dump
+        from gui_app.shared.export_card_fields import crime
+
+        card = crime(
+            {
+                "crime": raw,
+                "first_name": "ROGELIO",
+                "last_name": "DELEON",
+            }
+        )
+        self.assertNotIn("23-cf", card.lower())
+        self.assertNotIn("23-Cf", card)
+        self.assertNotIn("cf-", card.lower())
 
     def test_francisco_alvarado_ca_pc_statutes_not_exported(self):
         """VA multi-state dump: CA 647.6 PC / 314.1 PC and VA 18.2-* must not ship."""

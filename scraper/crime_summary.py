@@ -112,14 +112,14 @@ def _summarize_crime_impl(text: Optional[str], *, max_len: int = 200) -> str:
         cleaned = re.sub(r"(?i)\blewd/?\s*lascivious\b", " ", cleaned)
         cleaned = re.sub(r"(?i)\blewd\b|\blascivious\b", " ", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ·;,")
-        cleaned = to_regular_case(cleaned)
+        cleaned = _ban_docket_crumbs(to_regular_case(cleaned))
         if cleaned and len(cleaned) <= max_len:
             return cleaned
         if cleaned:
             cut = cleaned[: max_len - 1]
             if " " in cut:
                 cut = cut.rsplit(" ", 1)[0]
-            return to_regular_case(cut.rstrip(" ,;:") + "…")
+            return _ban_docket_crumbs(to_regular_case(cut.rstrip(" ,;:") + "…"))
         return ""
 
     labels = _dedupe_preserve(labels)
@@ -154,6 +154,9 @@ def _summarize_crime_impl(text: Optional[str], *, max_len: int = 200) -> str:
     summary = summary.replace("(", "").replace(")", "")
     summary = re.sub(r"\s{2,}", " ", summary).strip(" ·;,")
     summary = to_regular_case(summary)
+    summary = _ban_docket_crumbs(summary)
+    if not summary:
+        return ""
     if len(summary) <= max_len:
         return summary
 
@@ -163,9 +166,27 @@ def _summarize_crime_impl(text: Optional[str], *, max_len: int = 200) -> str:
     summary = summary.replace("(", "").replace(")", "")
     summary = re.sub(r"\s{2,}", " ", summary).strip(" ·;,")
     summary = to_regular_case(summary)
+    summary = _ban_docket_crumbs(summary)
+    if not summary:
+        return ""
     if len(summary) <= max_len:
         return summary
     cut = summary[: max_len - 1]
     if " " in cut:
         cut = cut.rsplit(" ", 1)[0]
-    return to_regular_case(cut.rstrip(" ·,;:") + "…")
+    return _ban_docket_crumbs(to_regular_case(cut.rstrip(" ·,;:") + "…"))
+
+
+def _ban_docket_crumbs(s: str) -> str:
+    """Strip FL case-number remnants that title-case turns into '23-Cf'."""
+    t = s or ""
+    t = re.sub(
+        r"(?i)\b\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr|dp|cj|ca|sc)"
+        r"(?:\s*[-–—]?\s*\d+)?\b",
+        " ",
+        t,
+    )
+    t = re.sub(r"\s{2,}", " ", t).strip(" ·;,|—-")
+    if is_junk_label(t):
+        return ""
+    return t

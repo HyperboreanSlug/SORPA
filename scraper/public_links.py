@@ -14,6 +14,10 @@ Michigan mspsor.com:
 Texas DPS SOR:
   - publicsite.dps.texas.gov rapsheets are dead/503; live host is sor.dps.texas.gov
   - canonical: ``/PublicSite/Search/Rapsheet?sid={SID}``
+
+Colorado CBI SOR:
+  - ``www.colorado.gov/apps/cdps/sor`` → ``apps.colorado.gov/apps/dps/sor``
+  - offender ``id`` is case-sensitive (must be uppercase XX… / X0…)
 """
 
 from __future__ import annotations
@@ -39,6 +43,13 @@ _MA_PATH_FIXES = (
     (re.compile(r"(?i)/viewnsoproffenderimage\.action"), "/viewNsoprOffenderImage.action"),
 )
 
+from scraper.public_links_co import (  # noqa: E402
+    CO_SOR_HOST,
+    CO_SOR_SEARCH_HOME,
+    extract_co_offender_id,
+    is_co_sor_url as _is_co_sor_url,
+    normalize_co_sor_url,
+)
 from scraper.public_links_mi import (  # noqa: E402
     MI_MSPSOR_DETAILS_BASE,
     MI_MSPSOR_HOST,
@@ -260,6 +271,8 @@ def resolve_public_source_url(
         hosts = [MI_MSPSOR_HOST]
     elif st == "TX":
         hosts = [TX_SOR_HOST, "publicsite.dps.texas.gov", "dps.texas.gov"]
+    elif st == "CO":
+        hosts = [CO_SOR_HOST, "www.colorado.gov", "colorado.gov"]
     else:
         hosts = []
 
@@ -303,6 +316,13 @@ def resolve_public_source_url(
             if cleaned:
                 return cleaned
             continue
+        if _is_co_sor_url(u) or (
+            st == "CO" and extract_co_offender_id(u)
+        ):
+            cleaned = normalize_co_sor_url(_strip_jsessionid(u))
+            if cleaned:
+                return cleaned
+            continue
         # MI rows sometimes hold foreign hosts (WI captcha, etc.) — skip those
         if st == "MI":
             continue
@@ -329,6 +349,12 @@ def resolve_public_source_url(
     ):
         return TX_SOR_SEARCH_HOME
 
+    # Colorado with no usable detail id → registry home
+    if st == "CO" or any(_is_co_sor_url(u) for u in urls) or (
+        raw_url and _is_co_sor_url(raw_url)
+    ):
+        return CO_SOR_SEARCH_HOME
+
     # Last resort: first raw piece or empty (never error404)
     if ordered:
         u0 = ordered[0]
@@ -340,6 +366,8 @@ def resolve_public_source_url(
             return normalize_mspsor_url(u0)
         if _is_tx_dps_url(u0):
             return normalize_tx_dps_url(u0)
+        if _is_co_sor_url(u0):
+            return normalize_co_sor_url(u0)
         return u0
     raw = (raw_url or "").strip()
     if _is_fdle_error_page(raw):
@@ -350,6 +378,8 @@ def resolve_public_source_url(
         return normalize_mspsor_url(raw)
     if _is_tx_dps_url(raw):
         return normalize_tx_dps_url(raw)
+    if _is_co_sor_url(raw):
+        return normalize_co_sor_url(raw)
     return raw
 
 
@@ -379,6 +409,20 @@ def openable_url_for_record(record: Optional[dict]) -> str:
         state=state,
         skip_fdle_flyers=skip_flyers,
     )
+    # CO often stores the openable detail on external_id (www.cdps host)
+    if not url or (
+        str(state or "").upper().startswith("CO")
+        and not extract_co_offender_id(url or "")
+    ):
+        ext = str(rec.get("external_id") or "").strip()
+        if ext:
+            alt = resolve_public_source_url(ext, state=state, skip_fdle_flyers=skip_flyers)
+            if alt and (
+                extract_co_offender_id(alt)
+                or _is_co_sor_url(alt)
+                or not url
+            ):
+                url = alt
     if url and _is_fdle_error_page(url):
         return FL_FDLE_SEARCH_HOME
     return url

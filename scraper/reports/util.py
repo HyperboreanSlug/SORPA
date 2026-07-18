@@ -137,15 +137,21 @@ def _normalize_url(url: str) -> str:
         url = m.group(1).lower() + "://" + m.group(2)
     # Drop default port 80 on http(s) hosts
     url = re.sub(r"^(https?://[^/:]+):80(?=/|$)", r"\1", url)
-    # Colorado: public link → live apps host after agreement cookie
-    url = url.replace(
-        "www.colorado.gov/apps/cdps/sor",
-        "apps.colorado.gov/apps/dps/sor",
-    )
-    url = url.replace(
-        "colorado.gov/apps/cdps/sor",
-        "apps.colorado.gov/apps/dps/sor",
-    )
+    # Colorado: cdps portal → live apps host; uppercase case-sensitive id
+    try:
+        from scraper.public_links_co import is_co_sor_url, normalize_co_sor_url
+
+        if is_co_sor_url(url):
+            return normalize_co_sor_url(url)
+    except Exception:
+        url = url.replace(
+            "www.colorado.gov/apps/cdps/sor",
+            "apps.colorado.gov/apps/dps/sor",
+        )
+        url = url.replace(
+            "colorado.gov/apps/cdps/sor",
+            "apps.colorado.gov/apps/dps/sor",
+        )
     # MA SORB: restore case-sensitive action paths
     if "sorb.chs.state.ma.us" in url.lower():
         try:

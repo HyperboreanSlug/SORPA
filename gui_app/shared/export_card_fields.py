@@ -154,20 +154,28 @@ def crime(record: Mapping[str, Any]) -> str:
         try:
             from scraper.crime_summary import summarize_crime
             from scraper.crime_summary_clause import to_regular_case
+            from scraper.crime_summary_junk import is_junk_label
 
-            # Always regular case on cards (never ALL CAPS registry dumps)
-            out = _clean_field(to_regular_case(summarize_crime(val) or val))
-            if out:
-                try:
-                    from scraper.reports.fetcher_crime import is_demographic_crime_junk
+            # Never fall back to raw registry dumps (they embed 23-CF dockets).
+            summarized = summarize_crime(val) or ""
+            out = _clean_field(to_regular_case(summarized))
+            if not out or is_junk_label(out):
+                continue
+            # Hard ban residual FL case numbers / CF crumbs after title-case
+            if re.search(
+                r"(?i)\b\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr)\b", out
+            ):
+                continue
+            try:
+                from scraper.reports.fetcher_crime import is_demographic_crime_junk
 
-                    if is_demographic_crime_junk(out):
-                        continue
-                except Exception:
-                    pass
-                return out
+                if is_demographic_crime_junk(out):
+                    continue
+            except Exception:
+                pass
+            return out
         except Exception:
-            return val
+            continue
     return ""
 
 
