@@ -26,6 +26,16 @@ from scraper.crime_summary_junk import (
 )
 
 
+def _is_physical_or_smt_crime(text: str) -> bool:
+    """True when stored crime is demographics / tattoos, not an offense."""
+    try:
+        from scraper.reports.fetcher_crime import is_demographic_crime_junk
+
+        return is_demographic_crime_junk(text)
+    except Exception:
+        return False
+
+
 def _dedupe_preserve(items: List[str]) -> List[str]:
     out: List[str] = []
     seen = set()
@@ -69,6 +79,9 @@ def summarize_crime(text: Optional[str], *, max_len: int = 200) -> str:
 def _summarize_crime_impl(text: Optional[str], *, max_len: int = 200) -> str:
     raw = norm(text or "")
     if not raw:
+        return ""
+    # Never summarize pure physical-description / SMT dumps as crime
+    if _is_physical_or_smt_crime(raw):
         return ""
 
     raw = re.sub(

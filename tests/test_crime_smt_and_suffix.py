@@ -22,6 +22,8 @@ _SMT_CRIME = (
     "D.J., CENTER-ATX: STAR WITH FACE INSIDE | RIGHT: UPPER SIDE-DOT | "
     "LEFT CENTER: DIRTY SOUTH | RIGHT CENTER: LONESTAR HUSTLER"
 )
+# Guadalupe Alvarado-style MI Description column (tattoo, not charge)
+_GUADALUPE_SMT = "OUTLINED CROSS WITH POINTED TIPS IN BLACK INK; ARM, LEFT, LOWER"
 
 _MINI_MI = """
 <html><body>
@@ -46,6 +48,14 @@ class SmtCrimeAndSuffixTests(unittest.TestCase):
     def test_smt_junk_detected(self):
         self.assertTrue(is_smt_description_junk(_SMT_CRIME))
         self.assertTrue(is_demographic_crime_junk(_SMT_CRIME))
+        self.assertTrue(is_smt_description_junk(_GUADALUPE_SMT))
+        self.assertTrue(is_demographic_crime_junk(_GUADALUPE_SMT))
+        self.assertTrue(is_smt_description_junk("ARM, LEFT"))
+        self.assertTrue(is_smt_description_junk("ARM, LEFT; ARM, RIGHT"))
+        self.assertTrue(
+            is_smt_description_junk("ABDOMEN; EAR, LEFT; ARM, LEFT, LOWER")
+        )
+        self.assertTrue(is_smt_description_junk("4-5 INCH SCAR"))
         self.assertFalse(
             is_demographic_crime_junk(
                 "750.520C1A - CRIMINAL SEXUAL CONDUCT 2ND DEGREE (PERSON UNDER 13)"
@@ -62,6 +72,11 @@ class SmtCrimeAndSuffixTests(unittest.TestCase):
                 "Scars, Marks and Tattoos — Possession Of Child Pornography"
             )
         )
+
+    def test_guadalupe_alvarado_smt_not_summarized_as_crime(self):
+        from scraper.crime_summary import summarize_crime
+
+        self.assertEqual(summarize_crime(_GUADALUPE_SMT), "")
 
     def test_nsopw_keeps_jr_suffix(self):
         off = _P()._parse_offender(

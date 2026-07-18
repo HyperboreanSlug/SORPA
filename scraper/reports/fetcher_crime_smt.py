@@ -13,9 +13,38 @@ _SMT_TYPE_RE = re.compile(
     r"deformit(?:y|ies)|missing|amputat)\b"
 )
 _OFFENSE_WORD_RE = re.compile(
-    r"(?i)\b(?:rape|assault|battery|molest|abuse|sodomy|indecent|porn|sex(?:ual)?|"
-    r"lewd|kidnap|fail(?:ure)?\s+to\s+regist|csc|criminal\s+sexual|exploitation|"
-    r"enticing|voyeur|exposure|incest|homicide|murder|solicitation)\b"
+    r"(?i)\b(?:rape|assault|battery|molest(?:ation|ing)?|abuse|sodomy|"
+    r"indecent|indecency|porn(?:ograph(?:y|ic))?|sex(?:ual)?|"
+    r"lewd|kidnap(?:ping)?|fail(?:ure)?\s+to\s+regist|csc|"
+    r"criminal\s+sexual|exploitation|enticing|voyeur(?:ism)?|"
+    r"exposure|incest|homicide|murder|solicitation|solicit)\b"
+)
+# MI SMT body catalog: "ARM, LEFT, LOWER" / "SHOULDER, RIGHT" / "HEAD, NONSPECIFIC"
+_BODY_CATALOG_RE = re.compile(
+    r"(?ix)\b(?:"
+    r"arm|leg|neck|chest|back|face|abdomen|wrist|hand|foot|ankle|"
+    r"shoulder|forearm|thigh|hip|head|ear|eye|finger|thumb|shin|"
+    r"knee|elbow|palm|scalp|cheek|chin|forehead|bicep|tricep|calf|"
+    r"torso|groin|rib(?:s)?"
+    r")\s*,\s*"
+    r"(?:left|right|upper|lower|center|nonspecific|middle|inner|outer|"
+    r"side|top|bottom)"
+    r"(?:\s*,\s*(?:left|right|upper|lower|center|nonspecific|middle|"
+    r"inner|outer|side)){0,2}"
+)
+_INK_MARK_RE = re.compile(
+    r"(?i)\b(?:tattoos?|tattooed|ink|scars?|brand(?:ing|ed)?|piercings?|"
+    r"birthmarks?|moles?)\b"
+)
+_PURE_BODY_LOC_RE = re.compile(
+    r"(?ix)^(?:"
+    r"(?:arm|leg|neck|chest|back|face|abdomen|wrist|hand|foot|ankle|"
+    r"shoulder|forearm|thigh|hip|head|ear|shin|knee|elbow|palm|"
+    r"scalp|torso)"
+    r"(?:\s*,\s*(?:left|right|upper|lower|center|nonspecific|middle|"
+    r"inner|outer|side)){1,3}"
+    r"(?:\s*;\s*)?"
+    r")+$"
 )
 
 
@@ -44,6 +73,33 @@ def is_smt_description_junk(text: str) -> bool:
         r"abdomen|wrist|hand|leg|ankle|shoulder)\b.?:",
         s,
     ) and not re.search(r"\d{2,3}\.\d+", s):
+        return True
+    # Tattoo / scar / ink wording with no offense verbs
+    if _INK_MARK_RE.search(s):
+        return True
+    # Body-location catalog (MI SMT Description column dumps)
+    body_hits = _BODY_CATALOG_RE.findall(s)
+    if body_hits:
+        # "OUTLINED CROSS … BLACK INK; ARM, LEFT, LOWER" or multi-location lists
+        if len(body_hits) >= 2:
+            return True
+        if re.search(
+            r"(?i);\s*(?:arm|leg|neck|chest|back|face|abdomen|wrist|hand|"
+            r"shoulder|forearm|thigh|head|ear|knee|elbow|palm|shin)\b",
+            s,
+        ):
+            return True
+        if re.search(
+            r"(?i)\b(?:cross|skull|rose|dragon|tribal|eagle|heart|star|web|"
+            r"clover|phoenix|demon|wings|banner|flowers?|praying\s+hands)\b",
+            s,
+        ):
+            return True
+    # Entire value is body location(s): "ARM, LEFT" / "ARM, LEFT; ARM, RIGHT"
+    if _PURE_BODY_LOC_RE.match(s):
+        return True
+    # Short inch-scar fragments with no charge text
+    if re.search(r"(?i)\b\d+(?:-\d+)?\s*(?:inch|in\.?|\"|'')\s+scar\b", s):
         return True
     return False
 
