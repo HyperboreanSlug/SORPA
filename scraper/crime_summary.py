@@ -93,11 +93,22 @@ def _summarize_crime_impl(text: Optional[str], *, max_len: int = 200) -> str:
     raw = re.sub(r"(?i)no\s+photograph\s+available[^.]*\.", " ", raw)
 
     labels: List[str] = []
+    # Whole-string statute expansion first (NE "Statute Number(s): 28-201 28-319…")
+    try:
+        from scraper.statute_ref import expand_statutes
+
+        whole = expand_statutes(raw)
+        if whole:
+            labels.append(whole)
+    except Exception:
+        pass
+
     # TX dumps use ``|``; FL/others use ``;`` — treat both as clause breaks
-    for p in re.split(r"\s*[;|]\s*", raw):
-        lab = extract_from_clause(p)
-        if lab:
-            labels.append(lab)
+    if not labels:
+        for p in re.split(r"\s*[;|]\s*", raw):
+            lab = extract_from_clause(p)
+            if lab:
+                labels.append(lab)
 
     if not labels:
         cleaned = strip_location_junk(strip_statute_cites(strip_dates(raw)))

@@ -233,7 +233,19 @@ def summarize_lewd_clause(clause: str) -> Optional[str]:
 
 def extract_from_clause(clause: str) -> Optional[str]:
     c = norm(clause)
-    if not c or len(c) < 3 or DROP_CLAUSE.match(c) or is_statute_or_docket(c):
+    if not c or len(c) < 3:
+        return None
+    # Bare statute-number dumps only (NE "Statute Number(s): …") — not F.S. cites
+    try:
+        from scraper.statute_ref import expand_statutes, is_statute_number_dump
+
+        if is_statute_number_dump(c):
+            expanded = expand_statutes(c)
+            if expanded:
+                return expanded
+    except Exception:
+        pass
+    if DROP_CLAUSE.match(c) or is_statute_or_docket(c):
         return None
     # NV multi-column dumps: court / agency / person-name only
     if _COURT_OR_AGENCY_CLAUSE.match(c):

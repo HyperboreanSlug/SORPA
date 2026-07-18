@@ -52,10 +52,13 @@ def main() -> None:
     license_f = project_dir / "LICENSE"
 
     # Collect data files (PyInstaller Windows: path;dest)
+    statute_json = project_dir / "scraper" / "statute_labels.json"
     add_data = [
         f"{ethnic_json};scraper",
         f"{readme};.",
     ]
+    if statute_json.is_file():
+        add_data.append(f"{statute_json};scraper")
     if sources.is_file():
         add_data.append(f"{sources};.")
     if license_f.is_file():
@@ -95,6 +98,8 @@ def main() -> None:
         "scraper.public_links",
         "scraper.public_links_mi",
         "scraper.public_links_co",
+        "scraper.statute_ref",
+        "scraper.crime_summary",
         "scraper.reports",
         "scraper.reports.fetcher",
         "scraper.reports.util",

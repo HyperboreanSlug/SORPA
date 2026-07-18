@@ -90,6 +90,7 @@ DROP_CLAUSE = re.compile(
     r"|name:?$|level:?.*"
     r"|status\s*:.*"
     r"|conviction\s*:.*"
+    r"|statute\s*number\(s\)?\s*:?\s*$"  # bare header without codes
     r"|texas\s+offenses?$"
     r"|texas\s+penal\s+code.*"
     r"|this\s+link\s+reflects.*"
