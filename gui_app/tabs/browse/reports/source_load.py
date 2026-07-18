@@ -175,7 +175,14 @@ class ReportsSourceLoadMixin:
 
     @staticmethod
     def _reports_photo_exists(photo: str) -> bool:
-        """True if mugshot path exists (relative paths resolve via cwd and ROOT)."""
+        """True if mugshot is present *and loadable* (not truncated/corrupt)."""
+        try:
+            from gui_app.shared.export_card_photo import is_usable_mugshot_path
+
+            return bool(is_usable_mugshot_path(photo))
+        except Exception:
+            pass
+        # Fallback: path exists only (legacy)
         raw = (photo or "").strip()
         if not raw:
             return False
@@ -188,7 +195,7 @@ class ReportsSourceLoadMixin:
         )
         for p in candidates:
             try:
-                if p.is_file():
+                if p.is_file() and p.stat().st_size >= 400:
                     return True
             except OSError:
                 continue

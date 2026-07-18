@@ -20,7 +20,51 @@ def resolve_photo_path(raw: Any) -> Optional[Path]:
     alt = Path.cwd() / path
     if alt.is_file():
         return alt
+    # Project-root relative (Reports often stores data\report_pages\…)
+    try:
+        from gui_app.paths import ROOT
+
+        root_p = ROOT / text
+        if root_p.is_file():
+            return root_p
+        root_p2 = ROOT / text.replace("\\", "/")
+        if root_p2.is_file():
+            return root_p2
+    except Exception:
+        pass
     return path if path.exists() else None
+
+
+def is_usable_mugshot_path(raw: Any, *, min_side: int = 40, min_bytes: int = 400) -> bool:
+    """True only if the path is a loadable mugshot (not missing/truncated/tiny).
+
+    Reports used to treat any existing file as a photo — corrupt JPEGs then
+    passed the Photos-only filter but rendered as empty tiles.
+    """
+    path = resolve_photo_path(raw)
+    if path is None:
+        return False
+    try:
+        if not path.is_file():
+            return False
+        if path.stat().st_size < int(min_bytes):
+            return False
+    except OSError:
+        return False
+    try:
+        with Image.open(path) as img:
+            if getattr(img, "n_frames", 1) > 1:
+                img.seek(0)
+            # Force full decode — truncated files fail here
+            img.load()
+            w, h = img.size
+            if w < int(min_side) or h < int(min_side):
+                return False
+            # Touch RGB conversion the way thumbs/export do
+            img.convert("RGB")
+        return True
+    except Exception:
+        return False
 
 
 def load_mugshot(record: Mapping[str, Any], box: Tuple[int, int]) -> Image.Image:

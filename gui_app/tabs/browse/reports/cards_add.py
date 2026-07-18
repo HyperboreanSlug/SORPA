@@ -95,7 +95,15 @@ class ReportsCardsAddMixin:
             conf_combined = False
             conf_text = f"{conf:.2f}"
         photo_path = (rec.get("photo_path") or "").strip()
-        has_photo = bool(photo_path and Path(photo_path).is_file())
+        try:
+            if hasattr(self, "_reports_photo_exists"):
+                has_photo = bool(self._reports_photo_exists(photo_path))
+            else:
+                from gui_app.shared.export_card_photo import is_usable_mugshot_path
+
+                has_photo = bool(is_usable_mugshot_path(photo_path))
+        except Exception:
+            has_photo = bool(photo_path and Path(photo_path).is_file())
         crime = self._reports_crime_text(rec)
         df = rec.get("_deepface") or {}
         v_key = (
