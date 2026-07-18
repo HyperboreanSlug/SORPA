@@ -4,6 +4,15 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+# MA General Laws: 265/13B · 272/16 · 265/23A (not MM/DD/YYYY dates)
+_MA_GL_CITE = re.compile(
+    r"(?ix)(?<!\d)\d{1,3}/\d{1,3}[a-z]{0,2}(?!/\d)"
+)
+# Federal title cites: 18 USC 2244A · 18 U.S.C. § 2251
+_USC_CITE = re.compile(
+    r"(?ix)\b\d{1,2}\s*u\.?\s*s\.?\s*c\.?\s*§?\s*[\d.a-z]+\b"
+)
+
 # Pure statute / docket clauses — never English offense phrases
 _STATUTE_ONLY = re.compile(
     r"(?ix)^(?:"
@@ -14,6 +23,8 @@ _STATUTE_ONLY = re.compile(
     r"|\d{1,2}:\d+:\d+-\d+-cr-[a-z0-9\-]+"  # federal: 1:0:11-60222-CR-WILLIAMS-01
     r"|(?:cr|case|docket)[- ]?\d{3,}"
     r"|\d{2,}[-/]\d{2,}(?:[-/]\d+)*"  # 21-5510, 9709-272
+    r"|\d{1,3}/\d{1,3}[a-z]{0,2}"  # MA G.L. 265/13B · 272/16
+    r"|\d{1,2}\s*u\.?\s*s\.?\s*c\.?\s*§?\s*[\d.a-z]+"  # 18 USC 2244A
     r"|[\d.\-()/:]+$"  # pure numeric / cite residue
     r"|[a-z]{0,4}\d{4,}[a-z0-9\-]*$"  # booking / code tokens
     r")$"
@@ -53,6 +64,8 @@ _INLINE_STATUTE = re.compile(
     r"|\d{2,4}\.\d{2,}(?:\(\d+\))*"
     # CRS 18-3-402(1)(b)
     r"|\d{1,2}-\d{1,3}-\d{2,4}(?:\s*\([a-z0-9]+\))*"
+    # Federal: 18 USC 2244A · 18 U.S.C. 2251
+    r"|\d{1,2}\s*u\.?\s*s\.?\s*c\.?\s*§?\s*[\d.a-z]+"
     # Bare offense / booking codes glued to a letter: 361411a2
     r"|\d{5,}[a-z][a-z0-9]{0,6}"
     r")\b"
@@ -64,6 +77,10 @@ def is_statute_or_docket(clause: str) -> bool:
     if not c:
         return True
     if _STATUTE_ONLY.match(c):
+        return True
+    if _MA_GL_CITE.fullmatch(c):
+        return True
+    if _USC_CITE.fullmatch(c):
         return True
     if _DOCKET_RESIDUE.match(c):
         return True
@@ -99,8 +116,12 @@ def strip_statute_cites(s: str) -> str:
     t = re.sub(r"(?i)\bTEXAS\s+PENAL\s+CODE\s*[\d.()/a-z]*", " ", t)
     t = re.sub(r"(?i)\bC\.?R\.?S\.?\s*[\d.\-()a-z]+\b", " ", t)
     t = re.sub(r"(?i)\b(?:PRINCIPAL|CHARGE CORRELATION PENDING)\b", " ", t)
+    t = re.sub(r"(?i)\bview\s+this\s+statute\b", " ", t)
     t = _DOCKET_TOKEN.sub(" ", t)
     t = _INLINE_STATUTE.sub(" ", t)
+    # MA G.L. cites: 265/13B · 272/16 (avoid MM/DD/YYYY via (?!/\d))
+    t = _MA_GL_CITE.sub(" ", t)
+    t = _USC_CITE.sub(" ", t)
     # Standalone CA "PC" / "P.C." left after the number was stripped
     t = re.sub(r"(?i)\b(?:p\.?\s*c\.?|penal\s*code)\b", " ", t)
     # Orphan subsection crumbs left after cite strip: "(1)(b)" / "1 — b —"
@@ -115,6 +136,8 @@ def strip_statute_cites(s: str) -> str:
     t = re.sub(r"\b\d{5,}\b", " ", t)  # long booking / case numbers
     # Leading statute residue + dash only: " - ANNOY / MOLEST…" (keep mid em-dashes)
     t = re.sub(r"^\s*[-–—:|./]+\s*", "", t)
+    # Trailing separator left after cite strip: "Indecent assault — " / " · "
+    t = re.sub(r"\s*[—–\-·:|./]+\s*$", "", t)
     # Orphan slash/pipe left where a cite was: "ANNOY / MOLEST" ok; " / MOLEST" trim
     t = re.sub(r"(?<=\s)[/|]\s+", " ", t)
     # Collapse empty paren residue from stripped statutes: "( (10 COUNTS))" → "(10 COUNTS)"
@@ -144,6 +167,9 @@ def is_junk_label(label: str) -> bool:
         r"(?i)\d{2,4}\s*[-–—]?\s*(?:cf|mm|ct|dr|dp|cj|ca|sc)(?:\s*[-–—]?\s*\d+)?",
         s,
     ):
+        return True
+    # Bare MA G.L. / USC cite as whole label
+    if _MA_GL_CITE.fullmatch(s) or _USC_CITE.fullmatch(s):
         return True
     if is_statute_or_docket(s):
         return True
@@ -182,11 +208,16 @@ def clean_label(label: str) -> Optional[str]:
     if is_junk_label(s):
         return None
     # Export safety: never ship a label that still embeds a statute/code token
-    if re.search(r"(?i)\b\d{1,4}\.\d{1,4}\b", s) or re.search(
-        r"(?i)\b(?:p\.?\s*c\.?)\s*\d|\b\d{5,}[a-z]", s
+    if (
+        re.search(r"(?i)\b\d{1,4}\.\d{1,4}\b", s)
+        or re.search(r"(?i)\b(?:p\.?\s*c\.?)\s*\d|\b\d{5,}[a-z]", s)
+        or _MA_GL_CITE.search(s)
+        or _USC_CITE.search(s)
+        or re.search(r"(?i)\bu\.?\s*s\.?\s*c\.?", s)
     ):
         s2 = strip_statute_cites(s)
         s2 = re.sub(r"^\s*[-–—:|./]+\s*", "", s2)
+        s2 = re.sub(r"\s*[—–\-·:|./]+\s*$", "", s2)
         s2 = re.sub(r"\s{2,}", " ", s2).strip(" ·;,|—-")
         if not s2 or is_junk_label(s2):
             return None

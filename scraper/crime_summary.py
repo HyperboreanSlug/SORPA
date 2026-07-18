@@ -213,12 +213,31 @@ def _ban_docket_crumbs(s: str) -> str:
         " ",
         t,
     )
+    # MA G.L. 265/13B · 272/16 (not MM/DD/YYYY)
+    t = re.sub(r"(?ix)(?<!\d)\d{1,3}/\d{1,3}[a-z]{0,2}(?!/\d)", " ", t)
+    # Federal 18 USC 2244A
+    t = re.sub(
+        r"(?i)\b\d{1,2}\s*u\.?\s*s\.?\s*c\.?\s*§?\s*[\d.a-z]+\b",
+        " ",
+        t,
+    )
+    t = re.sub(r"(?i)\bview\s+this\s+statute\b", " ", t)
     # Leftover subsection chains: (1)(a)(b)(c)
     t = re.sub(r"(?:\s*\([a-z0-9]+\)\s*){2,}", " ", t, flags=re.I)
     # Felony class crumbs if any survived
     t = re.sub(r"(?i)\b[FM]\d{1,2}\b", " ", t)
     t = re.sub(r"(?i)\bstatute\s*number\(s\)?\b", " ", t)
+    # Drop empty middle-dot segments left after cite strip
+    t = re.sub(r"(?:\s*·\s*)+", " · ", t)
     t = re.sub(r"\s{2,}", " ", t).strip(" ·;,|—-")
+    # Filter pure-cite segments if any remain after join
+    if " · " in t:
+        parts = [
+            p.strip()
+            for p in t.split(" · ")
+            if p.strip() and not is_junk_label(p.strip())
+        ]
+        t = " · ".join(parts)
     if is_junk_label(t):
         return ""
     return t

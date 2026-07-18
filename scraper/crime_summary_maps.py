@@ -53,6 +53,19 @@ OFFENSE_MAP = [
     (r"aggravated\s+indecent\s+liberties", "Aggravated indecent liberties"),
     (r"indecent\s+liberties", "Indecent liberties"),
     (r"indecent\s+exposure", "Indecent exposure"),
+    # MA: Indecent assault and battery on child under 14 / person 14+
+    (
+        r"indecent\s+assault\s+and\s+battery\s+on\s+(?:a\s+)?"
+        r"child\s+under\s+14",
+        "Indecent assault and battery · child under 14",
+    ),
+    (
+        r"indecent\s+assault\s+and\s+battery\s+on\s+(?:a\s+)?"
+        r"person\s+aged\s+14\s+or\s+older",
+        "Indecent assault and battery · person 14 or older",
+    ),
+    (r"indecent\s+assault\s+and\s+battery", "Indecent assault and battery"),
+    (r"open\s+and\s+gross\s+lewdness", "Open and gross lewdness"),
     (r"indecency\s+with\s+(?:a\s+)?child", "Indecency with a child"),
     # CA PC 647.6: ANNOY / MOLEST CHILDREN
     (r"annoy\s*/?\s*molest\s+children", "Annoy/molest children"),

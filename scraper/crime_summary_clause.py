@@ -273,12 +273,21 @@ def extract_from_clause(clause: str) -> Optional[str]:
     if m:
         return f"Child molestation {m.group(1)}"
 
-    m = re.search(r"—\s*(.+)$", c)
-    if m and len(m.group(1)) > 8:
-        c = norm(m.group(1))
+    # "CODE — description" keep description; "description — CODE" drop cite
+    m = re.search(r"[—–]\s*(.+)$", c)
+    if m:
+        after = norm(m.group(1))
+        if is_statute_or_docket(after) or is_junk_label(after):
+            c = norm(c[: m.start()])
+        elif len(after) > 8:
+            c = after
     m = re.search(r"§\s*[\d\-.]+\s*[—-]\s*(.+)$", c)
-    if m and len(m.group(1)) > 8:
-        c = norm(m.group(1))
+    if m:
+        after = norm(m.group(1))
+        if is_statute_or_docket(after) or is_junk_label(after):
+            c = norm(c[: m.start()])
+        elif len(after) > 8:
+            c = after
 
     if is_statute_or_docket(c) or is_junk_label(c):
         return None

@@ -322,6 +322,44 @@ class CrimeSummaryTests(unittest.TestCase):
         self.assertEqual(out2, "Indecency with a child")
         self.assertNotIn("21.11", out2)
 
+    def test_ma_gl_slash_statutes_not_exported(self):
+        """DOMINGO AGUILAR (MA): 265/13B · 265/23 · 272/16 must not appear."""
+        raw = (
+            "Indecent assault and battery on child under 14 years of age — 265/13B; "
+            "Rape and abuse of child — 265/23; "
+            "Open and gross lewdness and lascivious behavior — 272/16"
+        )
+        out = summarize_crime(raw)
+        self.assertTrue(out)
+        self.assertNotIn("265", out)
+        self.assertNotIn("272", out)
+        self.assertNotIn("13b", out.lower())
+        self.assertNotIn("13B", out)
+        self.assertNotRegex(out, r"\d+/\d+")
+        self.assertIn("indecent assault", out.lower())
+        self.assertIn("rape and abuse of child", out.lower())
+        # Age digits (under 14) are fine; chapter/section cites are not
+        self.assertNotRegex(out, r"(?i)\b(?:265|272|13b|13h)\b")
+
+    def test_ma_gl_person_14_or_older_no_cite(self):
+        raw = "Indecent assault and battery on a person aged 14 or older — 265/13H"
+        out = summarize_crime(raw)
+        self.assertIn("indecent assault", out.lower())
+        self.assertIn("14", out)  # age is fine
+        self.assertNotIn("265", out)
+        self.assertNotIn("13h", out.lower())
+        self.assertNotRegex(out, r"\d+/\d+")
+
+    def test_usc_cite_and_view_statute_chrome_stripped(self):
+        """ANTONIO CHARLES AGUILAR (WA): 18 USC 2244A / View this statute."""
+        raw = "18 USC 2244A - Abusive Sexual Contact View this statute"
+        out = summarize_crime(raw)
+        self.assertIn("abusive sexual contact", out.lower())
+        self.assertNotIn("2244", out)
+        self.assertNotIn("usc", out.lower())
+        self.assertNotIn("view this statute", out.lower())
+        self.assertNotRegex(out, r"(?i)\b18\b")
+
 
 if __name__ == "__main__":
     unittest.main()
