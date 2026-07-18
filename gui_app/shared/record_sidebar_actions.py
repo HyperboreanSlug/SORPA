@@ -92,6 +92,8 @@ class RecordSidebarActionsMixin:
         lines = []
         for label, keys in _DETAIL_KEYS:
             value = first_field(record, keys)
+            if label == "Name" and value != "—":
+                value = str(value).upper()
             if label == "Race" and value != "—":
                 value = format_race_label(value)
             if label == "Crime" and value != "—":

@@ -106,6 +106,8 @@ class DetailFillMixin:
             or (record.get("full_name") or "").strip()
             or "—"
         )
+        if name and name != "—":
+            name = name.upper()
         crime = (
             record.get("crime")
             or record.get("offense_description")

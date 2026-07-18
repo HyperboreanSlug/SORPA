@@ -166,6 +166,8 @@ class ReportsFilterStatsMixin:
                 )
                 or (rec.get("full_name") or "—")
             )
+            if name and name != "—":
+                name = str(name).upper()
             rec["_misclass_expected_race"] = mc.expected_race
             rec["_misclass_likely"] = mc.likely_ethnicity
             # Raw surname conf (for recompute); display conf may be combined.

@@ -52,8 +52,10 @@ from gui_app.widgets import (
 class ReportsGridTileMixin:
     @staticmethod
     def _reports_list_display_name(name: str, *, max_len: int = 48) -> str:
-        """Single-line list name with ellipsis — never wraps to a second row."""
+        """Single-line list name, fully UPPERCASE, ellipsis — never wraps."""
         s = " ".join(str(name or "").split()).strip() or "—"
+        if s != "—":
+            s = s.upper()
         if len(s) <= max_len:
             return s
         return s[: max(1, max_len - 1)].rstrip(" ,;.-") + "…"
@@ -62,12 +64,14 @@ class ReportsGridTileMixin:
     def _reports_grid_display_name(
         first: str, middle: str, last: str, full_name: str = "", *, max_len: int = 22
     ) -> str:
-        """Single-line grid name: First M. Last; ellipsis — never wraps."""
+        """Single-line grid name, fully UPPERCASE; ellipsis — never wraps."""
         first = (first or "").strip()
         middle = (middle or "").strip()
         last = (last or "").strip()
         if not first and not last:
             base = (full_name or "—").strip() or "—"
+            if base != "—":
+                base = base.upper()
             return base if len(base) <= max_len else base[: max_len - 1] + "…"
 
         def _join(mid: str) -> str:
@@ -77,24 +81,26 @@ class ReportsGridTileMixin:
         # Prefer full middle name if it fits
         full_mid = _join(middle)
         if len(full_mid) <= max_len:
-            return full_mid
+            return full_mid.upper()
         # Middle initial
         if middle:
             initial = middle[0].upper() + "."
             with_init = _join(initial)
             if len(with_init) <= max_len:
-                return with_init
+                return with_init.upper()
         # Drop middle
         no_mid = _join("")
         if len(no_mid) <= max_len:
-            return no_mid
+            return no_mid.upper()
         # Truncate last segment carefully — keep first + start of last
         if first and last:
             room = max_len - len(first) - 2  # space + …
             if room > 2:
-                return f"{first} {last[:room]}…"
-            return (first[: max_len - 1] + "…") if len(first) > max_len else first
-        return (no_mid[: max_len - 1] + "…") if len(no_mid) > max_len else no_mid
+                return f"{first} {last[:room]}…".upper()
+            out = (first[: max_len - 1] + "…") if len(first) > max_len else first
+            return out.upper()
+        out = (no_mid[: max_len - 1] + "…") if len(no_mid) > max_len else no_mid
+        return out.upper()
 
 
     @staticmethod

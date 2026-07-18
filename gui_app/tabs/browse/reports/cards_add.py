@@ -60,11 +60,13 @@ class ReportsCardsAddMixin:
         first = (rec.get("first_name") or "").strip()
         middle = (rec.get("middle_name") or "").strip()
         last = (rec.get("last_name") or "").strip()
-        # List: first + last; grid builds display name with middle initial
+        # List: first + last (UPPERCASE); grid builds display name with middle initial
         name = (
             " ".join(p for p in (first, last) if p)
             or (rec.get("full_name") or "—")
         )
+        if name and name != "—":
+            name = str(name).upper()
         state = _format_state_display(rec)
         race_raw = (mc.expected_race or rec.get("race") or "—")
         race = _format_race_display(race_raw) or str(race_raw)

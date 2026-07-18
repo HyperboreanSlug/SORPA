@@ -102,15 +102,17 @@ def _clean_field(val: Any) -> str:
 
 
 def person_name(record: Mapping[str, Any]) -> str:
+    """Display name for cards — always fully UPPERCASE."""
     full = _clean_field(record.get("full_name"))
     if full:
-        return full
+        return full.upper()
     parts = [
         _clean_field(record.get("first_name")),
         _clean_field(record.get("middle_name")),
         _clean_field(record.get("last_name")),
     ]
-    return " ".join(p for p in parts if p)
+    out = " ".join(p for p in parts if p)
+    return out.upper() if out else ""
 
 
 def location(record: Mapping[str, Any]) -> str:

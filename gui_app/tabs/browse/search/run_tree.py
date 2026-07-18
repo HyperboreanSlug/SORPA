@@ -78,6 +78,8 @@ class SearchTreeMixin:
                 ).strip()
                 or (r.get("full_name") or "—")
             )
+            if name and name != "—":
+                name = str(name).upper()
             crime = (
                 (r.get("crime") or r.get("offense_description") or r.get("offense_type") or "")
                 or "—"
