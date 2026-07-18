@@ -51,10 +51,18 @@ from gui_app.widgets import (
 
 class ReportsGridTileMixin:
     @staticmethod
+    def _reports_list_display_name(name: str, *, max_len: int = 48) -> str:
+        """Single-line list name with ellipsis — never wraps to a second row."""
+        s = " ".join(str(name or "").split()).strip() or "—"
+        if len(s) <= max_len:
+            return s
+        return s[: max(1, max_len - 1)].rstrip(" ,;.-") + "…"
+
+    @staticmethod
     def _reports_grid_display_name(
-        first: str, middle: str, last: str, full_name: str = "", *, max_len: int = 28
+        first: str, middle: str, last: str, full_name: str = "", *, max_len: int = 22
     ) -> str:
-        """Full legal name for grid: First M. Last; shorten middle to fit."""
+        """Single-line grid name: First M. Last; ellipsis — never wraps."""
         first = (first or "").strip()
         middle = (middle or "").strip()
         last = (last or "").strip()
@@ -182,24 +190,34 @@ class ReportsGridTileMixin:
             if thumb is not None:
                 photo_lbl.configure(image=thumb, text="")
 
-        # Name + LISTED; crime summarized (no locations); conf · state restored
+        # Reserve bottom chrome first so name/crime cannot crush buttons
+        actions = ctk.CTkFrame(card, fg_color="transparent", height=28)
+        actions.pack(fill="x", padx=2, pady=(1, 2), side="bottom")
+        actions.pack_propagate(False)
+
+        meta_row = ctk.CTkFrame(card, fg_color="transparent", height=14)
+        meta_row.pack(fill="x", padx=3, pady=(0, 0), side="bottom")
+        meta_row.pack_propagate(False)
+
+        # Name: fixed single-line row (no wrap) — long names ellipsize
         display_name = self._reports_grid_display_name(
             first,
             middle,
             last,
             str(rec.get("full_name") or ""),
-            max_len=28,
+            max_len=20,
         )
+        name_row = ctk.CTkFrame(card, fg_color="transparent", height=18)
+        name_row.pack(fill="x", padx=3, pady=(1, 0))
+        name_row.pack_propagate(False)
         ctk.CTkLabel(
-            card,
+            name_row,
             text=display_name,
             font=("Segoe UI", 11, "bold"),
             text_color=C["text"],
             anchor="w",
-            justify="left",
-            wraplength=_W - 10,
             height=16,
-        ).pack(fill="x", padx=3, pady=(1, 0))
+        ).pack(side="left", fill="x", expand=True)
 
         try:
             from gui_app.shared.deported import format_listed_banner
@@ -207,34 +225,39 @@ class ReportsGridTileMixin:
             listed_txt = format_listed_banner(race, rec)
         except Exception:
             listed_txt = f"LISTED  {str(race or '—').strip().upper() or '—'}"
+        # Keep listed banner one line on narrow tiles
+        if len(listed_txt) > 22:
+            listed_txt = listed_txt[:21].rstrip() + "…"
+        listed_row = ctk.CTkFrame(card, fg_color="transparent", height=24)
+        listed_row.pack(fill="x", padx=2, pady=(2, 1))
+        listed_row.pack_propagate(False)
         ctk.CTkLabel(
-            card,
+            listed_row,
             text=listed_txt,
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             text_color="#ffffff",
             fg_color="#7a1f1f",
             corner_radius=4,
-            height=24,
+            height=22,
             anchor="center",
-        ).pack(fill="x", padx=2, pady=(2, 1))
+        ).pack(fill="both", expand=True)
 
         # Crime only (summarized, hard-capped) so bottom action row stays full height
-        crime_short = self._reports_summarize_crime(crime, max_len=72)
+        crime_short = self._reports_summarize_crime(crime, max_len=48)
+        crime_row = ctk.CTkFrame(card, fg_color="transparent", height=32)
+        crime_row.pack(fill="x", padx=2, pady=(1, 0))
+        crime_row.pack_propagate(False)
         crime_lbl = ctk.CTkLabel(
-            card,
+            crime_row,
             text=crime_short or "—",
             font=("Segoe UI", 10),
             text_color=C["text"] if crime_short else C["dim"],
             anchor="nw",
             justify="left",
             wraplength=_W - 8,
-            height=32,
+            height=30,
         )
-        crime_lbl.pack(fill="x", padx=2, pady=(1, 0))
-
-        meta_row = ctk.CTkFrame(card, fg_color="transparent", height=14)
-        meta_row.pack(fill="x", padx=3, pady=(0, 0))
-        meta_row.pack_propagate(False)
+        crime_lbl.pack(fill="both", expand=True)
         export_badge = ""
         try:
             from gui_app.shared.export_card_release import (
@@ -266,11 +289,7 @@ class ReportsGridTileMixin:
         status_lbl.pack(side="right")
 
         # Bottom: [select] · ✗ · ✓ · Export · Skip · Open (online listing)
-        # Fixed row height so long crime never steals space from controls
-        actions = ctk.CTkFrame(card, fg_color="transparent", height=28)
-        actions.pack(fill="x", padx=2, pady=(1, 2), side="bottom")
-        actions.pack_propagate(False)
-
+        # (actions frame already packed side=bottom above)
         sel_var = ctk.BooleanVar(
             value=bool(
                 hasattr(self, "_reports_is_export_selected")

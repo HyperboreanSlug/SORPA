@@ -149,8 +149,10 @@ class ReportsCardsAddMixin:
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.grid(row=0, column=1, sticky="nsew", padx=(0, 8), pady=6)
 
-        line1 = ctk.CTkFrame(body, fg_color="transparent")
+        # Name row: fixed single-line height so long names never crush buttons
+        line1 = ctk.CTkFrame(body, fg_color="transparent", height=26)
         line1.pack(fill="x")
+        line1.pack_propagate(False)
         sel_var = ctk.BooleanVar(
             value=bool(
                 hasattr(self, "_reports_is_export_selected")
@@ -170,12 +172,14 @@ class ReportsCardsAddMixin:
             border_color=C["border"],
             checkmark_color=C["bg"],
         ).pack(side="left", padx=(0, 4))
-        ctk.CTkLabel(
-            line1, text=name, font=FONT_BOLD, text_color=C["text"], anchor="w",
-        ).pack(side="left")
-        ctk.CTkLabel(
-            line1, text=f"  #{index}", font=FONT_SM, text_color=C["dim"],
-        ).pack(side="left")
+        # Right chrome first so name cannot push status/badge off-row
+        status_lbl = ctk.CTkLabel(
+            line1,
+            text=self._reports_verdict_label_short(verdict),
+            font=FONT_SM,
+            text_color=self._reports_verdict_color(verdict),
+        )
+        status_lbl.pack(side="right", padx=(4, 0))
         export_badge = ""
         try:
             from gui_app.shared.export_card_release import (
@@ -193,14 +197,24 @@ class ReportsCardsAddMixin:
             font=FONT_SM,
             text_color=C["accent"] if export_badge else C["dim"],
         )
-        export_badge_lbl.pack(side="left")
-        status_lbl = ctk.CTkLabel(
-            line1,
-            text=self._reports_verdict_label_short(verdict),
-            font=FONT_SM,
-            text_color=self._reports_verdict_color(verdict),
+        export_badge_lbl.pack(side="right")
+        ctk.CTkLabel(
+            line1, text=f"#{index}", font=FONT_SM, text_color=C["dim"],
+        ).pack(side="right", padx=(0, 4))
+        # Expanding name host clips overflow; single-line ellipsis text
+        name_host = ctk.CTkFrame(line1, fg_color="transparent")
+        name_host.pack(side="left", fill="both", expand=True)
+        name_host.pack_propagate(False)
+        list_name = self._reports_list_display_name(name, max_len=48)
+        name_lbl = ctk.CTkLabel(
+            name_host,
+            text=list_name,
+            font=FONT_BOLD,
+            text_color=C["text"],
+            anchor="w",
+            height=22,
         )
-        status_lbl.pack(side="right")
+        name_lbl.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
         # Listed race banner (+ DEPORTED in block letters when registry says so)
         try:
@@ -209,8 +223,11 @@ class ReportsCardsAddMixin:
             listed_txt = format_listed_banner(race, rec)
         except Exception:
             listed_txt = f"LISTED {str(race).upper()}"
+        listed_row = ctk.CTkFrame(body, fg_color="transparent", height=24)
+        listed_row.pack(fill="x", pady=(2, 2))
+        listed_row.pack_propagate(False)
         ctk.CTkLabel(
-            body,
+            listed_row,
             text=listed_txt,
             font=FONT_BOLD,
             text_color="#ffffff",
@@ -218,7 +235,7 @@ class ReportsCardsAddMixin:
             corner_radius=4,
             anchor="center",
             height=22,
-        ).pack(fill="x", pady=(2, 2))
+        ).pack(fill="both", expand=True)
 
         # Crime: hard-cap length + 2-line wrap so action buttons never get crushed
         crime_sum = self._reports_summarize_crime(crime, max_len=110)
