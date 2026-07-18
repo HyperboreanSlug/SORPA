@@ -837,6 +837,31 @@ class EthnicAndSearchTests(unittest.TestCase):
         self.assertTrue(
             _is_compatible("Hispanic", "Caucasian", recorded_ethnicity="Latino")
         )
+        # CARLOS ALVARADO (TX): ethnicity only in sources_json, not top-level column
+        from scraper.searcher_race import (
+            _has_hispanic_ethnicity,
+            recorded_ethnicity_from_record,
+        )
+
+        rec = {
+            "race": "WHITE",
+            "ethnicity": None,
+            "sources_json": (
+                '[{"type":"csv_bulk","jurisdiction":"TX","fields":'
+                '{"race":"WHITE","ethnicity":"HISPANIC"}}]'
+            ),
+        }
+        eth = recorded_ethnicity_from_record(rec)
+        self.assertEqual(eth.upper(), "HISPANIC")
+        self.assertTrue(_has_hispanic_ethnicity(eth))
+        self.assertTrue(
+            _is_compatible("Hispanic", rec["race"], recorded_ethnicity=eth)
+        )
+        # Empty column + no sources → blank ethnicity still mismatches White
+        self.assertEqual(
+            recorded_ethnicity_from_record({"race": "WHITE", "ethnicity": ""}),
+            "",
+        )
         # Race itself is Hispanic / White Hispanic
         self.assertTrue(_is_compatible("Hispanic", "Hispanic"))
         self.assertTrue(_is_compatible("Hispanic", "Hispanic or Latino"))

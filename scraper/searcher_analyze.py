@@ -11,6 +11,7 @@ from scraper.searcher_race import (
     _last_name_from_record,
     _first_name_from_record,
     _middle_name_from_record,
+    recorded_ethnicity_from_record,
 )
 from scraper.searcher_surnames import surnames_for_ethnicity_filter
 
@@ -73,13 +74,8 @@ class SearcherAnalyzeMixin:
             first_name = _first_name_from_record(record)
             middle_name = _middle_name_from_record(record)
             recorded_race = (record.get("race") or "").strip()
-            recorded_ethnicity = (
-                record.get("ethnicity") or record.get("Ethnicity") or ""
-            )
-            if isinstance(recorded_ethnicity, str):
-                recorded_ethnicity = recorded_ethnicity.strip()
-            else:
-                recorded_ethnicity = str(recorded_ethnicity or "").strip()
+            # Top-level column first; fall back to sources_json (TX HISPANIC, etc.)
+            recorded_ethnicity = recorded_ethnicity_from_record(record)
 
             if not last_name:
                 continue

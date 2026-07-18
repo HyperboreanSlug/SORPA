@@ -417,6 +417,47 @@ def _has_hispanic_ethnicity(recorded_ethnicity: Optional[str]) -> bool:
     return False
 
 
+def recorded_ethnicity_from_record(record: Optional[Dict[str, Any]]) -> str:
+    """Best registry ethnicity for misclass checks (column, then sources_json).
+
+    TX/SC bulk and HTML often store ethnicity only under sources_json.fields
+    while the top-level ``ethnicity`` column is empty — that used to make
+    White + online-Hispanic people (e.g. CARLOS ALVARADO) false-flag.
+    """
+    if not record:
+        return ""
+    top = record.get("ethnicity") or record.get("Ethnicity") or ""
+    if isinstance(top, str):
+        top = top.strip()
+    else:
+        top = str(top or "").strip()
+    if top:
+        return top
+    try:
+        from scraper.database.sources import parse_sources, primary_field_value
+
+        sources = parse_sources(record.get("sources_json"))
+        if not sources:
+            return ""
+        # Prefer an explicit Hispanic/Latino value from any source when present
+        # ( steers White+HISPANIC TX bulk over blank HTML fields).
+        try:
+            from scraper.database.sources import collect_field_values
+
+            for row in collect_field_values(sources, "ethnicity"):
+                val = str(row.get("value") or "").strip()
+                if val and _has_hispanic_ethnicity(val):
+                    return val
+        except Exception:
+            pass
+        pv = primary_field_value(sources, "ethnicity")
+        if pv:
+            return str(pv).strip()
+    except Exception:
+        return ""
+    return ""
+
+
 def _is_compatible(
     likely_ethnicity: str,
     recorded_race: str,

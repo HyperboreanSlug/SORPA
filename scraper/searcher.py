@@ -18,6 +18,7 @@ from scraper.searcher_race import (  # noqa: F401
     _last_name_from_record,
     _first_name_from_record,
     _middle_name_from_record,
+    recorded_ethnicity_from_record,
 )
 
 from scraper.searcher_init import SearcherInitMixin
