@@ -7,8 +7,8 @@ from typing import Any, Mapping
 
 from PIL import Image, ImageDraw, ImageFont
 
+from gui_app.shared.export_card_banner import BANNER_H, draw_race_banner
 from gui_app.shared.export_card_fields import (
-    _BANNER_RED,
     _BANNER_TEXT,
     _BG,
     _CARD_H,
@@ -37,12 +37,10 @@ from scraper.searcher import format_race_label
 _PAD = 48
 _NAME_SIZE = 52
 _CRIME_H = 128
-_BANNER_H = 120
-# Race banner slightly wider than text stack (extends toward card edges)
-_BANNER_INSET = 28
-_FOOTER_H = 56
-_NUMBER_SIZE = 36  # bottom-right export No. (larger than location text)
-
+_FOOTER_H = 68
+_NUMBER_SIZE = 52  # bottom-right export No. — large, eye-catching
+_REPORTED_SIZE = 38  # "Reported As" label
+_RACE_SIZE = 76  # race value (e.g. WHITE)
 
 def render_export_card(
     record: Mapping[str, Any], *, assign_number: bool = False
@@ -73,9 +71,9 @@ def render_export_card(
     crime_font = load_font(42, bold=True)
     footer_font = load_font(22)
     number_font = load_font(_NUMBER_SIZE, bold=True)
-    # "Reported As" + race value — large display weight
-    reported_font = load_font(28, bold=True)
-    race_font = _load_display_font(58)
+    # "Reported As" + race value — oversized, eye-catching
+    reported_font = load_font(_REPORTED_SIZE, bold=True)
+    race_font = _load_display_font(_RACE_SIZE)
 
     max_text_w = _CARD_W - _PAD * 2
     banner_on = bool(race)
@@ -83,7 +81,7 @@ def render_export_card(
         20
         + _name_block_h(draw, name, name_font, max_text_w)
         + 16
-        + (_BANNER_H if banner_on else 0)
+        + (BANNER_H if banner_on else 0)
         + (16 if banner_on else 0)
         + (_CRIME_H if cr else 0)
         + (16 if cr else 0)
@@ -116,7 +114,7 @@ def render_export_card(
     y = photo_top + photo_h + 20
     y = _draw_name(draw, name, y, _PAD, max_text_w, name_font)
     if race:
-        y = _draw_race_banner(
+        y = draw_race_banner(
             draw, race, y + 8, _PAD, max_text_w, reported_font, race_font
         )
     if cr:
@@ -165,48 +163,6 @@ def _draw_name(draw, name: str, y: int, margin: int, max_w: int, font) -> int:
     return y
 
 
-def _draw_race_banner(
-    draw, race: str, y: int, margin: int, max_w: int, label_font, race_font
-) -> int:
-    top = y
-    # Wider than the photo/text margin so WHITE / race fills more of the card
-    inset = min(margin, _BANNER_INSET)
-    ban_left = inset
-    ban_right = _CARD_W - inset
-    ban_w = ban_right - ban_left
-    draw.rounded_rectangle(
-        (ban_left, top, ban_right, top + _BANNER_H),
-        radius=16,
-        fill=_BANNER_RED,
-        outline=(178, 58, 58, 255),
-        width=2,
-    )
-    label = "Reported As"
-    race_txt = race.upper()
-    lb = draw.textbbox((0, 0), label, font=label_font)
-    lw, lh = lb[2] - lb[0], lb[3] - lb[1]
-    race_lines = wrap_text(draw, race_txt, race_font, ban_w - 48)[:1]
-    rb = draw.textbbox((0, 0), race_lines[0], font=race_font)
-    rw, rh = rb[2] - rb[0], rb[3] - rb[1]
-    gap = 6
-    block = lh + gap + rh
-    cy = top + max(0, (_BANNER_H - block) // 2)
-    draw.text(
-        ((ban_left + ban_right - lw) // 2, cy - lb[1]),
-        label,
-        font=label_font,
-        fill=(245, 217, 217, 255),
-    )
-    cy += lh + gap
-    draw.text(
-        ((ban_left + ban_right - rw) // 2, cy - rb[1]),
-        race_lines[0],
-        font=race_font,
-        fill=_BANNER_TEXT,
-    )
-    return top + _BANNER_H
-
-
 def _draw_crime_panel(draw, text: str, y: int, margin: int, max_w: int, font) -> int:
     box = (margin, y, _CARD_W - margin, y + _CRIME_H)
     draw.rounded_rectangle(box, radius=18, fill=_CRIME_PANEL, outline=_LINE, width=2)
@@ -242,20 +198,24 @@ def _draw_footer(
         except Exception:
             num_font = font
         if left:
-            draw.text((margin, ty + 6), left.upper(), font=font, fill=_MUTED)
+            draw.text((margin, ty + 10), left.upper(), font=font, fill=_MUTED)
         if right:
             try:
                 rb = draw.textbbox((0, 0), right, font=num_font)
                 rw = int(rb[2] - rb[0])
             except Exception:
-                rw = max(8, len(right) * 14)
-            # Brighter + larger so export No. reads clearly on the card
-            draw.text(
-                (_CARD_W - margin - rw, ty),
-                right,
-                font=num_font,
-                fill=(235, 235, 240, 255),
-            )
+                rw = max(8, len(right) * 18)
+            # Large bright export No. — primary eye-catch on the footer
+            nx = _CARD_W - margin - rw
+            ny = ty - 2
+            for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text(
+                    (nx + ox, ny + oy),
+                    right,
+                    font=num_font,
+                    fill=(40, 40, 48, 200),
+                )
+            draw.text((nx, ny), right, font=num_font, fill=(250, 250, 255, 255))
         # Brand mark centered in footer (same handle as photo watermark)
         try:
             handle_font = load_font(20, bold=True)
