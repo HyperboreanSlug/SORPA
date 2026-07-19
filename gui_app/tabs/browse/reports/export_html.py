@@ -146,11 +146,34 @@ class ReportsExportHtmlMixin:
                 if has_photo
                 else '<div class="nophoto">No photo</div>'
             )
-            url = (rec.get("source_url") or "").strip()
-            link = (
-                f'<a class="ext" href="{_esc(url)}" target="_blank" rel="noopener">Source</a>'
-                if url else ""
-            )
+            try:
+                from scraper.online_listing import online_status_label
+
+                offline_lbl = online_status_label(rec)
+            except Exception:
+                offline_lbl = ""
+            try:
+                from scraper.public_links import openable_url_for_record
+
+                url = (
+                    ""
+                    if offline_lbl
+                    else (openable_url_for_record(rec) or "").strip()
+                )
+            except Exception:
+                url = "" if offline_lbl else (rec.get("source_url") or "").strip()
+            if offline_lbl:
+                link = (
+                    f'<span class="offline" title="Live registry listing is gone">'
+                    f"{_esc(offline_lbl)}</span>"
+                )
+            elif url:
+                link = (
+                    f'<a class="ext" href="{_esc(url)}" target="_blank" '
+                    f'rel="noopener">Source</a>'
+                )
+            else:
+                link = ""
             vclass = _esc(verdict)
             race_disp = _format_race_display(mc.expected_race) or (mc.expected_race or "-")
             try:
@@ -274,6 +297,12 @@ class ReportsExportHtmlMixin:
     letter-spacing: .08em; color: #fff;
     text-transform: uppercase;
   }
+  .offline {
+    display: inline-block; margin-top: .25rem; padding: .2rem .45rem;
+    font-size: .68rem; font-weight: 800; letter-spacing: .04em;
+    color: #f0d080; background: #3a3420; border-radius: 6px;
+    text-transform: uppercase;
+  }
   .crime {
     margin: .2rem 0 0; color: var(--text); font-size: .72rem;
     line-height: 1.3; white-space: normal; overflow: visible;
@@ -355,6 +384,12 @@ class ReportsExportHtmlMixin:
   .listed-deported {
     display: inline; font-size: 1.55rem; font-weight: 900;
     letter-spacing: .1em; color: #fff;
+    text-transform: uppercase;
+  }
+  .offline {
+    display: inline-block; margin-top: .35rem; padding: .3rem .65rem;
+    font-size: .85rem; font-weight: 800; letter-spacing: .05em;
+    color: #f0d080; background: #3a3420; border-radius: 8px;
     text-transform: uppercase;
   }
   .vs-eth {

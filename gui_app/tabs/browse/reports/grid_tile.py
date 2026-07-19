@@ -251,6 +251,27 @@ class ReportsGridTileMixin:
             anchor="center",
         ).pack(fill="both", expand=True)
 
+        try:
+            from scraper.online_listing import online_status_label
+
+            offline_txt = online_status_label(rec)
+        except Exception:
+            offline_txt = ""
+        if offline_txt:
+            off_row = ctk.CTkFrame(card, fg_color="transparent", height=18)
+            off_row.pack(fill="x", padx=2, pady=(0, 1))
+            off_row.pack_propagate(False)
+            ctk.CTkLabel(
+                off_row,
+                text=offline_txt,
+                font=("Segoe UI", 8, "bold"),
+                text_color="#f0d080",
+                fg_color="#3a3420",
+                corner_radius=3,
+                height=16,
+                anchor="center",
+            ).pack(fill="both", expand=True)
+
         # Crime only (summarized, hard-capped) so bottom action row stays full height
         crime_short = self._reports_summarize_crime(crime, max_len=48)
         crime_row = ctk.CTkFrame(card, fg_color="transparent", height=32)
@@ -379,10 +400,12 @@ class ReportsGridTileMixin:
             fg_color=C["elevated"], hover_color=C["border"], text_color=C["muted"],
             border_width=1, border_color=C["border"], font=("Segoe UI", 9),
         ).pack(side="left", padx=(0, 2))
+        open_lbl = "Offline" if offline_txt else "Open"
         ctk.CTkButton(
-            actions, text="Open", width=40, height=24,
+            actions, text=open_lbl, width=48 if offline_txt else 40, height=24,
             command=lambda m=mc: self._reports_open_online_listing(m),
-            fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+            fg_color=C["elevated"], hover_color=C["border"],
+            text_color="#f0d080" if offline_txt else C["text"],
             border_width=1, border_color=C["border"], font=("Segoe UI", 9),
         ).pack(side="left")
 

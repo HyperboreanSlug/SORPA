@@ -61,8 +61,53 @@ class ReportsGridMetaMixin:
         except Exception:
             return raw_url
 
+    def _reports_listing_unavailable_online(self, mc) -> bool:
+        """True when stored flags/status say the live listing is dead (404)."""
+        rec = (getattr(mc, "record", None) or {}) if mc is not None else {}
+        try:
+            from scraper.online_listing import listing_unavailable_online
+
+            return bool(listing_unavailable_online(rec))
+        except Exception:
+            return False
+
     def _reports_open_online_listing(self, mc) -> None:
         """Open the online (live) registry listing in the browser."""
+        rec = (getattr(mc, "record", None) or {}) if mc is not None else {}
+        if self._reports_listing_unavailable_online(mc):
+            # Do not open a dead flyer or a bare search page as if it were the listing.
+            html_raw = (rec.get("report_html_path") or "").strip()
+            html_path = None
+            if html_raw:
+                for p in (
+                    Path(html_raw),
+                    ROOT / html_raw,
+                    ROOT / html_raw.replace("\\", "/"),
+                    Path.cwd() / html_raw,
+                ):
+                    try:
+                        if p.is_file():
+                            html_path = p.resolve()
+                            break
+                    except OSError:
+                        continue
+            if html_path is not None:
+                messagebox.showinfo(
+                    "Not available online",
+                    "This registry listing is not available online "
+                    "(dead or removed URL).\n\n"
+                    "Opening the archived page instead.",
+                )
+                if hasattr(self, "_open_path"):
+                    self._open_path(html_path)
+                return
+            messagebox.showinfo(
+                "Not available online",
+                "This registry listing is not available online "
+                "(dead or removed URL).\n\n"
+                "No archived HTML is stored for this record.",
+            )
+            return
         url = self._reports_resolve_online_url(mc)
         if url:
             try:

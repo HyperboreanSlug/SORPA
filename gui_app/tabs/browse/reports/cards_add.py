@@ -247,6 +247,28 @@ class ReportsCardsAddMixin:
             height=22,
         ).pack(fill="both", expand=True)
 
+        # Dead / 404 registry URL (e.g. Jacinto Calderon FDLE flyer)
+        try:
+            from scraper.online_listing import online_status_label
+
+            offline_txt = online_status_label(rec)
+        except Exception:
+            offline_txt = ""
+        if offline_txt:
+            off_row = ctk.CTkFrame(body, fg_color="transparent", height=22)
+            off_row.pack(fill="x", pady=(0, 2))
+            off_row.pack_propagate(False)
+            ctk.CTkLabel(
+                off_row,
+                text=offline_txt,
+                font=FONT_SM,
+                text_color="#f0d080",
+                fg_color="#3a3420",
+                corner_radius=4,
+                anchor="center",
+                height=20,
+            ).pack(fill="both", expand=True)
+
         # Crime: hard-cap length + 2-line wrap so action buttons never get crushed
         crime_sum = self._reports_summarize_crime(crime, max_len=110)
         crime_lbl = ctk.CTkLabel(
@@ -356,11 +378,13 @@ class ReportsCardsAddMixin:
                 border_width=1, border_color=C["border"], font=FONT_SM,
             )
         )
+        open_lbl = "Offline" if offline_txt else "Open"
         flow.add(
             ctk.CTkButton(
-                actions, text="Open", width=58, height=28,
+                actions, text=open_lbl, width=64 if offline_txt else 58, height=28,
                 command=lambda m=mc: self._reports_open_online_listing(m),
-                fg_color=C["elevated"], hover_color=C["border"], text_color=C["text"],
+                fg_color=C["elevated"], hover_color=C["border"],
+                text_color="#f0d080" if offline_txt else C["text"],
                 border_width=1, border_color=C["border"], font=FONT_SM,
             )
         )
@@ -415,11 +439,12 @@ class ReportsCardsAddMixin:
             listed_copy = format_listed_banner(race, rec)
         except Exception:
             listed_copy = f"LISTED AS: {race}"
+        offline_copy = f"\n{offline_txt}" if offline_txt else ""
         copy_blob = (
-            f"{name}\n{listed_copy}\nSurname ethnicity: {eth}"
+            f"{name}\n{listed_copy}{offline_copy}\nSurname ethnicity: {eth}"
             f"{crime_line}\nConf {conf_text} · {state}\n"
             f"HTML: {html_raw or '—'}\n"
-            f"URL: {url_disp}"
+            f"URL: {url_disp if not offline_txt else '(not available online)'}"
         )
         flow.add(
             ctk.CTkButton(
