@@ -62,6 +62,12 @@ def render_export_card(
         race = _clean_field(format_race_label(race_raw) or race_raw)
         if race.casefold() == "unknown":
             race = ""
+    try:
+        from gui_app.shared.deported import format_export_race_label
+
+        race = format_export_race_label(race, record)
+    except Exception:
+        pass
     loc = last_known_location(record)
     cr = crime(record)
     # Footer right: persistent release No. (mint only when assign_number=True)

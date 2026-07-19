@@ -47,12 +47,29 @@ def is_deported(record: Optional[Mapping[str, Any]]) -> bool:
 
 
 def format_listed_banner(race: str, record: Optional[Mapping[str, Any]] = None) -> str:
-    """Block-letter race banner: ``LISTED WHITE`` or ``LISTED WHITE  DEPORTED``."""
-    race_u = str(race or "—").strip().upper() or "—"
-    if race_u in ("UNKNOWN", "—", "-", "N/A", "NA"):
-        base = f"LISTED {race_u}"
-    else:
-        base = f"LISTED {race_u}"
+    """Block-letter race banner: ``LISTED WHITE`` or ``LISTED WHITE - DEPORTED``."""
+    race_u = str(race or "").strip().upper()
+    # Strip checkmark / verified suffix from race labels (e.g. "White ✓")
+    for junk in (" ✓", "✔", "☑", "✓"):
+        race_u = race_u.replace(junk, "")
+    race_u = race_u.strip()
+    if race_u in ("", "UNKNOWN", "-", "N/A", "NA", "—", "–"):
+        race_u = ""
     if is_deported(record):
-        return f"{base}  DEPORTED"
-    return base
+        if race_u:
+            return f"LISTED {race_u} - DEPORTED"
+        return "LISTED - DEPORTED"
+    return f"LISTED {race_u}" if race_u else "LISTED -"
+
+
+def format_export_race_label(race: str, record: Optional[Mapping[str, Any]] = None) -> str:
+    """Export-card race line: ``WHITE`` or ``WHITE - DEPORTED``."""
+    race_u = str(race or "").strip().upper()
+    for junk in (" ✓", "✔", "☑", "✓"):
+        race_u = race_u.replace(junk, "")
+    race_u = race_u.strip()
+    if not race_u or race_u in ("UNKNOWN", "-", "N/A", "NA", "—", "–"):
+        race_u = ""
+    if is_deported(record):
+        return f"{race_u} - DEPORTED" if race_u else "DEPORTED"
+    return race_u

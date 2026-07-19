@@ -235,21 +235,19 @@ class ReportsGridTileMixin:
 
             listed_txt = format_listed_banner(race, rec)
         except Exception:
-            listed_txt = f"LISTED  {str(race or '—').strip().upper() or '—'}"
-        # Keep listed banner one line on narrow tiles
-        if len(listed_txt) > 22:
-            listed_txt = listed_txt[:21].rstrip() + "…"
-        listed_row = ctk.CTkFrame(card, fg_color="transparent", height=24)
+            listed_txt = f"LISTED {str(race or '-').strip().upper() or '-'}"
+        # Full banner text must stay visible (e.g. LISTED WHITE - DEPORTED)
+        listed_row = ctk.CTkFrame(card, fg_color="transparent", height=26)
         listed_row.pack(fill="x", padx=2, pady=(2, 1))
         listed_row.pack_propagate(False)
         ctk.CTkLabel(
             listed_row,
             text=listed_txt,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             text_color="#ffffff",
             fg_color="#7a1f1f",
             corner_radius=4,
-            height=22,
+            height=24,
             anchor="center",
         ).pack(fill="both", expand=True)
 

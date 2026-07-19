@@ -24,7 +24,7 @@
 | Export race banner | `gui_app/shared/export_card_banner.py` — tall red banner; letter-spaced WHITE/race; large “Reported As” |
 | Card export # | `gui_app/shared/export_card_release.py` — sequential No. per person (`offenders.export_number` + `data/card_release.json`); **mint only on deliberate Desktop/grid export** (`assign_number=True`); bare render/peek never burns a number; re-export reuses; Reports shows `export #N` |
 | Export → confirm | `gui_app/shared/export_card_confirm.py` — exporting a card auto-marks **Confirmed incorrect** (`ethnicity_review` + report verdicts) |
-| Deported flag | `gui_app/shared/deported.py` — when address/city/county marks deported, Reports banner shows bold **`LISTED WHITE  DEPORTED`** (list + grid + HTML export) |
+| Deported flag | `gui_app/shared/deported.py` — when address/city/county marks deported, Reports + export banner shows bold **`LISTED WHITE - DEPORTED`** / **`WHITE - DEPORTED`** (list + grid + HTML + share card) |
 | Crime summary | `scraper/crime_summary*.py` (clause parse + docket strip) |
 | Statute → charge | `scraper/statute_ref.py` + `statute_labels.json` — expand bare `Statute Number(s): 28-320.01` (etc.) to real offense names on Reports/export |
 | Detail drawer | `gui_app/shared/detail_drawer/` |

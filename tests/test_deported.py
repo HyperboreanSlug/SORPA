@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import unittest
 
-from gui_app.shared.deported import format_listed_banner, is_deported
+from gui_app.shared.deported import (
+    format_export_race_label,
+    format_listed_banner,
+    is_deported,
+)
 
 
 class DeportedTests(unittest.TestCase):
@@ -21,12 +25,30 @@ class DeportedTests(unittest.TestCase):
         rec = {"address": "DEPORTED TO MEXICO"}
         self.assertEqual(
             format_listed_banner("White", rec),
-            "LISTED WHITE  DEPORTED",
+            "LISTED WHITE - DEPORTED",
         )
         self.assertEqual(
             format_listed_banner("White", {"address": "1 MAIN ST"}),
             "LISTED WHITE",
         )
+        self.assertEqual(
+            format_listed_banner("White ✓", rec),
+            "LISTED WHITE - DEPORTED",
+        )
+        self.assertEqual(
+            format_listed_banner("", rec),
+            "LISTED - DEPORTED",
+        )
+
+    def test_export_race_label(self):
+        rec = {"address": "DEPORTED TO MEXICO"}
+        self.assertEqual(format_export_race_label("White", rec), "WHITE - DEPORTED")
+        self.assertEqual(format_export_race_label("Black", rec), "BLACK - DEPORTED")
+        self.assertEqual(
+            format_export_race_label("White", {"address": "1 MAIN ST"}),
+            "WHITE",
+        )
+        self.assertEqual(format_export_race_label("", rec), "DEPORTED")
 
 
 if __name__ == "__main__":

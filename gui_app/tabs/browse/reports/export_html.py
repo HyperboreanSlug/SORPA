@@ -152,18 +152,19 @@ class ReportsExportHtmlMixin:
                 if url else ""
             )
             vclass = _esc(verdict)
-            race_disp = _format_race_display(mc.expected_race) or (mc.expected_race or "—")
+            race_disp = _format_race_display(mc.expected_race) or (mc.expected_race or "-")
             try:
                 from gui_app.shared.deported import format_listed_banner
 
                 listed_full = format_listed_banner(race_disp, rec)
             except Exception:
                 listed_full = f"LISTED {str(race_disp).upper()}"
-            # Split "LISTED WHITE  DEPORTED" for HTML structure
-            race = _esc(str(race_disp).upper())
+            # Split "LISTED WHITE - DEPORTED" for HTML structure
+            race = _esc(str(race_disp).upper().replace(" ✓", "").replace("✓", "").strip())
             deported_html = (
+                ' <span class="listed-sep">-</span>'
                 ' <span class="listed-deported">DEPORTED</span>'
-                if " DEPORTED" in listed_full
+                if " - DEPORTED" in listed_full or listed_full.endswith("DEPORTED")
                 else ""
             )
             crime = self._reports_crime_text(rec)
@@ -264,9 +265,13 @@ class ReportsExportHtmlMixin:
     line-height: 1.15; color: #fff; letter-spacing: .02em;
     word-break: break-word;
   }
+  .listed-sep {
+    display: inline; font-size: 1.05rem; font-weight: 800; color: #fff;
+    margin: 0 .2rem;
+  }
   .listed-deported {
     display: inline; font-size: 1.05rem; font-weight: 900;
-    letter-spacing: .08em; color: #fff; margin-left: .35rem;
+    letter-spacing: .08em; color: #fff;
     text-transform: uppercase;
   }
   .crime {
@@ -343,9 +348,13 @@ class ReportsExportHtmlMixin:
     display: inline; font-size: 2rem; font-weight: 800;
     line-height: 1.1; color: #fff; letter-spacing: .03em;
   }
+  .listed-sep {
+    display: inline; font-size: 1.55rem; font-weight: 800; color: #fff;
+    margin: 0 .35rem;
+  }
   .listed-deported {
     display: inline; font-size: 1.55rem; font-weight: 900;
-    letter-spacing: .1em; color: #fff; margin-left: .5rem;
+    letter-spacing: .1em; color: #fff;
     text-transform: uppercase;
   }
   .vs-eth {

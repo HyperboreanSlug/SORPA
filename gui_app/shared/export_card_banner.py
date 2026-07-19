@@ -36,15 +36,21 @@ def draw_race_banner(
         width=3,
     )
     label = "Reported As"
-    race_txt = race.upper()
+    race_txt = (race or "").upper().strip()
+    # Prefer "WHITE - DEPORTED" as race line + optional second DEPORTED emphasis
+    # when the value already includes DEPORTED (from format_export_race_label).
     lb = draw.textbbox((0, 0), label, font=label_font)
     lw, lh = lb[2] - lb[0], lb[3] - lb[1]
-    race_lines = wrap_text(draw, race_txt, race_font, ban_w - 36)[:1]
+    race_lines = wrap_text(draw, race_txt, race_font, ban_w - 36)[:2]
     race_line = race_lines[0] if race_lines else race_txt
     rb = draw.textbbox((0, 0), race_line, font=race_font)
     rh = rb[3] - rb[1]
     gap = 10
-    block = lh + gap + rh
+    extra_h = 0
+    if len(race_lines) > 1:
+        rb2 = draw.textbbox((0, 0), race_lines[1], font=race_font)
+        extra_h = gap + (rb2[3] - rb2[1])
+    block = lh + gap + rh + extra_h
     cy = top + max(0, (BANNER_H - block) // 2)
     draw.text(
         ((ban_left + ban_right - lw) // 2, cy - lb[1]),
@@ -62,6 +68,18 @@ def draw_race_banner(
         cy - rb[1],
         fill=_BANNER_TEXT,
     )
+    if len(race_lines) > 1:
+        cy += rh + gap
+        rb2 = draw.textbbox((0, 0), race_lines[1], font=race_font)
+        _draw_race_value_wide(
+            draw,
+            race_lines[1],
+            race_font,
+            ban_left + 24,
+            ban_right - 24,
+            cy - rb2[1],
+            fill=_BANNER_TEXT,
+        )
     return top + BANNER_H
 
 
