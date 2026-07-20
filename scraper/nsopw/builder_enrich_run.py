@@ -370,19 +370,38 @@ class BuilderEnrichRunMixin:
 
     # --- State-wide overnight enrich (re-fetch flyers, flag dead links) -------
     def _looks_dead_link(self, final_url: str, demo: Dict[str, Any]) -> bool:
-        """True when a report fetch landed on a dead / removed listing."""
+        """True only when a listing is genuinely dead/removed (404/410/error404).
+
+        Captcha/WAF blocks (403/429/503) and empty pages are NOT dead — they are
+        temporary and must never be flagged blocked:http_404.
+        """
         from scraper.public_links import _is_fdle_error_page
 
+        if self._is_captcha_block(demo):
+            return False
         status = demo.get("report_fetch_status")
-        if isinstance(status, int) and status >= 400:
+        if isinstance(status, int) and status in (404, 410):
             return True
         s = str(status or "")
-        if "404" in s or "410" in s or s.startswith("blocked:") or s.startswith("error:"):
+        if "404" in s or "410" in s or "http_404" in s or "http_410" in s:
             return True
         if _is_fdle_error_page(final_url or ""):
             return True
-        br = str(demo.get("report_block_reason") or "")
+        br = str(demo.get("report_block_reason") or "").lower()
         if "http_404" in br or "http_410" in br:
+            return True
+        return False
+
+    @staticmethod
+    def _is_captcha_block(demo: Dict[str, Any]) -> bool:
+        """True for temporary captcha/WAF walls (not a dead listing)."""
+        if demo.get("needs_manual_captcha"):
+            return True
+        br = str(demo.get("report_block_reason") or "").lower()
+        if "captcha" in br or "waf" in br:
+            return True
+        status = demo.get("report_fetch_status")
+        if isinstance(status, int) and status in (403, 429, 503):
             return True
         return False
 
@@ -460,7 +479,7 @@ class BuilderEnrichRunMixin:
             rows = rows[: int(limit)]
         total = len(rows)
         _log(f"[{st}] overnight enrich: {total:,} unverified records with a source URL")
-        stats = {"checked": 0, "alive": 0, "dead": 0, "filled": 0, "errors": 0}
+        stats = {"checked": 0, "alive": 0, "dead": 0, "filled": 0, "empty": 0, "captcha": 0, "errors": 0}
         patch_cols = (
             "race", "ethnicity", "gender", "height", "weight", "eye_color",
             "hair_color", "photo_path", "photo_url", "report_html_path", "crime",
@@ -468,6 +487,7 @@ class BuilderEnrichRunMixin:
             "raw_data_json", "date_of_birth", "age", "city", "address", "county",
             "risk_level", "source_url",
         )
+        consec_captcha = 0
         for i, row in enumerate(rows, 1):
             if self.cancel_check():
                 _log(f"[{st}] enrich cancelled at {i:,}/{total:,}")
@@ -502,11 +522,29 @@ class BuilderEnrichRunMixin:
                     pass
                 stats["filled"] += 1
                 stats["alive"] += 1
+                consec_captcha = 0
+            elif self._is_captcha_block(demo):
+                # Temporary captcha/WAF wall — never flag dead; leave for retry /
+                # manual cookie solve (the fetcher already queued the URL).
+                stats["captcha"] += 1
+                consec_captcha += 1
             elif self._looks_dead_link(final_url, demo):
                 self._mark_link_dead(rec)
                 stats["dead"] += 1
+                consec_captcha = 0
             else:
+                # HTTP 200 but no demographics — empty / JS shell page, not dead.
+                stats["empty"] += 1
                 stats["alive"] += 1
+                consec_captcha = 0
+            # Circuit breaker: a run of consecutive captcha walls means the state
+            # registry is bot-blocking us — stop burning requests, try the next state.
+            if consec_captcha >= 20:
+                _log(
+                    f"  [{st}] {consec_captcha} consecutive captcha/WAF blocks — "
+                    f"state appears bot-walled, moving on to the next state"
+                )
+                break
             patch: Dict[str, Any] = {}
             for c in patch_cols:
                 v = rec.get(c)
@@ -525,8 +563,9 @@ class BuilderEnrichRunMixin:
                 except Exception:
                     pass
                 _log(
-                    f"  [{st}] {i:,}/{total:,} · alive={stats['alive']} "
-                    f"dead={stats['dead']} filled={stats['filled']} err={stats['errors']}"
+                    f"  [{st}] {i:,}/{total:,} · filled={stats['filled']} "
+                    f"dead={stats['dead']} empty={stats['empty']} "
+                    f"captcha={stats['captcha']} err={stats['errors']}"
                 )
         try:
             self.db._conn.commit()
