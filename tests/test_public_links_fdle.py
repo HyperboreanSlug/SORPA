@@ -63,6 +63,43 @@ class FdleOpenableUrlTests(unittest.TestCase):
         self.assertIn("personId=139323", out)
         self.assertIn("flyer.jsf", out)
 
+    def test_identity_mismatch_never_opens_wrong_flyer(self):
+        """Jorge Quintana-style: PERSON_NBR flyer is Eugene Williams — refuse."""
+        rec = {
+            "full_name": "Jorge Quintana",
+            "first_name": "Jorge",
+            "last_name": "Quintana",
+            "state": "FL",
+            "source_state": "FL",
+            "source_url": (
+                "https://offender.fdle.state.fl.us/offender/sops/flyer.jsf"
+                "?personId=37181"
+            ),
+            "external_id": "37181",
+            "flags": json.dumps(
+                [
+                    "identity_html_mismatch",
+                    "identity:name_mismatch:EUGENE WILLIAMS",
+                    "photo_archived",
+                ]
+            ),
+            "sources_json": json.dumps(
+                [
+                    {
+                        "html_status": "identity:name_mismatch:EUGENE WILLIAMS",
+                        "source_url": (
+                            "https://offender.fdle.state.fl.us/offender/sops/"
+                            "flyer.jsf?personId=37181"
+                        ),
+                    }
+                ]
+            ),
+        }
+        out = openable_url_for_record(rec)
+        self.assertEqual(out, FL_FDLE_SEARCH_HOME)
+        self.assertNotIn("personId=37181", out)
+        self.assertNotIn("37181", out)
+
 
 if __name__ == "__main__":
     unittest.main()

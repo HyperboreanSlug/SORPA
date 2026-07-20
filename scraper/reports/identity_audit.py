@@ -293,34 +293,42 @@ def repair_nuclear_findings(
     changed = strip_wrong_person_html(rec, reason="audit_nuclear")
     codes = {f.code for f in nuclear}
     if codes & {"html_name_mismatch", "html_dob_mismatch", "fl_link_wrong_person"}:
-        # Clear poisoned FL flyer segments
+        # Clear poisoned FL flyer segments (PERSON_NBR ≠ personId)
         url = str(rec.get("source_url") or "")
         if "fdle" in url.lower() and "personid=" in url.lower():
             parts = [p.strip() for p in url.split(" | ") if p.strip()]
             kept = []
+            dropped_pids: List[str] = []
             for p in parts:
                 if "fdle" in p.lower() and extract_fdle_person_id(p):
-                    # Only drop if we confirmed mismatch
-                    if any(
-                        c in codes
-                        for c in (
-                            "html_name_mismatch",
-                            "html_dob_mismatch",
-                            "fl_link_wrong_person",
-                        )
-                    ):
-                        changed = True
-                        continue
+                    dropped_pids.append(extract_fdle_person_id(p) or "")
+                    changed = True
+                    continue
                 kept.append(p)
             rec["source_url"] = " | ".join(kept) if kept else None
+            ext = str(rec.get("external_id") or "").strip()
+            if ext and ext in dropped_pids:
+                rec["external_id"] = None
+                changed = True
         if rec.get("report_html_path"):
             # strip_wrong_person_html should have cleared; force if name mismatch
             rec["report_html_path"] = None
             changed = True
-        photo = str(rec.get("photo_path") or "")
-        if photo and any(c in codes for c in ("photo_html_mismatch", "html_name_mismatch")):
-            rec["photo_path"] = None
-            changed = True
+        if any(
+            c in codes
+            for c in (
+                "photo_html_mismatch",
+                "html_name_mismatch",
+                "html_dob_mismatch",
+                "fl_link_wrong_person",
+            )
+        ):
+            if rec.get("photo_path"):
+                rec["photo_path"] = None
+                changed = True
+            if rec.get("photo_url"):
+                rec["photo_url"] = None
+                changed = True
     return changed
 
 
@@ -407,7 +415,9 @@ def run_full_audit(
                         "sources_json",
                         "report_html_path",
                         "photo_path",
+                        "photo_url",
                         "source_url",
+                        "external_id",
                     )
                 }
                 db.update_offender(int(rec["id"]), patch)

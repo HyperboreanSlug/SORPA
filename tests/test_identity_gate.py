@@ -1,6 +1,7 @@
 """HTML identity gate — never attach wrong-person flyer data."""
 from __future__ import annotations
 
+import json
 import unittest
 
 from scraper.reports.identity_gate import (
@@ -122,6 +123,50 @@ class IdentityGateTests(unittest.TestCase):
             if s.get("type") == "report_html":
                 self.assertFalse(s.get("html_verified"))
         self.assertIn("identity_html_mismatch", str(rec.get("flags") or ""))
+
+    def test_strip_wrong_person_clears_fdle_url_and_photo(self):
+        """Poisoned PERSON_NBR flyer + CallImage must not survive strip."""
+        from scraper.reports.identity_gate import strip_wrong_person_html
+
+        rec = {
+            "full_name": "Jorge Quintana",
+            "first_name": "Jorge",
+            "last_name": "Quintana",
+            "state": "FL",
+            "source_url": (
+                "https://offender.fdle.state.fl.us/offender/sops/"
+                "flyer.jsf?personId=37181"
+            ),
+            "external_id": "37181",
+            "photo_path": r"data\report_pages\FL\photos\f3fa99f75da10663.jpg",
+            "photo_url": (
+                "https://offender.fdle.state.fl.us/offender/CallImage?imgID=108891"
+            ),
+            "report_html_path": None,
+            "flags": json.dumps(
+                [
+                    "identity_html_mismatch",
+                    "identity:name_mismatch:EUGENE WILLIAMS",
+                ]
+            ),
+            "sources_json": json.dumps(
+                [
+                    {
+                        "type": "nsopw_report",
+                        "html_status": "identity:name_mismatch:EUGENE WILLIAMS",
+                        "source_url": (
+                            "https://offender.fdle.state.fl.us/offender/sops/"
+                            "flyer.jsf?personId=37181"
+                        ),
+                    }
+                ]
+            ),
+        }
+        self.assertTrue(strip_wrong_person_html(rec, reason="test"))
+        self.assertFalse(rec.get("source_url"))
+        self.assertFalse(rec.get("photo_path"))
+        self.assertFalse(rec.get("photo_url"))
+        self.assertFalse(rec.get("external_id"))
 
 
 if __name__ == "__main__":

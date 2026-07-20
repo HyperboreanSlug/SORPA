@@ -26,6 +26,7 @@
 | Export → confirm | `gui_app/shared/export_card_confirm.py` — exporting a card auto-marks **Confirmed incorrect** (`ethnicity_review` + report verdicts) |
 | Deported flag | `gui_app/shared/deported.py` — when address/city/county marks deported, Reports + export banner shows bold **`LISTED WHITE - DEPORTED`** / **`WHITE - DEPORTED`** (list + grid + HTML + share card) |
 | Offline listing | `scraper/online_listing.py` — Reports **`NOT AVAILABLE ONLINE`** only when stored URLs are solely error404 / search-home (or empty) **and** dead evidence exists. Sticky HTML-fetch `blocked:http_404` does **not** banner rows that still have a person detail URL; photos often come from NSOPW `photo_url` / FDLE CallImage independent of HTML. Open → Offline only in that true-dead case. |
+| Openable links | `scraper/public_links.py` — never open FDLE flyers after `identity_html_mismatch` / `name_mismatch` (PERSON_NBR ≠ personId; e.g. Jorge Quintana → Eugene Williams). Fall back to FDLE search home. |
 | Enrich identity | `reports/identity_gate.py` — HTML name extract prefers `Name:` labels over chrome headings (`About DPS`); failed name match blocks race attach (keeps wrong-person safety) |
 | Crime summary | `scraper/crime_summary*.py` (clause parse + docket strip) |
 | Statute → charge | `scraper/statute_ref.py` + `statute_labels.json` — expand bare `Statute Number(s): 28-320.01` (etc.) to real offense names on Reports/export |

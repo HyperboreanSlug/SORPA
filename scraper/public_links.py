@@ -225,6 +225,42 @@ def _record_has_http_404_block(record: Optional[dict]) -> bool:
     return False
 
 
+def _record_has_identity_html_mismatch(record: Optional[dict]) -> bool:
+    """True when HTML/flyer was proven to be a different person.
+
+    PERSON_NBR bulk IDs are not FDLE flyer personId — opening those flyers
+    (e.g. Jorge Quintana → Eugene Williams) is a nuclear identity failure.
+    """
+    for t in _record_flags_list(record):
+        tl = t.lower()
+        if "identity_html_mismatch" in tl:
+            return True
+        if "name_mismatch" in tl or "dob_mismatch" in tl:
+            return True
+        if tl.startswith("identity:") and "mismatch" in tl:
+            return True
+    raw = (record or {}).get("sources_json")
+    if not raw:
+        return False
+    try:
+        import json
+
+        srcs = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return False
+    if not isinstance(srcs, list):
+        return False
+    for s in srcs:
+        if not isinstance(s, dict):
+            continue
+        st = str(s.get("html_status") or "").lower()
+        if "name_mismatch" in st or "dob_mismatch" in st:
+            return True
+        if "identity" in st and "mismatch" in st:
+            return True
+    return False
+
+
 def resolve_public_source_url(
     raw_url: Optional[str],
     *,
@@ -399,23 +435,29 @@ def openable_url_for_record(record: Optional[dict]) -> str:
     Known-dead FDLE flyers (prior ``blocked:http_404`` / error404 URL) open the
     FDLE search home instead of the error page — PERSON_NBR is not always a
     valid flyer ``personId`` (e.g. Carlos Gabriel Ramirez / 19184).
+
+    Identity-mismatched flyers (HTML is another person, e.g. Jorge Quintana →
+    Eugene Williams) never open the wrong flyer — fall back to search home.
     """
     rec = record or {}
     # Prefer source_state (registry) then residential state
     state = rec.get("source_state") or rec.get("state")
-    skip_flyers = _record_has_http_404_block(rec)
+    id_mismatch = _record_has_identity_html_mismatch(rec)
+    skip_flyers = _record_has_http_404_block(rec) or id_mismatch
     url = resolve_public_source_url(
         rec.get("source_url"),
         state=state,
         skip_fdle_flyers=skip_flyers,
     )
     # CO often stores the openable detail on external_id (www.cdps host)
+    # Never rebuild an FDLE flyer from external_id after identity mismatch —
+    # bulk PERSON_NBR is not personId.
     if not url or (
         str(state or "").upper().startswith("CO")
         and not extract_co_offender_id(url or "")
     ):
         ext = str(rec.get("external_id") or "").strip()
-        if ext:
+        if ext and not id_mismatch:
             alt = resolve_public_source_url(ext, state=state, skip_fdle_flyers=skip_flyers)
             if alt and (
                 extract_co_offender_id(alt)
@@ -425,4 +467,10 @@ def openable_url_for_record(record: Optional[dict]) -> str:
                 url = alt
     if url and _is_fdle_error_page(url):
         return FL_FDLE_SEARCH_HOME
+    if id_mismatch and url and _is_fdle_url(url) and "flyer" in url.lower():
+        return FL_FDLE_SEARCH_HOME
+    if id_mismatch and not url:
+        st = str(state or "").upper()
+        if "FL" in st or not st:
+            return FL_FDLE_SEARCH_HOME
     return url

@@ -454,28 +454,75 @@ def _flags_list(raw: Any) -> List[str]:
     return [str(raw)]
 
 
+def _clear_poisoned_fdle_source_url(record: Dict[str, Any]) -> bool:
+    """Drop FDLE flyer personId segments that failed identity (PERSON_NBR ≠ personId)."""
+    from scraper.public_links import extract_fdle_person_id, split_source_urls
+
+    url = str(record.get("source_url") or "").strip()
+    if not url or "fdle" not in url.lower():
+        return False
+    parts = split_source_urls(url) if " | " in url or "|" in url else [url]
+    if not parts:
+        parts = [p.strip() for p in url.split("|") if p.strip()]
+    kept: List[str] = []
+    dropped = False
+    for p in parts:
+        if "fdle" in p.lower() and extract_fdle_person_id(p):
+            dropped = True
+            continue
+        kept.append(p)
+    if not dropped:
+        return False
+    record["source_url"] = " | ".join(kept) if kept else None
+    # bulk PERSON_NBR stored as external_id must not rebuild the wrong flyer
+    ext = str(record.get("external_id") or "").strip()
+    if ext and ext.isdigit():
+        for p in parts:
+            if extract_fdle_person_id(p) == ext:
+                record["external_id"] = None
+                break
+    return True
+
+
 def strip_wrong_person_html(record: Dict[str, Any], *, reason: str = "") -> bool:
     """
-    Remove report_html_path / photo / html sources that fail identity.
+    Remove report_html_path / photo / flyer links / html sources that fail identity.
 
     Keeps bulk CSV fields. Returns True if the record was modified.
     """
     from scraper.database.sources import apply_sources_to_record, dumps_sources, parse_sources
 
     changed = False
+    html_mismatch = False
+    force_clear_media = False
     html_path = str(record.get("report_html_path") or "").strip()
     if html_path:
         hn = extract_person_name_from_html_path(html_path)
         if hn and not record_name_matches_html(record, hn):
+            html_mismatch = True
+            force_clear_media = True
             record["report_html_path"] = None
-            photo = str(record.get("photo_path") or "")
-            hp = html_path.replace("\\", "/")
-            if hp and hp in photo.replace("\\", "/"):
-                record["photo_path"] = None
-            # Also drop sibling _assets photo dirs
-            stem = Path(html_path).stem
-            if stem and stem in photo.replace("\\", "/"):
-                record["photo_path"] = None
+            changed = True
+
+    # Flags already prove wrong person (strip even if HTML path already cleared)
+    for t in _flags_list(record.get("flags")):
+        tl = t.lower()
+        if "name_mismatch" in tl or "dob_mismatch" in tl:
+            html_mismatch = True
+            force_clear_media = True
+            break
+        if "identity_html_mismatch" in tl:
+            html_mismatch = True
+
+    if html_mismatch and _clear_poisoned_fdle_source_url(record):
+        changed = True
+    if force_clear_media:
+        # Wrong-person mugshot (often FDLE CallImage under FL/photos/)
+        if record.get("photo_path"):
+            record["photo_path"] = None
+            changed = True
+        if record.get("photo_url"):
+            record["photo_url"] = None
             changed = True
 
     sources = parse_sources(record.get("sources_json"))
@@ -495,6 +542,15 @@ def strip_wrong_person_html(record: Dict[str, Any], *, reason: str = "") -> bool
                 continue
             if name and not record_name_matches_html(record, name):
                 changed = True
+                html_mismatch = True
+                continue
+            status = str(s.get("html_status") or "").lower()
+            if "name_mismatch" in status or (
+                "identity" in status and "mismatch" in status
+            ):
+                # Drop poison report sources that already recorded the mismatch
+                changed = True
+                html_mismatch = True
                 continue
             if s.get("html_verified"):
                 s = dict(s)
@@ -505,6 +561,9 @@ def strip_wrong_person_html(record: Dict[str, Any], *, reason: str = "") -> bool
         if changed:
             record["sources_json"] = dumps_sources(kept)
             apply_sources_to_record(record)
+
+    if html_mismatch and _clear_poisoned_fdle_source_url(record):
+        changed = True
 
     if changed:
         flags = _flags_list(record.get("flags"))

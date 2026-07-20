@@ -71,8 +71,9 @@ def main() -> int:
             before_race = rec.get("race")
             before_html = rec.get("report_html_path")
             before_url = rec.get("source_url")
-            ch1 = strip_wrong_person_html(rec)
+            # Clear URL before strip wipes HTML (URL clear used to need HTML)
             ch2 = _clear_poisoned_fdle_url(rec)
+            ch1 = strip_wrong_person_html(rec)
             if not (ch1 or ch2):
                 continue
             fixed += 1
@@ -80,7 +81,7 @@ def main() -> int:
                 f"  id={rec.get('id')} {rec.get('full_name')}: "
                 f"race {before_race!r}→{rec.get('race')!r} "
                 f"html {before_html!r}→{rec.get('report_html_path')!r} "
-                f"url_cleared={ch2}"
+                f"url {before_url!r}→{rec.get('source_url')!r}"
             )
             if args.dry_run:
                 continue
@@ -92,7 +93,9 @@ def main() -> int:
                     "sources_json",
                     "report_html_path",
                     "photo_path",
+                    "photo_url",
                     "source_url",
+                    "external_id",
                 )
             }
             db.update_offender(int(rec["id"]), patch)
