@@ -63,13 +63,15 @@ def format_listed_banner(race: str, record: Optional[Mapping[str, Any]] = None) 
 
 
 def format_export_race_label(race: str, record: Optional[Mapping[str, Any]] = None) -> str:
-    """Export-card race line: ``WHITE`` or ``WHITE - DEPORTED``."""
+    """Export-card race line: ``WHITE``.
+
+    Export cards never show the word "deported" — only the cleaned race.
+    (The Reports list/grid banner still shows it via ``format_listed_banner``.)
+    """
     race_u = str(race or "").strip().upper()
     for junk in (" ✓", "✔", "☑", "✓"):
         race_u = race_u.replace(junk, "")
     race_u = race_u.strip()
     if not race_u or race_u in ("UNKNOWN", "-", "N/A", "NA", "—", "–"):
         race_u = ""
-    if is_deported(record):
-        return f"{race_u} - DEPORTED" if race_u else "DEPORTED"
     return race_u

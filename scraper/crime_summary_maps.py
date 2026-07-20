@@ -135,3 +135,32 @@ DROP_CLAUSE = re.compile(
     r"|this\s+link\s+reflects.*"
     r")$"
 )
+
+# Common registry offense abbreviations -> full words. Used only to help
+# OFFENSE_MAP recognize abbreviated charges (e.g. "ATT SEX ASSLT" ->
+# "ATTEMPT SEXUAL ASSAULT"). CODE_MAP still runs on the original text, so its
+# abbreviation patterns (SEX BAT / VCTM …) are unaffected.
+_ABBREV_EXPANSIONS = [
+    (re.compile(r"\bASSLT\b", re.I), "ASSAULT"),
+    (re.compile(r"\bASLT\b", re.I), "ASSAULT"),
+    (re.compile(r"\bATT\b", re.I), "ATTEMPT"),
+    (re.compile(r"\bVCTM\b", re.I), "VICTIM"),
+    (re.compile(r"\bVIC\b", re.I), "VICTIM"),
+    (re.compile(r"\bBAT\b", re.I), "BATTERY"),
+    (re.compile(r"\bAGG\b", re.I), "AGGRAVATED"),
+    (re.compile(r"\bAGGRAV\b", re.I), "AGGRAVATED"),
+    (re.compile(r"\bWPN\b", re.I), "WEAPON"),
+    (re.compile(r"\bINJ\b", re.I), "INJURY"),
+    (re.compile(r"\bDEG\b", re.I), "DEGREE"),
+    (re.compile(r"\bFEL\b", re.I), "FELONY"),
+    (re.compile(r"\bMISD\b", re.I), "MISDEMEANOR"),
+    (re.compile(r"\bPOSS\b", re.I), "POSSESSION"),
+]
+
+
+def expand_offense_abbreviations(text: str) -> str:
+    """Expand common registry offense abbreviations for label matching only."""
+    t = text or ""
+    for rx, repl in _ABBREV_EXPANSIONS:
+        t = rx.sub(repl, t)
+    return t

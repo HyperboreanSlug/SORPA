@@ -212,17 +212,29 @@ def _draw_footer(
                 rw = int(rb[2] - rb[0])
             except Exception:
                 rw = max(8, len(right) * 18)
-            # Large bright export No. — primary eye-catch on the footer
-            nx = _CARD_W - margin - rw
+            # "SEX OFFENDER" label sits immediately left of the large export No.
+            so_text = "SEX OFFENDER"
+            try:
+                so_font = load_font(24, bold=True)
+                sob = draw.textbbox((0, 0), so_text, font=so_font)
+                sow = int(sob[2] - sob[0])
+            except Exception:
+                so_font = font
+                sow = max(8, len(so_text) * 13)
+            so_gap = 14
+            total_w = sow + so_gap + rw
+            nx = _CARD_W - margin - total_w
             ny = ty - 2
+            draw.text((nx, ny + 12), so_text, font=so_font, fill=(250, 250, 255, 255))
+            num_x = nx + sow + so_gap
             for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 draw.text(
-                    (nx + ox, ny + oy),
+                    (num_x + ox, ny + oy),
                     right,
                     font=num_font,
                     fill=(40, 40, 48, 200),
                 )
-            draw.text((nx, ny), right, font=num_font, fill=(250, 250, 255, 255))
+            draw.text((num_x, ny), right, font=num_font, fill=(250, 250, 255, 255))
         # Brand mark centered in footer (same handle as photo watermark)
         try:
             handle_font = load_font(20, bold=True)

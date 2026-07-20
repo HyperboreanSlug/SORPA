@@ -109,7 +109,8 @@ def _draw_race_value_wide(
         base = sum(widths)
         gaps = len(chars) - 1
         extra = max(0, avail - base)
-        gap = min(extra / gaps, max(14.0, avail * 0.08)) if gaps else 0.0
+        # Modest tracking only — never stretch letters across the whole banner.
+        gap = min(extra / gaps, 14.0) if gaps else 0.0
         total = base + gap * gaps
         x = left + max(0, (avail - total) / 2)
         for i, ch in enumerate(chars):

@@ -9,7 +9,12 @@ from scraper.crime_summary_junk import (
     is_statute_or_docket,
     strip_statute_cites,
 )
-from scraper.crime_summary_maps import CODE_MAP, DROP_CLAUSE, OFFENSE_MAP
+from scraper.crime_summary_maps import (
+    CODE_MAP,
+    DROP_CLAUSE,
+    OFFENSE_MAP,
+    expand_offense_abbreviations,
+)
 
 # Date tokens only — never Colorado CRS-style statutes like 18-3-402
 # (old pattern \d{1,2}-\d{1,2}-\d{2,4} ate "18-3-402" → left "(1)(b) — SEX ASSAULT…").
@@ -309,16 +314,24 @@ def extract_from_clause(clause: str) -> Optional[str]:
     ):
         return summarize_lewd_clause(src)
 
+    c_exp = expand_offense_abbreviations(c)
+    src_exp = expand_offense_abbreviations(src)
     for pat, lab in OFFENSE_MAP:
-        if re.search(pat, c, re.I) or re.search(pat, src, re.I):
+        if (
+            re.search(pat, c, re.I)
+            or re.search(pat, src, re.I)
+            or re.search(pat, c_exp, re.I)
+            or re.search(pat, src_exp, re.I)
+        ):
             if "porn" in lab.lower():
                 m_c = re.search(r"\(\s*(\d+)\s*counts?\s*\)", src, re.I)
                 if m_c:
                     return f"{lab} · {m_c.group(1)} counts"
-            # Promote to "Attempted …" when source has ATTEMPT and label doesn't
-            if re.search(r"(?i)\battempt", src) and not re.search(
-                r"(?i)\battempt", lab
-            ):
+            # Promote to "Attempted …" when source has ATTEMPT (or abbrev ATT)
+            if (
+                re.search(r"(?i)\battempt", src)
+                or re.search(r"(?i)\battempt", src_exp)
+            ) and not re.search(r"(?i)\battempt", lab):
                 if lab.lower().startswith("sexual assault"):
                     lab = "Attempted " + lab[0].lower() + lab[1:]
                 elif not lab.lower().startswith("attempt"):

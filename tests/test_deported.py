@@ -42,13 +42,14 @@ class DeportedTests(unittest.TestCase):
 
     def test_export_race_label(self):
         rec = {"address": "DEPORTED TO MEXICO"}
-        self.assertEqual(format_export_race_label("White", rec), "WHITE - DEPORTED")
-        self.assertEqual(format_export_race_label("Black", rec), "BLACK - DEPORTED")
+        # Export cards never show "deported" — cleaned race only.
+        self.assertEqual(format_export_race_label("White", rec), "WHITE")
+        self.assertEqual(format_export_race_label("Black", rec), "BLACK")
         self.assertEqual(
             format_export_race_label("White", {"address": "1 MAIN ST"}),
             "WHITE",
         )
-        self.assertEqual(format_export_race_label("", rec), "DEPORTED")
+        self.assertEqual(format_export_race_label("", rec), "")
 
 
 if __name__ == "__main__":
