@@ -368,4 +368,171 @@ class BuilderEnrichRunMixin:
         )
         return summary
 
+    # --- State-wide overnight enrich (re-fetch flyers, flag dead links) -------
+    def _looks_dead_link(self, final_url: str, demo: Dict[str, Any]) -> bool:
+        """True when a report fetch landed on a dead / removed listing."""
+        from scraper.public_links import _is_fdle_error_page
+
+        status = demo.get("report_fetch_status")
+        if isinstance(status, int) and status >= 400:
+            return True
+        s = str(status or "")
+        if "404" in s or "410" in s or s.startswith("blocked:") or s.startswith("error:"):
+            return True
+        if _is_fdle_error_page(final_url or ""):
+            return True
+        br = str(demo.get("report_block_reason") or "")
+        if "http_404" in br or "http_410" in br:
+            return True
+        return False
+
+    @staticmethod
+    def _mark_link_dead(rec: Dict[str, Any]) -> None:
+        """Add blocked:http_404 to flags so the GUI opens the search home, not a dead page."""
+        import json
+
+        raw = rec.get("flags")
+        tags: List[str] = []
+        mode = "list"
+        obj: Optional[Dict[str, Any]] = None
+        if isinstance(raw, list):
+            tags = [str(t) for t in raw]
+        elif isinstance(raw, dict):
+            obj = raw
+            tags = [str(t) for t in (raw.get("tags") or [])]
+            mode = "dict"
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                p = json.loads(raw)
+                if isinstance(p, list):
+                    tags = [str(t) for t in p]
+                elif isinstance(p, dict):
+                    obj = p
+                    tags = [str(t) for t in (p.get("tags") or [])]
+                    mode = "dict"
+                else:
+                    tags = [str(raw)]
+            except Exception:
+                tags = [str(raw)]
+        if "blocked:http_404" not in tags:
+            tags.append("blocked:http_404")
+        if mode == "dict":
+            obj = obj or {}
+            obj["tags"] = tags
+            rec["flags"] = json.dumps(obj, ensure_ascii=False)
+        else:
+            rec["flags"] = json.dumps(tags, ensure_ascii=False)
+
+    def enrich_state(
+        self,
+        state: str,
+        *,
+        limit: int = 0,
+        save_html: bool = True,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, int]:
+        """Re-fetch report/flyer URLs for one state's records (overnight run).
+
+        Fills missing demographics via the normal identity-gated merge and flags
+        dead flyers (HTTP 404 / FDLE error404 landing) with ``blocked:http_404``
+        so the GUI falls back to the registry search home instead of a dead page.
+        Resumable: skips rows already flagged dead or already HTML-verified.
+        """
+        st = (state or "").strip().upper()
+
+        def _log(m: str) -> None:
+            if log:
+                log(m)
+            else:
+                print(m, flush=True)
+
+        rows = self.db._conn.execute(
+            "SELECT * FROM offenders WHERE "
+            "(source_state LIKE ? OR state LIKE ?) "
+            "AND source_url IS NOT NULL AND TRIM(source_url) != '' "
+            "AND (flags IS NULL OR (flags NOT LIKE '%blocked:http_404%' "
+            "     AND flags NOT LIKE '%race_html_verified%')) "
+            "AND (sources_json IS NULL OR sources_json NOT LIKE '%\"html_verified\": true%') "
+            "ORDER BY id ASC",
+            (f"%{st}%", f"%{st}%"),
+        ).fetchall()
+        if limit and int(limit) > 0:
+            rows = rows[: int(limit)]
+        total = len(rows)
+        _log(f"[{st}] overnight enrich: {total:,} unverified records with a source URL")
+        stats = {"checked": 0, "alive": 0, "dead": 0, "filled": 0, "errors": 0}
+        patch_cols = (
+            "race", "ethnicity", "gender", "height", "weight", "eye_color",
+            "hair_color", "photo_path", "photo_url", "report_html_path", "crime",
+            "offense_type", "offense_description", "flags", "sources_json",
+            "raw_data_json", "date_of_birth", "age", "city", "address", "county",
+            "risk_level", "source_url",
+        )
+        for i, row in enumerate(rows, 1):
+            if self.cancel_check():
+                _log(f"[{st}] enrich cancelled at {i:,}/{total:,}")
+                break
+            rec = dict(row)
+            url = self._primary_fetch_url(rec.get("source_url") or "", st)
+            if not url:
+                continue
+            stats["checked"] += 1
+            if self.report_limiter.wait(self.cancel_check):
+                _log(f"[{st}] enrich cancelled (during delay) at {i:,}/{total:,}")
+                break
+            try:
+                demo = self.reports.fetch_demographics(
+                    url, save_html=save_html, html_dir=self.html_dir, jurisdiction=st
+                )
+            except Exception as e:
+                stats["errors"] += 1
+                _log(f"  fetch error id={rec.get('id')}: {e}")
+                continue
+            ok = bool(demo.get("report_fetch_ok"))
+            final_url = str(demo.get("report_final_url") or url)
+            if ok:
+                self._merge_demographics(rec, demo)
+
+                class _Hit:
+                    image_uri = rec.get("photo_url") or demo.get("photo_url") or ""
+
+                try:
+                    self._ensure_photo(rec, _Hit(), st)
+                except Exception:
+                    pass
+                stats["filled"] += 1
+                stats["alive"] += 1
+            elif self._looks_dead_link(final_url, demo):
+                self._mark_link_dead(rec)
+                stats["dead"] += 1
+            else:
+                stats["alive"] += 1
+            patch: Dict[str, Any] = {}
+            for c in patch_cols:
+                v = rec.get(c)
+                orig = row[c] if c in row.keys() else None
+                if v is not None and v != orig:
+                    patch[c] = v
+            if patch and rec.get("id") is not None:
+                try:
+                    self.db.update_offender(int(rec["id"]), patch)
+                except Exception as e:
+                    stats["errors"] += 1
+                    _log(f"  db error id={rec.get('id')}: {e}")
+            if i % 100 == 0 or i == total:
+                try:
+                    self.db._conn.commit()
+                except Exception:
+                    pass
+                _log(
+                    f"  [{st}] {i:,}/{total:,} · alive={stats['alive']} "
+                    f"dead={stats['dead']} filled={stats['filled']} err={stats['errors']}"
+                )
+        try:
+            self.db._conn.commit()
+        except Exception:
+            pass
+        _log(f"[{st}] enrich done: {stats}")
+        return stats
+
 

@@ -39,6 +39,7 @@
 | Display confidence | `scraper/confidence_display.py` — name-only or name+DeepFace combined (marked) |
 | Misclassify confirm | `gui_app/shared/record_sidebar*.py`, `verdict_persist.py`, `tabs/browse/misclassify/` |
 | CLI | `scraper/cli.py` → `cli_parser.py` + `cli_cmds_*.py` |
+| Overnight state enrich | `scripts/enrich_state_overnight.py FL` → `nsopw/builder_enrich_run.py::enrich_state` — re-fetch a state's flyers, fill data (identity-gated), flag dead flyers `blocked:http_404` (GUI falls back to search home). Resumable (skips dead/verified); logs to `data/reports/enrich_<ST>_overnight.log` |
 
 ---
 
