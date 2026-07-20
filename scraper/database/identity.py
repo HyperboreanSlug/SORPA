@@ -47,6 +47,12 @@ def normalize_dob(value: Any) -> str:
     if m:
         mo, d, y = int(m.group(1)), int(m.group(2)), m.group(3)
         return f"{y}{mo:02d}{d:02d}"
+    # US MM/DD/YY (2-digit year): pivot 00-29 -> 2000s, 30-99 -> 1900s
+    m = re.match(r"^(\d{1,2})[/=-](\d{1,2})[/=-](\d{2})$", raw)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        year = 2000 + y if y <= 29 else 1900 + y
+        return f"{year}{mo:02d}{d:02d}"
     dig = _digits(raw)
     if len(dig) == 8:
         # ambiguous MMDDYYYY vs YYYYMMDD — prefer year-first if looks like year
@@ -305,7 +311,12 @@ def should_merge_records(
     score, reasons, hard = score_identity_match(incoming, existing)
     if hard:
         return False, score, reasons + ["hard_reject"]
-    if score >= min_score:
+    # A merge must be backed by a real second identifier (DOB, middle name, or
+    # registry id) — never first+last plus height/weight/location alone.
+    has_identifier = any(
+        r in reasons for r in ("dob", "middle_full", "middle_initial", "external_id")
+    )
+    if score >= min_score and has_identifier:
         return True, score, reasons
     # Unique first+last is still weak for common surnames (Patel, Garcia).
     # Only boost when we also have DOB, middle, or registry id — never

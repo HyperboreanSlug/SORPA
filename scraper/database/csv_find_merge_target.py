@@ -44,22 +44,21 @@ class FindMergeTargetCsvMixin:
             ).fetchall()
             if len(rows) == 1:
                 existing = dict(rows[0])
-                ok, _score, reasons = should_merge_records(
-                    rec, existing, min_score=5, unique_name_candidate=True
+                # Same registry id is strong, but still require the identity
+                # score gate (guards cross-id-space collisions, e.g. FL
+                # PERSON_NBR vs flyer personId).
+                ok, _score, _reasons = should_merge_records(
+                    rec, existing, min_score=6, unique_name_candidate=True
                 )
-                # Same registry id: allow unless hard reject
-                _, _, hard = score_identity_match(rec, existing)
-                if not hard:
-                    return int(existing["id"])
-                return None
+                return int(existing["id"]) if ok else None
             if len(rows) > 1:
                 # Prefer best multi-id score among same-ext rows
                 best_id, best_sc = None, -1
                 for r in rows:
                     existing = dict(r)
-                    ok, sc, _ = should_merge_records(rec, existing, min_score=5)
+                    ok, sc, _ = should_merge_records(rec, existing, min_score=6)
                     _, _, hard = score_identity_match(rec, existing)
-                    if hard:
+                    if hard or not ok:
                         continue
                     if sc > best_sc:
                         best_sc, best_id = sc, int(existing["id"])

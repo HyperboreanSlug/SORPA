@@ -154,8 +154,8 @@ class ImportRecordsCsvMixin:
                     # Try source merge onto the URL owner instead of pure skip
                     if merge_sources:
                         row = self._conn.execute(
-                            "SELECT id FROM offenders WHERE source_url = ? OR source_url LIKE ? LIMIT 1",
-                            (url, f"%{url}%"),
+                            "SELECT id FROM offenders WHERE source_url = ? LIMIT 1",
+                            (url,),
                         ).fetchone()
                         if row:
                             if self._merge_source_into_existing(int(row[0]), rec):

@@ -239,9 +239,17 @@ class DedupeFindGroupsMixin:
                     members.append(rec)
             if len(members) < 2:
                 continue
-            # Soft name+state: only merge when photo_url or address corroborates
+            # name+state buckets need identity confirmation — common names must
+            # not collapse different people.
+            if s == "name_state":
+                members = self._filter_name_state_strict_members(members)
+                if len(members) < 2:
+                    continue
+            # Soft name+state: only merge when photo_url or address corroborates,
+            # then drop any hard identity conflicts (DOB / middle / name).
             if s == "name_state_soft":
                 members = self._filter_name_state_soft_members(members)
+                members = self._filter_hard_identity_members(members)
                 if len(members) < 2:
                     continue
             # Prefer richest row; break ties with lowest id (stable survivor)

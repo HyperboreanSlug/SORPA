@@ -39,6 +39,19 @@ class DedupeMergeMembersMixin:
         if not losers:
             return {}
 
+        # Drop losers that hard-reject against the keeper (over-broad groups
+        # must not poison the survivor with another person's data).
+        from scraper.database.identity import score_identity_match
+
+        safe_losers: List[Dict[str, Any]] = []
+        for m in losers:
+            _sc, _reasons, hard = score_identity_match(keep, m)
+            if not hard:
+                safe_losers.append(m)
+        losers = safe_losers
+        if not losers:
+            return {}
+
         updates: Dict[str, Any] = {}
         all_rows = [keep] + list(losers)
 
@@ -67,13 +80,10 @@ class DedupeMergeMembersMixin:
             pass
 
         # 1) Union multi-value / multi-listing fields
-        # Race/ethnicity are rewritten from sources_json above — do not string-union
-        # letter codes onto the multi-source display (e.g. "Black [FL·html✓] | B").
-        skip_union = set()
-        if "race" in updates or "sources_json" in updates:
-            skip_union.add("race")
-        if "sources_json" in updates:
-            skip_union.add("ethnicity")
+        # Race/ethnicity are driven by sources_json consensus (or left as the
+        # keeper's value for legacy rows) — never string-union letter codes
+        # onto the multi-source display (e.g. "Black [FL·html✓] | B").
+        skip_union = {"race", "ethnicity"}
         for col in _MERGE_UNION_FIELDS:
             if col in skip_union:
                 continue

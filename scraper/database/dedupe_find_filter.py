@@ -53,6 +53,32 @@ class DedupeFindFilterMixin:
         best = max(buckets.values(), key=len)
         return best if len(best) >= 2 else []
 
+    def _filter_name_state_strict_members(
+        self,
+        members: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Keep richest row + members that pass the full merge gate against it.
+
+        name_state buckets by name+state only; require real multi-identifier
+        agreement (DOB / middle / registry id) so common names never collapse
+        different people.
+        """
+        from scraper.database.identity import should_merge_records
+
+        if len(members) < 2:
+            return list(members)
+        members = sorted(
+            members,
+            key=lambda r: (-self._row_richness(r), int(r.get("id") or 0)),
+        )
+        keep = members[0]
+        kept = [keep]
+        for m in members[1:]:
+            ok, _sc, _reasons = should_merge_records(keep, m)
+            if ok:
+                kept.append(m)
+        return kept
+
     def _filter_hard_identity_members(
         self,
         members: List[Dict[str, Any]],
