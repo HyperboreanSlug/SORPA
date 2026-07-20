@@ -68,7 +68,15 @@ class MergeSourceIntoExistingCsvMixin:
         temp["sources_json"] = patch["sources_json"]
         apply_sources_to_record(temp)
         if temp.get("race") and temp.get("race") != existing.get("race"):
-            patch["race"] = temp["race"]
+            existing_race = str(existing.get("race") or "")
+            existing_verified = (
+                "✓" in existing_race
+                or "race_html_verified" in str(existing.get("flags") or "")
+            )
+            temp_verified = "✓" in str(temp.get("race") or "")
+            # Keep an HTML-verified race; do not clobber it with bulk letter race.
+            if not (existing_verified and not temp_verified):
+                patch["race"] = temp["race"]
         if temp.get("flags"):
             patch["flags"] = temp["flags"]
 

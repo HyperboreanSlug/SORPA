@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 import requests
 
 from .base import BaseScraper
+from .normalize import normalize_records
 
 
 class APIScraper(BaseScraper):
@@ -64,7 +65,7 @@ class APIScraper(BaseScraper):
                 print(f"  [{self.state_abbr}] Page {page}: {len(batch)} records")
 
                 # Check if there are more pages
-                total_pages = self._get_total_pages(data, page, len(batch))
+                total_pages = self._get_total_pages(data, page, len(batch), page_size)
                 if page >= total_pages:
                     break
 
@@ -74,7 +75,7 @@ class APIScraper(BaseScraper):
                 print(f"  [{self.state_abbr}] Error on page {page}: {e}")
                 break
 
-        return records
+        return normalize_records(records, state=self.state_abbr)
 
     def _parse_api_response(self, data: Any) -> List[Dict[str, Any]]:
         """Parse various API response formats into list of record dicts."""
@@ -93,18 +94,20 @@ class APIScraper(BaseScraper):
 
         return []
 
-    def _get_total_pages(self, data: Any, current_page: int, batch_size: int) -> int:
+    def _get_total_pages(
+        self, data: Any, current_page: int, batch_size: int, page_size: int = PAGE_SIZE
+    ) -> int:
         """Determine total pages from API response."""
         if isinstance(data, dict):
             for key in ("totalPages", "pages", "total_pages"):
                 if key in data:
                     return data[key]
 
-            # Calculate from total count and page size
+            # Calculate from total count and the page size actually requested
             for key in ("total", "count", "totalCount"):
                 if key in data:
                     total = data[key]
-                    return max(1, math.ceil(total / self.PAGE_SIZE))
+                    return max(1, math.ceil(total / max(1, int(page_size))))
 
         return current_page + 1
 

@@ -194,7 +194,18 @@ def audit_record(rec: Dict[str, Any]) -> List[IdentityFinding]:
                 # unparsed/medium — not proof of wrong person.
                 from scraper.reports.identity_gate import _looks_like_person_name
 
-                if _looks_like_person_name(hn):
+                rec_last = str(rec.get("last_name") or "").strip()
+                rec_full = str(rec.get("full_name") or "").strip()
+                if not rec_last and not rec_full:
+                    # Record has no name to compare — cannot confirm a mismatch.
+                    _f(
+                        "medium",
+                        "html_name_unparsed",
+                        f"Record has no name to compare against HTML {hn!r}",
+                        html_name=hn,
+                        html_dob=hd,
+                    )
+                elif _looks_like_person_name(hn):
                     _f(
                         "nuclear",
                         "html_name_mismatch",

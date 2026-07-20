@@ -244,6 +244,15 @@ class RepairFlSorCsvMixin:
         if not row:
             return False
         existing = dict(row)
+
+        # Identity gate: the physical-key match (name+race+height) is weak —
+        # refuse to apply FL CSV fields when DOB/middle/name clearly conflict.
+        from scraper.database.identity import score_identity_match
+
+        _sc, _reasons, hard = score_identity_match(incoming, existing)
+        if hard:
+            return False
+
         patch: Dict[str, Any] = {}
 
         ext = str(incoming.get("external_id") or "").strip()
@@ -296,7 +305,15 @@ class RepairFlSorCsvMixin:
         apply_sources_to_record(temp)
         patch["sources_json"] = temp.get("sources_json")
         if temp.get("race") and temp.get("race") != existing.get("race"):
-            patch["race"] = temp["race"]
+            existing_race = str(existing.get("race") or "")
+            existing_verified = (
+                "✓" in existing_race
+                or "race_html_verified" in str(existing.get("flags") or "")
+            )
+            temp_verified = "✓" in str(temp.get("race") or "")
+            # Keep an HTML-verified race; do not clobber it with bulk letter race.
+            if not (existing_verified and not temp_verified):
+                patch["race"] = temp["race"]
         if temp.get("flags"):
             patch["flags"] = temp["flags"]
 

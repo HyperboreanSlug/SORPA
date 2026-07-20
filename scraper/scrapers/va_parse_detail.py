@@ -43,17 +43,28 @@ def _norm_name(s: str) -> str:
 
 
 def names_compatible(list_full: str, detail_full: str) -> bool:
-    """Identity gate: refuse detail demos when names clearly disagree."""
+    """Identity gate: refuse detail demos when names clearly disagree.
+
+    Deterministic surname + first-name check. A shared common surname alone
+    (JOHN DOE vs JANE DOE) must NOT pass — that merges another person's
+    race/DOB/photo.
+    """
     a = _norm_name(list_full)
     b = _norm_name(detail_full)
     if not a or not b or a == b:
         return True
-    ta, tb = set(a.split()), set(b.split())
-    if not ta or not tb:
+    from scraper.database.identity import first_names_compatible, last_names_compatible
+    from scraper.reports.identity_gate import split_html_display_name
+
+    af, _am, al = split_html_display_name(list_full)
+    bf, _bm, bl = split_html_display_name(detail_full)
+    if not al or not bl:
         return True
-    if ta & tb and (list(ta)[-1] in tb or list(tb)[-1] in ta):
-        return True
-    return False
+    if not last_names_compatible(al, bl):
+        return False
+    if af and bf:
+        return first_names_compatible(af, bf)
+    return True
 
 
 def parse_detail_html(html: str, *, base_url: str = BASE) -> Dict[str, Any]:

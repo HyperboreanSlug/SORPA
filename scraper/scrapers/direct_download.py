@@ -69,6 +69,26 @@ class DirectDownloadScraper(BaseScraper):
 
         return normalize_records(records, state=self.state_abbr)
 
+    @staticmethod
+    def _decode_bytes(content: bytes) -> str:
+        """Decode bulk file bytes, detecting UTF-8 vs legacy cp1252/latin-1.
+
+        A blind utf-8-sig decode with errors='replace' injects U+FFFD into
+        latin-1/cp1252 names (e.g. Jose -> Jos\\ufffd), corrupting identity.
+        """
+        if content.startswith(b"\xef\xbb\xbf"):
+            content = content[3:]
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        for enc in ("cp1252", "latin-1"):
+            try:
+                return content.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return content.decode("utf-8", errors="replace")
+
     def _download_and_parse(self, url: str) -> List[Dict[str, Any]]:
         content, content_type = self._fetch_bytes(url)
         content_type = (content_type or "").lower()
@@ -81,7 +101,7 @@ class DirectDownloadScraper(BaseScraper):
             )
 
         url_lower = url.lower()
-        text = content.decode("utf-8-sig", errors="replace")
+        text = self._decode_bytes(content)
 
         if "json" in content_type or url_lower.endswith(".json"):
             return self._parse_json(json.loads(text))
