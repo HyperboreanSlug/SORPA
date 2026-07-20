@@ -64,9 +64,16 @@ class BuilderRequeueIncMixin:
         eth_filt = (ethnicity_filter or "").strip().lower() or None
         if eth_filt == "all":
             eth_filt = None
-        if (scope != "all" or eth_filt) and not unlimited:
-            # Over-fetch then filter so the final batch still reaches *limit*.
-            fetch_limit = max(fetch_limit * 8, fetch_limit)
+        # Over-fetch before ranking so limit batches are not just "newest N rows"
+        # (id DESC) which often are cross-jurisdiction shells / captcha URLs.
+        if not unlimited:
+            mult = 1
+            if scope != "all" or eth_filt:
+                mult = max(mult, 8)
+            if state and str(state).upper() not in ("", "ALL"):
+                mult = max(mult, 6)
+            if mult > 1:
+                fetch_limit = max(fetch_limit * mult, fetch_limit)
 
         from scraper.database.db_retry import retry_on_db_lock
 
@@ -100,6 +107,10 @@ class BuilderRequeueIncMixin:
             min_confidence=min_confidence,
             ethnic_db=self.ethnic_db,
         )
+
+        # Rank *before* applying the batch limit so FDLE/same-registry URLs
+        # win over NY/WI captcha shells attached to FL residents.
+        filtered = sorted(filtered, key=self._requeue_rank_key)
         if not unlimited and want > 0:
             filtered = filtered[:want]
 
@@ -134,16 +145,6 @@ class BuilderRequeueIncMixin:
                 on_progress(0, total_q or 1)
             except Exception:
                 pass
-
-        # Prefer same-state registry hosts first so FL/fdle work is not blocked
-        # behind captcha walls on cross-jurisdiction URLs attached to a resident.
-        def _sort_key(rec: Dict[str, Any]) -> tuple:
-            st = (rec.get("state") or rec.get("source_state") or "").upper()
-            url = (rec.get("source_url") or "").lower()
-            same = 0 if st and st.lower() in url else 1
-            return (same, int(rec.get("id") or 0))
-
-        filtered = sorted(filtered, key=_sort_key)
 
         if thr <= 1:
             self._requeue_sequential(

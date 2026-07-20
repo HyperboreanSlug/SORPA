@@ -11,6 +11,7 @@ from scraper.nsopw.builder_querylog import BuilderQueryLogMixin
 from scraper.nsopw.builder_surnames import BuilderSurnamesMixin
 from scraper.nsopw.builder_build import BuilderBuildMixin
 from scraper.nsopw.builder_requeue_inc import BuilderRequeueIncMixin
+from scraper.nsopw.builder_requeue_apply import BuilderRequeueApplyMixin
 from scraper.nsopw.builder_requeue_work import BuilderRequeueWorkMixin
 from scraper.nsopw.builder_verify import BuilderVerifyMixin
 from scraper.nsopw.builder_enrich_need import BuilderEnrichNeedMixin
@@ -26,6 +27,7 @@ class NSOPWEthnicDatabaseBuilder(
     BuilderSurnamesMixin,
     BuilderBuildMixin,
     BuilderRequeueIncMixin,
+    BuilderRequeueApplyMixin,
     BuilderRequeueWorkMixin,
     BuilderVerifyMixin,
     BuilderEnrichNeedMixin,

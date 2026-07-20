@@ -477,10 +477,28 @@ class QueryMixin:
             require_url=require_url,
             state=state,
         )
-        sql = f"SELECT * FROM offenders {where} ORDER BY id DESC"
+        # When scoped to a state, prefer registry hosts that match that state
+        # (e.g. FL → fdle.state.fl.us) over cross-jurisdiction shells / captcha
+        # pages attached to residents. Avoid bare id DESC (newest-first thrash).
+        order_params: List[Any] = list(params)
+        st_code = (str(state).strip().upper() if state else "")
+        if st_code and st_code != "ALL" and len(st_code) <= 3:
+            needle = st_code.lower()
+            sql = (
+                f"SELECT * FROM offenders {where} ORDER BY "
+                f"CASE "
+                f"WHEN lower(source_url) LIKE ? THEN 0 "
+                f"WHEN lower(source_url) LIKE '%captcha%' THEN 2 "
+                f"ELSE 1 END, "
+                f"(photo_path IS NOT NULL AND TRIM(photo_path) != '') ASC, "
+                f"id ASC"
+            )
+            order_params = list(params) + [f"%{needle}%"]
+        else:
+            sql = f"SELECT * FROM offenders {where} ORDER BY id ASC"
         if lim > 0:
             sql += " LIMIT ?"
-            params = list(params) + [lim]
-        rows = self._conn.execute(sql, params).fetchall()
+            order_params = list(order_params) + [lim]
+        rows = self._conn.execute(sql, order_params).fetchall()
         return [dict(r) for r in rows]
 
