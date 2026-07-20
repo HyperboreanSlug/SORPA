@@ -298,6 +298,14 @@ class ReportsSourceLoadMixin:
                 self._report_verdicts = {}
             self._load_report_verdicts()
             self._report_verdicts_loaded = True
+        # Re-sync the verdict store from disk on EVERY pass: confirmations made
+        # mid-session (card export, Misclassify sidebar, other tabs) write to
+        # report_verdicts.json / DB flags but not this in-memory dict, so without
+        # a reload confirmed people keep reappearing under "Unconfirmed".
+        try:
+            self._load_report_verdicts()
+        except Exception:
+            pass
 
         # Prefetch photo paths when missing
         need_ids: List[int] = []
