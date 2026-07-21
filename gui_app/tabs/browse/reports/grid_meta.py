@@ -161,6 +161,20 @@ class ReportsGridMetaMixin:
                 "No online URL or archived page for this record.",
             )
 
+    def _reports_open_inmate_link(self, mc) -> None:
+        """Open the FL FDC offender search for an incarcerated offender.
+
+        The FDLE flyer redacts the DC number (shows 00000), so a specific
+        detail page (DCNumber=…) can't be built — open the FDC offender search.
+        """
+        import webbrowser
+
+        url = "https://pubapps.fdc.myflorida.com/offenderSearch/"
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showerror("Inmate link", str(e))
+
 
     @staticmethod
     def _reports_verdict_label_short(verdict: str) -> str:

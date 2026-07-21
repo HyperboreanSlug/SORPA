@@ -388,6 +388,20 @@ class ReportsCardsAddMixin:
                 border_width=1, border_color=C["border"], font=FONT_SM,
             )
         )
+        # Inmate link for incarcerated FL offenders. The FDLE flyer redacts the
+        # DC number (shows 00000), so this opens the FDC offender search.
+        rec_city = str(rec.get("city") or "").upper()
+        rec_state = str(rec.get("source_state") or rec.get("state") or "").upper()
+        if "INCARCERAT" in rec_city and "FL" in rec_state:
+            flow.add(
+                ctk.CTkButton(
+                    actions, text="Inmate", width=64, height=28,
+                    command=lambda m=mc: self._reports_open_inmate_link(m),
+                    fg_color=C["elevated"], hover_color=C["border"],
+                    text_color="#f0d080",
+                    border_width=1, border_color=C["border"], font=FONT_SM,
+                )
+            )
 
         # Compact ethnicity override — size for longest ethnicity label
         eth_opts = list(self._ETHNICITY_OPTIONS)
