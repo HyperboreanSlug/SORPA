@@ -406,6 +406,21 @@ class BuilderEnrichRunMixin:
         return False
 
     @staticmethod
+    def _flyer_redirected_away(orig_url: str, final_url: str) -> bool:
+        """True if an FDLE flyer URL landed on a generic FDLE page (flyer removed).
+
+        FDLE often answers a dead flyer with the search/home page (HTTP 200)
+        instead of a 404 — treat that as a dead link so it falls back to search
+        and is not re-fetched forever.
+        """
+        o = (orig_url or "").lower()
+        f = (final_url or "").lower()
+        return (
+            "fdle" in o and "flyer.jsf" in o
+            and "fdle" in f and "flyer.jsf" not in f
+        )
+
+    @staticmethod
     def _mark_link_dead(rec: Dict[str, Any]) -> None:
         """Add blocked:http_404 to flags so the GUI opens the search home, not a dead page."""
         import json
@@ -578,7 +593,7 @@ class BuilderEnrichRunMixin:
                     # retry / manual cookie solve (fetcher already queued the URL).
                     stats["captcha"] += 1
                     consec_captcha += 1
-                elif self._looks_dead_link(final_url, demo):
+                elif self._looks_dead_link(final_url, demo) or self._flyer_redirected_away(job.url, final_url):
                     self._mark_link_dead(rec)
                     stats["dead"] += 1
                     consec_captcha = 0
