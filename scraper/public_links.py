@@ -474,3 +474,34 @@ def openable_url_for_record(record: Optional[dict]) -> str:
         if "FL" in st or not st:
             return FL_FDLE_SEARCH_HOME
     return url
+
+
+def multi_state_urls(record: Optional[dict]) -> List[tuple]:
+    """Return [(state_label, openable_url), ...] for records with multi-state source_url.
+
+    Each entry is a resolved, browser-safe URL tagged with its jurisdiction.
+    Returns a single-element list when only one state is present.
+    """
+    from scraper.database.sources import jurisdiction_from_url
+
+    rec = record or {}
+    urls = split_source_urls(rec.get("source_url"))
+    if not urls:
+        return []
+    id_mismatch = _record_has_identity_html_mismatch(rec)
+    skip_flyers = _record_has_http_404_block(rec) or id_mismatch
+    seen: dict = {}
+    out: List[tuple] = []
+    for u in urls:
+        jur = jurisdiction_from_url(u) or "—"
+        resolved = resolve_public_source_url(u, state=jur, skip_fdle_flyers=skip_flyers)
+        if not resolved or _is_fdle_error_page(resolved):
+            continue
+        if id_mismatch and _is_fdle_url(resolved) and "flyer" in resolved.lower():
+            continue
+        key = (jur, resolved)
+        if key in seen:
+            continue
+        seen[key] = True
+        out.append((jur, resolved))
+    return out

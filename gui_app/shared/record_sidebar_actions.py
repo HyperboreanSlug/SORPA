@@ -16,13 +16,25 @@ class RecordSidebarActionsMixin:
 
     def _open_source(self) -> None:
         rec = self._record or {}
-        url = ""
         try:
-            from scraper.public_links import openable_url_for_record
+            from scraper.public_links import multi_state_urls
 
-            url = openable_url_for_record(rec) or ""
+            entries = multi_state_urls(rec)
         except Exception:
-            url = str(rec.get("source_url") or "").strip()
+            entries = []
+        if len(entries) > 1:
+            self._open_source_dropdown(entries)
+            return
+        url = ""
+        if entries:
+            url = entries[0][1]
+        if not url:
+            try:
+                from scraper.public_links import openable_url_for_record
+
+                url = openable_url_for_record(rec) or ""
+            except Exception:
+                url = str(rec.get("source_url") or "").strip()
         if not url:
             url = str(rec.get("source_url") or "").strip()
         if url:
@@ -35,6 +47,27 @@ class RecordSidebarActionsMixin:
             p = Path(html)
             if p.is_file():
                 webbrowser.open(p.resolve().as_uri())
+
+    def _open_source_dropdown(self, entries: list) -> None:
+        """Show a popup menu to pick which state registry to open."""
+        import tkinter as tk
+
+        try:
+            btn = self.open_btn
+        except AttributeError:
+            btn = None
+        menu = tk.Menu(self.frame, tearoff=0)
+        for state_label, url in entries:
+            menu.add_command(
+                label=f"{state_label} registry",
+                command=lambda u=url: webbrowser.open(u),
+            )
+        try:
+            x = btn.winfo_rootx() if btn else self.frame.winfo_rootx()
+            y = (btn.winfo_rooty() + btn.winfo_height()) if btn else self.frame.winfo_rooty()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     def _open_photo_file(self) -> None:
         path = resolve_photo_path((self._record or {}).get("photo_path"))

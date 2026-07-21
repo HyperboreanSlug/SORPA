@@ -134,6 +134,8 @@ def jurisdiction_from_url(url: str) -> str:
         ("tbi.tn.gov", "TN"),
         ("txdps", "TX"),
         ("texas.gov", "TX"),
+        ("sor.cjis.pr.gov", "PR"),
+        ("cjis.pr.gov", "PR"),
         ("nsopw.gov", "NSOPW"),
     )
     for frag, code in mapping:

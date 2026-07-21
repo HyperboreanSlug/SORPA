@@ -79,7 +79,7 @@ data/        # offenders.db, report_pages, settings (runtime)
 | `lazy_tabs.py` | `warm()` builds without focus steal / on_change |
 | `widgets_flow.py` | `FlowRow` — wrap toolbars so top controls stay fully visible |
 | `widgets_flow_measure.py` | Chip/leaf size for reflow (ignore CTk 200×200 defaults; HiDPI) |
-| `tabs/browse/integrity/refresh.py` | Integrity stats via `run_bg` |
+| `tabs/nsopw/enrich_integrity.py` | Integrity coverage stats + export CSV (merged from Browse → Integrity) |
 | `tabs/browse/search/run_query.py` | Browse search via `run_bg` |
 | `tabs/browse/misclassify/run.py` | Surname analyze / export via `run_bg` |
 
@@ -87,15 +87,15 @@ data/        # offenders.db, report_pages, settings (runtime)
 | Package | Pieces |
 |---------|--------|
 | `tabs/browse/search/` | build, run_query, run_tree, select |
-| `tabs/browse/integrity/` | build, refresh, enrich_*, requeue |
-| `tabs/browse/misclassify/` | build (Likely ethnicity, Listed as, photo filter), filters, run |
+| `tabs/browse/integrity/` | (legacy — merged into NSOPW Enrich; kept for Misclassify enrich_start/enrich_refresh) |
+| `tabs/browse/misclassify/` | build (Likely ethnicity, Listed as, photo filter), filters, run; nested Analyze + Statistics sub-tabs |
 | `reports/race_value.py` | Reject alias/address junk in parsed race fields |
-| `tabs/browse/statistics/` | build, update |
+| `tabs/browse/statistics/` | build, update (rendered inside Misclassify → Statistics sub-tab) |
 | `tabs/browse/reports/` | Independent full-DB Analyze & build (`_report_analyze_results`); Listed/Actual/Show/Photos filters; verdicts; cards; export |
 | `shared/export_card_grid.py` | Watermarked 1×2 / 2×2 card collages (mapa seal + @DoDeportations) |
-| `tabs/browse/deepface_reports/` | build, data_*, photo_*, actions_*, review_* |
-| `tabs/nsopw/` | build (Search/Enrich tabs), enrich_*, options_* (state on Enrich), state_stats, progress_*, tree_*, run_* |
-| `tabs/deepface/` | scan_*, setup_* |
+| `tabs/browse/deepface_reports/` | build, data_*, photo_*, actions_*, review_* (rendered inside DeepFace → Review sub-tab) |
+| `tabs/nsopw/` | build (Search/Enrich tabs), enrich_* (build, list, run, integrity), options_* (state on Enrich), state_stats, progress_*, tree_*, run_* |
+| `tabs/deepface/` | build_shell (Scan·Review·Setup sub-tabs), scan_*, setup_* |
 | `tabs/settings/` | build, captcha, cookies_*, paths, persist_* |
 | `tabs/scrape/` | build, select, run, import_csv, dedupe (under Settings → Scrape) |
 | `tabs/settings/shell.py` | Nested General + Scrape tab host |

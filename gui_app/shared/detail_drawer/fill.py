@@ -188,10 +188,12 @@ class DetailFillMixin:
         html_path = (record.get("report_html_path") or "").strip()
         raw_url = (record.get("source_url") or "").strip()
         try:
-            from scraper.public_links import openable_url_for_record
+            from scraper.public_links import multi_state_urls, openable_url_for_record
 
+            _ms_entries = multi_state_urls(record)
             url = openable_url_for_record(record) or raw_url
         except Exception:
+            _ms_entries = []
             url = raw_url
 
         def _open_html():
@@ -199,6 +201,20 @@ class DetailFillMixin:
                 self._open_path(Path(html_path))
 
         def _open_url():
+            if len(_ms_entries) > 1:
+                menu = tk.Menu(drawer, tearoff=0)
+                for state_label, u in _ms_entries:
+                    menu.add_command(
+                        label=f"{state_label} registry",
+                        command=lambda _u=u: webbrowser.open(_u),
+                    )
+                try:
+                    x = btn_url.winfo_rootx()
+                    y = btn_url.winfo_rooty() + btn_url.winfo_height()
+                    menu.tk_popup(x, y)
+                finally:
+                    menu.grab_release()
+                return
             target = url
             if not target:
                 return

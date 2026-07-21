@@ -67,7 +67,30 @@ class DfrOpenMixin:
 
 
     def _dfr_open_url(self) -> None:
+        rec = getattr(self, "_dfr_current_record", None) or {}
+        try:
+            from scraper.public_links import multi_state_urls
+
+            entries = multi_state_urls(rec)
+        except Exception:
+            entries = []
+        if len(entries) > 1:
+            menu = tk.Menu(self, tearoff=0)
+            for state_label, u in entries:
+                menu.add_command(
+                    label=f"{state_label} registry",
+                    command=lambda _u=u: webbrowser.open(_u),
+                )
+            try:
+                x = self.dfr_btn_url.winfo_rootx()
+                y = self.dfr_btn_url.winfo_rooty() + self.dfr_btn_url.winfo_height()
+                menu.tk_popup(x, y)
+            finally:
+                menu.grab_release()
+            return
         url = (getattr(self, "_dfr_source_url", None) or "").strip()
+        if not url and entries:
+            url = entries[0][1]
         if not url:
             return
         try:

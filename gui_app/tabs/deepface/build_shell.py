@@ -78,6 +78,7 @@ class DeepfaceShellMixin:
         host = LazyTabHost(sub, on_change=self._on_deepface_subtab_change)
         self._deepface_lazy = host
         host.register("Scan", lambda p: self._build_deepface_scan(p) or True)
+        host.register("Review", lambda p: self._build_deepface_reports(p) or True)
         host.register("Setup", lambda p: self._build_deepface_setup(p) or True)
 
         try:
@@ -99,6 +100,11 @@ class DeepfaceShellMixin:
                     self.after(30, self._deepface_refresh_status)
                 except Exception:
                     pass
+        if name == "Review" and hasattr(self, "_dfr_refresh"):
+            try:
+                self.after(50, self._dfr_refresh)
+            except Exception:
+                pass
 
 
     def _deepface_goto_setup(self) -> None:

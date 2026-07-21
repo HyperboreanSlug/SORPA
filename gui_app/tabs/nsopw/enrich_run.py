@@ -47,6 +47,13 @@ class NsopwEnrichRunMixin:
             else None
         )
         scope = (self.nsopw_enrich_scope_var.get() or "all").strip().lower()
+        ethnicity = (
+            self.nsopw_enrich_ethnicity_var.get().strip().lower()
+            if hasattr(self, "nsopw_enrich_ethnicity_var")
+            else "all"
+        )
+        if ethnicity == "all":
+            ethnicity = None
         # 0 = process all incomplete rows for this state (no batch cap).
         run_limit = limit if limit > 0 else 0
         limit_label = "all pending" if run_limit == 0 else str(run_limit)
@@ -109,6 +116,7 @@ class NsopwEnrichRunMixin:
                     limit=run_limit,
                     state=state,
                     source_scope=scope,
+                    ethnicity_filter=ethnicity,
                     save_html=True,
                     log=log,
                     on_progress=on_progress,
